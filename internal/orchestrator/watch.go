@@ -27,7 +27,8 @@ func (o *Orchestrator) run() {
 //
 // The decision to consult is made here, in Go, on purpose. Asking the model
 // "should I think about this?" costs the same as thinking about it, and this
-// loop runs every fifteen seconds for as long as the IDE is open.
+// loop runs every fifteen seconds for as long as the IDE is open. What it
+// decides by is in decide.go, as a function of plain values.
 func (o *Orchestrator) tick(ctx context.Context) {
 	o.mu.Lock()
 	// Waiting on the user suppresses acting, not looking. The thing it is
@@ -42,7 +43,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	watching := append([]string{}, o.st.Watching...)
 	cursors := map[string]string{}
 	for _, s := range watching {
-		cursors[s] = o.st.Cursors[s]
+		cursors[s] = o.mem.tasks[s].cursor
 	}
 	o.mu.Unlock()
 
@@ -66,40 +67,14 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		o.mu.Unlock() // the user got in first
 		return
 	}
-	consult := !o.awaiting && o.worthATurnLocked(obs)
-	// A cursor moves only on a round that is actually shown to the brain, since
-	// what it means is "since you last SAW this". Advancing on a silent round
-	// would quietly discard the turns that happened during it — and the tail is
-	// capped anyway, so nothing piles up by leaving it where it is.
-	for _, ob := range obs {
-		if consult && ob.Cursor != "" {
-			o.st.Cursors[ob.Task.Slug] = ob.Cursor
-		}
-		if len(ob.Turns) > 0 {
-			// It answered. Whatever was sent to it landed, so the patience for
-			// this task is restored.
-			o.unanswered[ob.Task.Slug] = 0
-		}
-		// An agent that is back is news again the next time it goes.
-		if ob.Running {
-			delete(o.reportedGone, ob.Task.Slug)
-		} else if consult {
-			o.reportedGone[ob.Task.Slug] = true
-		}
-		if ob.Blocked != "" {
-			o.blocked[ob.Task.Slug] = ob.Blocked
-		} else {
-			delete(o.blocked, ob.Task.Slug)
-		}
-	}
+	var consult bool
+	o.mem, consult = decide(o.mem, obs, time.Now())
 	if !consult {
-		o.save()
 		o.mu.Unlock()
 		return
 	}
 	o.thinking = true
-	o.lastConsult = time.Now()
-	o.save()
+	gen := o.gen
 	o.mu.Unlock()
 
 	// Only now, and without the lock: a handful of git commands per repository
@@ -109,39 +84,9 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		d := o.host.Detail(obs[i].Task.Slug)
 		obs[i].Detail = &d
 	}
-	_ = o.think(ctx, o.prompt("", obs), false)
-}
-
-// worthATurnLocked decides whether this round justifies a brain turn.
-//
-// Three things do. An agent sitting at its prompt is the whole point of
-// supervision. An agent whose session has gone means there is nothing left to
-// supervise and someone has to be told. And steady progress is reported, but
-// only every so often — the alternative is a status update every fifteen
-// seconds about work that is going fine.
-func (o *Orchestrator) worthATurnLocked(obs []Observation) bool {
-	progress := false
-	for _, ob := range obs {
-		switch {
-		case !ob.Running:
-			// Said once, not once a tick. A workspace whose agent has exited
-			// stays that way until someone does something about it, and the
-			// situation does not become newsworthy again by persisting.
-			if !o.reportedGone[ob.Task.Slug] {
-				return true
-			}
-		case ob.Waiting:
-			// Give a task that was just sent something a moment to react before
-			// reading its silence as a fresh question.
-			last := o.lastSend[ob.Task.Slug]
-			if len(ob.Turns) > 0 || last.IsZero() || time.Since(last) > sendCooldown {
-				return true
-			}
-		case len(ob.Turns) > 0:
-			progress = true
-		}
-	}
-	return progress && time.Since(o.lastConsult) > progressGap
+	_ = o.think(ctx, gen, o.prompt("", obs), false, func(now time.Time) {
+		o.mem = o.mem.saw(obs, now)
+	})
 }
 
 func (o *Orchestrator) dropWatch(slug string, err error) {

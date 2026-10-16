@@ -41,6 +41,7 @@ internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide
 internal/task            task creation, shared by the CLI, the server and the orchestrator
 internal/agent           agent CLIs: flags, detection, transcripts
+internal/jsonl           reading JSONL that survives long lines and reports errors
 internal/orchestrator    the supervising agent above the task agents
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)

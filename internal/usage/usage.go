@@ -16,13 +16,15 @@
 package usage
 
 import (
-	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/jsonl"
 )
 
 type Usage struct {
@@ -103,7 +105,11 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 		}
 		files, _ := filepath.Glob(filepath.Join(projects, name, "*.jsonl"))
 		for _, f := range files {
-			accumulate(f, workspaceDir, u, seen, models, sessions)
+			// Failed rather than under-reported: a total that silently left out
+			// part of a transcript looks exactly like a real one.
+			if err := accumulate(f, workspaceDir, u, seen, models, sessions); err != nil {
+				return nil, fmt.Errorf("reading %s: %w", f, err)
+			}
 		}
 	}
 
@@ -123,49 +129,44 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 }
 
 func accumulate(path, workspaceDir string, u *Usage, seen map[string]bool,
-	models map[string]bool, sessions map[string]*Session) {
+	models map[string]bool, sessions map[string]*Session) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil // removed between the listing and now
+		}
+		return err
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	// Transcript lines carry whole tool results and can be far larger than the
-	// 64 KiB default; without this the scanner stops at the first long line and
-	// silently under-reports.
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-
+	// Transcript lines carry whole tool results and can be far larger than a
+	// scanner's default; jsonl reads past them instead of stopping there.
 	confirmed := false
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	return jsonl.Scan(f, func(line []byte) bool {
 		var e entry
 		if err := json.Unmarshal(line, &e); err != nil {
-			continue
+			return true
 		}
 		// Confirm the file really belongs to this workspace, using the recorded
 		// cwd rather than the lossy directory name.
 		if !confirmed {
 			if e.CWD == "" {
-				continue
+				return true
 			}
 			if !under(e.CWD, workspaceDir) {
-				return // encoded-name collision: this file is a different workspace
+				return false // encoded-name collision: this file is a different workspace
 			}
 			confirmed = true
 		}
 		if e.Type != "assistant" || e.UUID == "" || seen[e.UUID] {
-			continue
+			return true
 		}
 		seen[e.UUID] = true
 
 		us := e.Message.Usage
 		if us.InputTokens == 0 && us.OutputTokens == 0 &&
 			us.CacheReadInputTokens == 0 && us.CacheCreationInputTokens == 0 {
-			continue
+			return true
 		}
 		u.InputTokens += us.InputTokens
 		u.OutputTokens += us.OutputTokens
@@ -192,5 +193,6 @@ func accumulate(path, workspaceDir string, u *Usage, seen map[string]bool,
 		if e.Timestamp.After(s.LastActivity) {
 			s.LastActivity = e.Timestamp
 		}
-	}
+		return true
+	})
 }

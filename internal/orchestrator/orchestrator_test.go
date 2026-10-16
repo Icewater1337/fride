@@ -15,14 +15,17 @@ import (
 
 // fakeHost records what the orchestrator asked for instead of doing it.
 type fakeHost struct {
-	mu        sync.Mutex
-	created   []NewTask
-	sent      []string
-	started   []string
-	statuses  []string
-	resumed   []string
-	obs       map[string]Observation
-	obsErr    map[string]error
+	mu       sync.Mutex
+	created  []NewTask
+	sent     []string
+	started  []string
+	statuses []string
+	resumed  []string
+	obs      map[string]Observation
+	obsErr   map[string]error
+	// turns, when set for a task, is its agent's whole conversation, and
+	// Observe reports what follows the cursor the way agent.Tail does.
+	turns     map[string][]agent.Turn
 	detail    map[string]Detail
 	sendErr   error
 	resumeErr error
@@ -30,7 +33,7 @@ type fakeHost struct {
 
 func newFakeHost() *fakeHost {
 	return &fakeHost{obs: map[string]Observation{}, obsErr: map[string]error{},
-		detail: map[string]Detail{}}
+		detail: map[string]Detail{}, turns: map[string][]agent.Turn{}}
 }
 
 func (f *fakeHost) Repos() []RepoInfo {
@@ -101,7 +104,25 @@ func (f *fakeHost) Observe(slug, cursor string) (Observation, error) {
 	}
 	ob := f.obs[slug]
 	ob.Task.Slug = slug
+	if all, ok := f.turns[slug]; ok {
+		ob.Turns, ob.Cursor = after(all, cursor)
+	}
 	return ob, nil
+}
+
+// after is what agent.Tail returns: the turns following cursor, and the cursor
+// to pass next time — unchanged when there are none.
+func after(all []agent.Turn, cursor string) ([]agent.Turn, string) {
+	from := 0
+	for i, t := range all {
+		if t.UUID == cursor {
+			from = i + 1
+		}
+	}
+	if fresh := all[from:]; len(fresh) > 0 {
+		return fresh, fresh[len(fresh)-1].UUID
+	}
+	return nil, cursor
 }
 
 func (f *fakeHost) counts() (int, int, int) {
@@ -119,6 +140,7 @@ func newTestOrch(t *testing.T, h Host) *Orchestrator {
 	return o
 }
 
+// One round on its own. The sequences that matter are in decide_test.go.
 func TestWorthATurn(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -138,6 +160,10 @@ func TestWorthATurn(t *testing.T) {
 		{name: "unless it has answered since",
 			ob:      Observation{Running: true, Waiting: true, Turns: oneTurn()},
 			lastAgo: time.Second, want: true},
+		{name: "the instruction coming back is not an answer",
+			ob: Observation{Running: true, Waiting: true,
+				Turns: []agent.Turn{{Role: "user", Text: "keep going"}}},
+			lastAgo: time.Second, want: false},
 		{name: "steady progress is reported, but not every tick",
 			ob:      Observation{Running: true, Turns: oneTurn()},
 			consult: time.Second, want: false},
@@ -145,17 +171,15 @@ func TestWorthATurn(t *testing.T) {
 			ob:      Observation{Running: true, Turns: oneTurn()},
 			consult: progressGap + time.Second, want: true},
 	}
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			o := newTestOrch(t, newFakeHost())
-			o.mu.Lock()
-			defer o.mu.Unlock()
+			m := memory{tasks: map[string]taskState{}, lastConsult: now.Add(-c.consult)}
 			c.ob.Task.Slug = "t1"
 			if c.lastAgo > 0 {
-				o.lastSend["t1"] = time.Now().Add(-c.lastAgo)
+				m.tasks["t1"] = taskState{lastSend: now.Add(-c.lastAgo)}
 			}
-			o.lastConsult = time.Now().Add(-c.consult)
-			if got := o.worthATurnLocked([]Observation{c.ob}); got != c.want {
+			if _, got := decide(m, []Observation{c.ob}, now); got != c.want {
 				t.Fatalf("worthATurn = %v, want %v", got, c.want)
 			}
 		})
@@ -210,7 +234,9 @@ func TestUnansweredNudgesStopAndEscalate(t *testing.T) {
 
 	// An agent that finally says something gets its patience back.
 	o.mu.Lock()
-	o.unanswered["t1"] = 0
+	ts := o.mem.tasks["t1"]
+	ts.unanswered = 0
+	o.mem.tasks["t1"] = ts
 	o.mu.Unlock()
 	o.apply(reply, false)
 	if _, sent, _ := h.counts(); sent != maxUnansweredNudges+1 {
@@ -230,7 +256,7 @@ func TestNothingIsTypedAtAnAgentOnAConfirmation(t *testing.T) {
 	}
 	// One look is what records the block.
 	o.mu.Lock()
-	o.blocked["t1"] = "Bash"
+	o.mem.tasks["t1"] = taskState{blocked: "Bash"}
 	o.mu.Unlock()
 
 	send := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "just say yes"}}}
@@ -251,8 +277,8 @@ func TestNothingIsTypedAtAnAgentOnAConfirmation(t *testing.T) {
 	h.obs["t1"] = Observation{Running: true, Waiting: true}
 	o.tick(context.Background())
 	o.mu.Lock()
-	blocked := o.blocked["t1"]
-	o.awaiting = false
+	blocked := o.mem.tasks["t1"].blocked
+	o.mem.awaiting = false
 	o.mu.Unlock()
 	if blocked != "" {
 		t.Fatalf("the block outlived the dialog: %q", blocked)
@@ -267,8 +293,8 @@ func TestSayingSomethingRestoresPatience(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
 	o.mu.Lock()
-	o.unanswered["t1"] = maxUnansweredNudges
-	o.awaiting = true
+	o.mem.tasks["t1"] = taskState{unanswered: maxUnansweredNudges}
+	o.mem.awaiting = true
 	o.mu.Unlock()
 
 	// The brain is not installed in this test, so the turn itself fails — what
@@ -278,10 +304,10 @@ func TestSayingSomethingRestoresPatience(t *testing.T) {
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.unanswered["t1"] != 0 {
-		t.Fatalf("patience not restored: %d", o.unanswered["t1"])
+	if n := o.mem.tasks["t1"].unanswered; n != 0 {
+		t.Fatalf("patience not restored: %d", n)
 	}
-	if o.awaiting {
+	if o.mem.awaiting {
 		t.Fatal("the user answering must clear the wait")
 	}
 }
@@ -361,8 +387,7 @@ func TestResumingPicksUpWhereTheAgentLeftOff(t *testing.T) {
 	}
 	// A stale cursor from the conversation as it stood before it was closed.
 	o.mu.Lock()
-	o.st.Cursors["t1"] = "old-uuid"
-	o.reportedGone["t1"] = true
+	o.mem.tasks["t1"] = taskState{cursor: "old-uuid", reportedGone: true}
 	o.mu.Unlock()
 
 	o.apply(Reply{Actions: []Action{
@@ -376,10 +401,10 @@ func TestResumingPicksUpWhereTheAgentLeftOff(t *testing.T) {
 	defer o.mu.Unlock()
 	// The reopened conversation is read from its start: the agent is back at a
 	// prompt holding history this orchestrator has never seen.
-	if c := o.st.Cursors["t1"]; c != "" {
+	if c := o.mem.tasks["t1"].cursor; c != "" {
 		t.Fatalf("cursor = %q, want it cleared on resume", c)
 	}
-	if o.reportedGone["t1"] {
+	if o.mem.tasks["t1"].reportedGone {
 		t.Fatal("a task with an agent again must be news the next time it goes")
 	}
 }
@@ -389,7 +414,7 @@ func TestAFailedResumeIsReportedAndChangesNothing(t *testing.T) {
 	h.resumeErr = errGone{}
 	o := newTestOrch(t, h)
 	o.mu.Lock()
-	o.st.Cursors["t1"] = "old-uuid"
+	o.mem.tasks["t1"] = taskState{cursor: "old-uuid"}
 	o.mu.Unlock()
 
 	o.apply(Reply{Actions: []Action{{Kind: ActResumeAgent, Task: "t1"}}}, true)
@@ -402,7 +427,7 @@ func TestAFailedResumeIsReportedAndChangesNothing(t *testing.T) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.st.Cursors["t1"] != "old-uuid" {
+	if o.mem.tasks["t1"].cursor != "old-uuid" {
 		t.Fatal("a resume that did not happen must not move the read cursor")
 	}
 }
@@ -457,7 +482,8 @@ func TestStatePersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	o.mu.Lock()
-	o.brain.session = "sess-1"
+	o.st.Session = "sess-1"
+	o.mem.tasks["t1"] = taskState{cursor: "uuid-9"}
 	o.save()
 	o.mu.Unlock()
 	o.Close()
@@ -468,20 +494,30 @@ func TestStatePersists(t *testing.T) {
 	if v.Mode != ModeOrchestrate || v.Autonomy != AutonomyAsk || len(v.Watching) != 1 {
 		t.Fatalf("setup not restored: %+v", v)
 	}
-	if again.brain.session != "sess-1" {
-		t.Fatalf("the conversation was not resumed: %q", again.brain.session)
+	again.mu.Lock()
+	defer again.mu.Unlock()
+	if again.st.Session != "sess-1" {
+		t.Fatalf("the conversation was not resumed: %q", again.st.Session)
+	}
+	if c := again.mem.tasks["t1"].cursor; c != "uuid-9" {
+		t.Fatalf("the read cursor was not restored: %q", c)
 	}
 }
 
 // ---------------------------------------------------------------- the brain
 
 // stubClaude writes a script that answers like `claude -p --output-format json`
-// does, and records the argv it was called with.
-func stubClaude(t *testing.T, structured any) (bin, argvLog string) {
+// does, and records how it was called: the argv of every call, one line per
+// argument, and the stdin of the last one.
+type stub struct {
+	bin, argv, stdin, calls string
+}
+
+func stubClaude(t *testing.T, structured any) stub {
 	t.Helper()
 	dir := t.TempDir()
-	bin = filepath.Join(dir, "claude")
-	argvLog = filepath.Join(dir, "argv")
+	st := stub{bin: filepath.Join(dir, "claude"), argv: filepath.Join(dir, "argv"),
+		stdin: filepath.Join(dir, "stdin"), calls: filepath.Join(dir, "calls")}
 
 	payload, err := json.Marshal(structured)
 	if err != nil {
@@ -495,40 +531,61 @@ func stubClaude(t *testing.T, structured any) (bin, argvLog string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + argvLog + "\ncat <<'JSON'\n" +
-		string(envelope) + "\nJSON\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	script := "#!/bin/sh\necho call >> " + st.calls + "\nprintf '%s\\n' \"$@\" >> " + st.argv +
+		"\ncat > " + st.stdin + "\ncat <<'JSON'\n" + string(envelope) + "\nJSON\n"
+	if err := os.WriteFile(st.bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return bin, argvLog
+	return st
+}
+
+// count is how many times the stub has been run.
+func (s stub) count(t *testing.T) int {
+	t.Helper()
+	b, err := os.ReadFile(s.calls)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(b), "call\n")
 }
 
 func TestBrainParsesAndResumes(t *testing.T) {
-	bin, argvLog := stubClaude(t, Reply{
+	st := stubClaude(t, Reply{
 		Say:     "starting it",
 		Actions: []Action{{Kind: ActCreateTask, Name: "T", Repos: []NewRepo{{Name: "backend"}}}},
 	})
-	b := &brain{bin: bin, dir: t.TempDir()}
+	b := &brain{bin: st.bin, dir: t.TempDir()}
 
-	r, err := b.Think(context.Background(), "make me a workspace")
+	r, session, err := b.Think(context.Background(), "make me a workspace", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Say != "starting it" || len(r.Actions) != 1 || r.Actions[0].Kind != ActCreateTask {
 		t.Fatalf("reply not parsed: %+v", r)
 	}
-	if b.session != "sess-42" {
-		t.Fatalf("session not captured: %q", b.session)
+	if session != "sess-42" {
+		t.Fatalf("session not captured: %q", session)
 	}
 
 	// The second turn must resume the first, or the orchestrator forgets
 	// everything it was told between turns.
-	if _, err := b.Think(context.Background(), "and again"); err != nil {
+	if _, _, err := b.Think(context.Background(), "and again", session); err != nil {
 		t.Fatal(err)
 	}
-	argv, err := os.ReadFile(argvLog)
+	argv, err := os.ReadFile(st.argv)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The prompt travels on stdin. As an argument it is bounded by the OS —
+	// 128 KiB for one argument on Linux — which a few supervised tasks reach.
+	if in, _ := os.ReadFile(st.stdin); string(in) != "and again" {
+		t.Fatalf("stdin = %q, want the prompt", in)
+	}
+	if strings.Contains(string(argv), "make me a workspace") {
+		t.Fatalf("the prompt was passed as an argument:\n%s", argv)
 	}
 	if !strings.Contains(string(argv), "--resume\nsess-42") {
 		t.Fatalf("the second turn did not resume the first:\n%s", argv)
@@ -553,10 +610,9 @@ func TestBrainParsesAndResumes(t *testing.T) {
 }
 
 func TestBrainRecoversFromALostConversation(t *testing.T) {
-	bin, argvLog := stubClaude(t, Reply{Say: "fresh start"})
-	// A session id that no longer resolves: the transcript was deleted, or the
-	// working directory changed underneath it.
-	b := &brain{bin: bin, dir: t.TempDir(), session: "gone-forever"}
+	st := stubClaude(t, Reply{Say: "fresh start"})
+	bin := st.bin
+	b := &brain{bin: bin, dir: t.TempDir()}
 
 	failing := filepath.Join(filepath.Dir(bin), "claude-fails")
 	script := "#!/bin/sh\nif [ \"$1\" = \"--resume-marker\" ]; then :; fi\n" +
@@ -568,17 +624,19 @@ func TestBrainRecoversFromALostConversation(t *testing.T) {
 	}
 	b.bin = failing
 
-	r, err := b.Think(context.Background(), "carry on")
+	// A session id that no longer resolves: the transcript was deleted, or the
+	// working directory changed underneath it.
+	r, session, err := b.Think(context.Background(), "carry on", "gone-forever")
 	if err != nil {
 		t.Fatalf("a lost conversation must be retried from a clean one, got: %v", err)
 	}
 	if r.Say != "fresh start" {
 		t.Fatalf("reply = %+v", r)
 	}
-	if b.session != "sess-42" {
-		t.Fatalf("the retry did not adopt the new conversation: %q", b.session)
+	if session != "sess-42" {
+		t.Fatalf("the retry did not adopt the new conversation: %q", session)
 	}
-	argv, _ := os.ReadFile(argvLog)
+	argv, _ := os.ReadFile(st.argv)
 	if strings.Contains(string(argv), "gone-forever") {
 		t.Fatal("the retry still passed the dead session id")
 	}
@@ -591,7 +649,10 @@ func TestBrainReportsAFailedTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &brain{bin: bin, dir: dir}
-	_, err := b.Think(context.Background(), "hello")
+	_, session, err := b.Think(context.Background(), "hello", "sess-1")
+	if session != "sess-1" {
+		t.Fatalf("a turn that never ran must leave the conversation alone, got %q", session)
+	}
 	if err == nil {
 		t.Fatal("a failing CLI must be reported, not swallowed")
 	}

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,23 +98,14 @@ type Orchestrator struct {
 	// thinking is held for the whole of a brain turn, and is what stops the
 	// monitor from starting a second one underneath the first.
 	thinking bool
-	// awaiting is set when the orchestrator has asked the user something. The
-	// monitor does not act again until they answer: continuing to nudge agents
-	// while a question hangs is how a supervisor talks over itself.
-	awaiting bool
 	lastErr  string
-
-	lastConsult time.Time
-	lastSend    map[string]time.Time
-	unanswered  map[string]int
-	sends       map[string][]time.Time
-	// reportedGone is the tasks whose agent session has already been reported
-	// as gone. Cleared when one comes back, so it is news again the next time.
-	reportedGone map[string]bool
-	// blocked is task -> the tool whose confirmation it has stopped on, as of
-	// the last look. Kept here so the send guard can consult it without
-	// re-reading a transcript on every action.
-	blocked map[string]string
+	// gen counts Resets. A turn remembers the one it started under, and what it
+	// would write back on its return is dropped if a Reset came in between.
+	// Otherwise "Conversation cleared" is undone by the very turn it was meant
+	// to cut off, which writes the old session id back on its way out.
+	gen int
+	// mem is what the monitor loop carries between ticks; see decide.go.
+	mem memory
 
 	stop chan struct{}
 	once sync.Once
@@ -126,19 +118,17 @@ type Orchestrator struct {
 // orchestrator can open any task's files and nothing above them.
 func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 	o := &Orchestrator{
-		path:         filepath.Join(stateDir, "orchestrator.json"),
-		host:         host,
-		brain:        &brain{bin: claudeBin, dir: workspaceRoot},
-		lastSend:     map[string]time.Time{},
-		unanswered:   map[string]int{},
-		sends:        map[string][]time.Time{},
-		reportedGone: map[string]bool{},
-		blocked:      map[string]string{},
-		stop:         make(chan struct{}),
+		path:  filepath.Join(stateDir, "orchestrator.json"),
+		host:  host,
+		brain: &brain{bin: claudeBin, dir: workspaceRoot},
+		mem:   memory{tasks: map[string]taskState{}},
+		stop:  make(chan struct{}),
 	}
 	o.st = state{Mode: ModeChat, Autonomy: AutonomyAuto, Cursors: map[string]string{}}
 	o.load()
-	o.brain.session = o.st.Session
+	for slug, c := range o.st.Cursors {
+		o.mem.tasks[slug] = taskState{cursor: c}
+	}
 	go o.run()
 	return o
 }
@@ -171,7 +161,12 @@ func (o *Orchestrator) load() {
 
 // save persists the state. Called with the lock held.
 func (o *Orchestrator) save() {
-	o.st.Session = o.brain.session
+	o.st.Cursors = map[string]string{}
+	for slug, ts := range o.mem.tasks {
+		if ts.cursor != "" {
+			o.st.Cursors[slug] = ts.cursor
+		}
+	}
 	if n := len(o.st.Messages); n > keepMessages {
 		o.st.Messages = append([]Message(nil), o.st.Messages[n-keepMessages:]...)
 	}
@@ -219,7 +214,7 @@ func (o *Orchestrator) Snapshot() View {
 		Mode: o.st.Mode, Autonomy: o.st.Autonomy,
 		Watching: append([]string{}, o.st.Watching...),
 		Messages: append([]Message{}, o.st.Messages...),
-		Thinking: o.thinking, Awaiting: o.awaiting, Error: o.lastErr,
+		Thinking: o.thinking, Awaiting: o.mem.awaiting, Error: o.lastErr,
 	}
 	o.mu.Unlock()
 	v.Tasks = o.host.Tasks()
@@ -267,16 +262,13 @@ func (o *Orchestrator) SetMode(mode, autonomy string, watching []string) error {
 		}
 		// Taking a task on is a fresh start: read from where its agent is now,
 		// and give it back the patience any earlier supervision spent.
-		delete(o.st.Cursors, s)
-		delete(o.lastSend, s)
-		delete(o.unanswered, s)
-		delete(o.sends, s)
-		delete(o.reportedGone, s)
-		delete(o.blocked, s)
+		delete(o.mem.tasks, s)
 	}
 	o.st.Mode, o.st.Autonomy, o.st.Watching = mode, autonomy, clean
-	o.awaiting = false
-	o.lastConsult = time.Time{} // look properly on the next tick
+	// Look properly on the next tick. The user asked for this, so a backoff
+	// left by failed turns does not stand in the way of it.
+	o.mem.awaiting = false
+	o.mem.lastConsult, o.mem.retryAt = time.Time{}, time.Time{}
 	switch mode {
 	case ModeOrchestrate:
 		o.add(RoleEvent, "", fmt.Sprintf("Orchestrating %s (%s).",
@@ -297,18 +289,17 @@ func autonomyLabel(a string) string {
 
 // Reset forgets the conversation and starts a new one. The setup is kept: the
 // point is usually to clear a confused context, not to stop supervising.
+//
+// A turn still running when this is called belongs to the conversation being
+// forgotten, and is discarded when it returns — see gen.
 func (o *Orchestrator) Reset() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.brain.session = ""
+	o.gen++
+	o.st.Session = ""
 	o.st.Messages = nil
-	o.st.Cursors = map[string]string{}
-	o.awaiting, o.lastErr = false, ""
-	o.lastSend = map[string]time.Time{}
-	o.unanswered = map[string]int{}
-	o.sends = map[string][]time.Time{}
-	o.reportedGone = map[string]bool{}
-	o.blocked = map[string]string{}
+	o.lastErr = ""
+	o.mem = memory{tasks: map[string]taskState{}}
 	o.add(RoleEvent, "", "Conversation cleared.")
 	o.save()
 }
@@ -335,31 +326,59 @@ func (o *Orchestrator) Say(text string) error {
 		return fmt.Errorf("the orchestrator is still working on the previous turn")
 	}
 	o.thinking = true
+	gen := o.gen
 	o.lastErr = ""
 	o.add(RoleUser, "", text)
 	// The user has spoken, so whatever the orchestrator was blocked on is
 	// answered and every task gets its patience back.
-	o.awaiting = false
-	o.unanswered = map[string]int{}
+	o.mem.awaiting = false
+	for slug, ts := range o.mem.tasks {
+		ts.unanswered = 0
+		o.mem.tasks[slug] = ts
+	}
 	o.save()
 	o.mu.Unlock()
 
 	input := o.prompt(text, nil)
-	go func() { _ = o.think(context.Background(), input, true) }()
+	go func() { _ = o.think(context.Background(), gen, input, true, nil) }()
 	return nil
 }
 
-// think runs one brain turn and applies the reply. thinking is already set.
+// think runs one brain turn and applies the reply. thinking is already set,
+// and gen is the generation it was set under.
+//
+// seen, when there is one, records what the brain has now seen. It is called
+// with the lock held, only if the turn succeeded, and before any action runs:
+// an action can move the same bookkeeping on (resuming an agent clears its
+// cursor), and recording the look after it would undo that.
 //
 // The lock is taken and released around each step rather than held for the
 // whole turn. Creating a workspace clones several worktrees and can take tens of
 // seconds; holding the lock across it would block every Snapshot, and the UI
 // polls Snapshot — so the page would freeze for exactly as long as the most
 // interesting thing it could be showing.
-func (o *Orchestrator) think(ctx context.Context, input string, fromUser bool) error {
-	reply, err := o.brain.Think(ctx, input)
+func (o *Orchestrator) think(ctx context.Context, gen int, input string, fromUser bool,
+	seen func(now time.Time)) error {
+	o.mu.Lock()
+	session := o.st.Session
+	o.mu.Unlock()
+
+	reply, session, err := o.brain.Think(ctx, input, session)
+
+	o.mu.Lock()
+	if gen != o.gen {
+		// Cleared while this turn ran. Nothing of it is kept — not the session
+		// id, which is the conversation the user asked to forget, nor the
+		// reply, whose actions were decided inside it.
+		o.thinking = false
+		o.add(RoleEvent, "", "A turn still running when the conversation was cleared was discarded.")
+		o.save()
+		o.mu.Unlock()
+		return errCleared
+	}
+	o.st.Session = session
+	o.mem = o.mem.afterTurn(err == nil, time.Now())
 	if err != nil {
-		o.mu.Lock()
 		o.lastErr = err.Error()
 		o.add(RoleError, "", err.Error())
 		o.thinking = false
@@ -367,8 +386,9 @@ func (o *Orchestrator) think(ctx context.Context, input string, fromUser bool) e
 		o.mu.Unlock()
 		return err
 	}
-
-	o.mu.Lock()
+	if seen != nil {
+		seen(time.Now())
+	}
 	o.lastErr = ""
 	o.add(RoleOrchestrator, "", reply.Say)
 	o.save()
@@ -377,14 +397,16 @@ func (o *Orchestrator) think(ctx context.Context, input string, fromUser bool) e
 	o.apply(reply, fromUser)
 
 	o.mu.Lock()
-	if reply.NeedsUser {
-		o.awaiting = true
+	if reply.NeedsUser && gen == o.gen {
+		o.mem.awaiting = true
 	}
 	o.thinking = false
 	o.save()
 	o.mu.Unlock()
 	return nil
 }
+
+var errCleared = errors.New("the conversation was cleared during this turn")
 
 // apply carries out the actions of a reply.
 //
@@ -404,7 +426,7 @@ func (o *Orchestrator) apply(r Reply, fromUser bool) {
 		propose := !fromUser && o.st.Autonomy == AutonomyAsk
 		if propose {
 			o.add(RoleEvent, a.Task, "proposed: "+describe(a))
-			o.awaiting = true
+			o.mem.awaiting = true
 			o.save()
 		}
 		o.mu.Unlock()
@@ -509,32 +531,37 @@ func (o *Orchestrator) do(a Action, fromUser bool) error {
 			return fmt.Errorf("nothing to send")
 		}
 		o.mu.Lock()
+		ts := o.mem.tasks[a.Task]
 		// Refused whoever asked, including the user. Sending is built for a text
 		// prompt — it types the line and presses Enter — and an agent stopped on
 		// a confirmation is not showing one. The keystrokes would move a
 		// selection and the Enter would confirm it, which is a decision nobody
 		// took. Answering it is a job for the task's own tab.
-		if tool := o.blocked[a.Task]; tool != "" {
-			o.awaiting = true
+		if tool := ts.blocked; tool != "" {
+			o.mem.awaiting = true
 			o.mu.Unlock()
 			return fmt.Errorf("%s is waiting on a %s confirmation in its terminal, "+
 				"so nothing can be typed at it — answer it in the task's tab", a.Task, tool)
 		}
-		err := o.budgetLocked(a.Task, fromUser)
-		if err != nil {
-			o.awaiting = true
+		// A message the user asked for is never refused: they are present, and
+		// they can see what is happening.
+		if !fromUser {
+			var err error
+			if ts, err = ts.budget(a.Task, time.Now()); err != nil {
+				o.mem.awaiting = true
+			}
+			o.mem.tasks[a.Task] = ts
+			if err != nil {
+				o.mu.Unlock()
+				return err
+			}
 		}
 		o.mu.Unlock()
-		if err != nil {
-			return err
-		}
 		if err := o.host.Send(a.Task, a.Text); err != nil {
 			return err
 		}
 		o.mu.Lock()
-		o.lastSend[a.Task] = time.Now()
-		o.unanswered[a.Task]++
-		o.sends[a.Task] = append(o.sends[a.Task], time.Now())
+		o.mem.tasks[a.Task] = o.mem.tasks[a.Task].sentOne(time.Now())
 		o.mu.Unlock()
 		return nil
 
@@ -548,8 +575,9 @@ func (o *Orchestrator) do(a Action, fromUser bool) error {
 		// said nothing yet, so the cursor starts clean and the next look reads
 		// its conversation from where it left off.
 		o.mu.Lock()
-		delete(o.st.Cursors, a.Task)
-		delete(o.reportedGone, a.Task)
+		ts := o.mem.tasks[a.Task]
+		ts.cursor, ts.shown, ts.reportedGone = "", nil, false
+		o.mem.tasks[a.Task] = ts
 		o.mu.Unlock()
 		return nil
 	case ActStackUp:
@@ -566,8 +594,9 @@ func (o *Orchestrator) do(a Action, fromUser bool) error {
 		o.mu.Lock()
 		defer o.mu.Unlock()
 		if !contains(o.st.Watching, a.Task) {
+			// A fresh start, exactly as when the user picks it: see SetMode.
 			o.st.Watching = append(o.st.Watching, a.Task)
-			delete(o.st.Cursors, a.Task)
+			delete(o.mem.tasks, a.Task)
 		}
 		return nil
 	case ActUnwatch:
@@ -583,39 +612,6 @@ func (o *Orchestrator) do(a Action, fromUser bool) error {
 		return nil
 	}
 	return fmt.Errorf("unknown action %q", a.Kind)
-}
-
-// budgetLocked is the stop on talking to one agent forever. Held: the lock.
-//
-// Two different loops are being guarded. The first is an agent that never
-// answers — a wedged process, or a tab whose input is not reaching it — where
-// every nudge looks exactly like the last. The second is the productive-looking
-// one, where the agent does reply each time and the two of them would happily
-// keep going all night.
-//
-// A message the user asked for is never refused: they are present, and they can
-// see what is happening.
-func (o *Orchestrator) budgetLocked(slug string, fromUser bool) error {
-	if fromUser {
-		return nil
-	}
-	if n := o.unanswered[slug]; n >= maxUnansweredNudges {
-		return fmt.Errorf("%s has been sent %d instructions without answering — "+
-			"stopping and asking you instead", slug, n)
-	}
-	cut := time.Now().Add(-time.Hour)
-	kept := o.sends[slug][:0]
-	for _, t := range o.sends[slug] {
-		if t.After(cut) {
-			kept = append(kept, t)
-		}
-	}
-	o.sends[slug] = append([]time.Time{}, kept...)
-	if len(o.sends[slug]) >= maxSendsPerHour {
-		return fmt.Errorf("%s has already been sent %d instructions this hour — "+
-			"stopping and asking you instead", slug, len(o.sends[slug]))
-	}
-	return nil
 }
 
 // short abbreviates a conversation uuid for the activity trail, where the whole

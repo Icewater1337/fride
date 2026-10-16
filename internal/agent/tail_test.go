@@ -2,10 +2,14 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Icewater1337/fride/internal/jsonl"
 )
 
 // writeTurns lays out a Claude Code transcript the way the CLI does:
@@ -149,21 +153,10 @@ func TestTailDoesNotCrossWorkspaces(t *testing.T) {
 // two must never be confused.
 func TestPendingSpotsAnUnansweredToolCall(t *testing.T) {
 	home := t.TempDir()
-	toolUse := func(uuid, id, name string) map[string]any {
-		return map[string]any{"type": "assistant", "uuid": uuid, "cwd": "/ws",
-			"message": map[string]any{"role": "assistant", "content": []any{
-				map[string]any{"type": "tool_use", "id": id, "name": name}}}}
-	}
-	toolResult := func(uuid, id string) map[string]any {
-		return map[string]any{"type": "user", "uuid": uuid, "cwd": "/ws",
-			"message": map[string]any{"role": "user", "content": []any{
-				map[string]any{"type": "tool_result", "tool_use_id": id}}}}
-	}
-
 	writeTurns(t, home, "/ws", "answered", []map[string]any{
 		toolUse("a1", "t1", "Bash"), toolResult("u1", "t1"), assistant("a2", "done"),
 	})
-	if got := Pending(Claude, home, "/ws", "answered"); got != "" {
+	if got := pending(t, home, "answered", time.Time{}); got != "" {
 		t.Fatalf("Pending = %q, want nothing: every call was answered", got)
 	}
 
@@ -171,7 +164,7 @@ func TestPendingSpotsAnUnansweredToolCall(t *testing.T) {
 		toolUse("a1", "t1", "Read"), toolResult("u1", "t1"),
 		toolUse("a2", "t2", "Bash"),
 	})
-	if got := Pending(Claude, home, "/ws", "blocked"); got != "Bash" {
+	if got := pending(t, home, "blocked", time.Time{}); got != "Bash" {
 		t.Fatalf("Pending = %q, want the unanswered Bash call", got)
 	}
 
@@ -182,8 +175,108 @@ func TestPendingSpotsAnUnansweredToolCall(t *testing.T) {
 	writeTurns(t, home, "/ws", "sidechain", []map[string]any{
 		toolUse("a1", "t1", "Read"), toolResult("u1", "t1"), sub,
 	})
-	if got := Pending(Claude, home, "/ws", "sidechain"); got != "" {
+	if got := pending(t, home, "sidechain", time.Time{}); got != "" {
 		t.Fatalf("Pending = %q, want nothing: a subagent's call is not a dialog", got)
+	}
+}
+
+// Only the latest turn can be showing a dialog. A call left dangling further
+// back — the process was killed mid-tool, and the conversation resumed — used
+// to mark the task blocked for good, and every instruction to it was refused.
+func TestPendingOnlyCountsTheLatestTurn(t *testing.T) {
+	home := t.TempDir()
+	at := func(line map[string]any, ts time.Time) map[string]any {
+		line["timestamp"] = ts.Format(time.RFC3339Nano)
+		return line
+	}
+	// One message is one line per content block, sharing its id.
+	inMessage := func(line map[string]any, id string) map[string]any {
+		line["message"].(map[string]any)["id"] = id
+		return line
+	}
+	prompt := func(uuid, text string) map[string]any {
+		return map[string]any{"type": "user", "uuid": uuid, "cwd": "/ws",
+			"message": map[string]any{"role": "user", "content": text}}
+	}
+	killed := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	resumed := killed.Add(time.Hour)
+
+	cases := []struct {
+		name  string
+		lines []map[string]any
+		since time.Time
+		want  string
+	}{
+		{name: "a later message means the old call was abandoned",
+			lines: []map[string]any{
+				toolUse("a1", "t1", "Bash"),
+				prompt("u1", "carry on"), assistant("a2", "picking up where I left off"),
+			}, want: ""},
+		{name: "so does a prompt typed after it",
+			lines: []map[string]any{toolUse("a1", "t1", "Bash"), prompt("u1", "never mind that")},
+			want:  ""},
+		{name: "a call from before this process started is not its dialog",
+			lines: []map[string]any{at(toolUse("a1", "t1", "Bash"), killed)},
+			since: resumed, want: ""},
+		{name: "a call from this process is",
+			lines: []map[string]any{at(toolUse("a1", "t1", "Bash"), resumed.Add(time.Minute))},
+			since: resumed, want: "Bash"},
+		{name: "parallel calls are one message: an answered one does not clear the other",
+			lines: []map[string]any{
+				inMessage(toolUse("a1", "t1", "Read"), "msg_1"),
+				inMessage(toolUse("a2", "t2", "Bash"), "msg_1"),
+				toolResult("u1", "t1"),
+			}, want: "Bash"},
+		{name: "and a tool result is not a typed prompt",
+			lines: []map[string]any{
+				inMessage(toolUse("a1", "t1", "Bash"), "msg_1"),
+				inMessage(toolUse("a2", "t2", "Edit"), "msg_1"),
+				toolResult("u1", "t2"),
+			}, want: "Bash"},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			session := fmt.Sprintf("s%d", i)
+			writeTurns(t, home, "/ws", session, c.lines)
+			if got := pending(t, home, session, c.since); got != c.want {
+				t.Fatalf("Pending = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func pending(t *testing.T, home, session string, since time.Time) string {
+	t.Helper()
+	got, err := Pending(Claude, home, "/ws", session, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func toolUse(uuid, id, name string) map[string]any {
+	return map[string]any{"type": "assistant", "uuid": uuid, "cwd": "/ws",
+		"message": map[string]any{"role": "assistant", "content": []any{
+			map[string]any{"type": "tool_use", "id": id, "name": name}}}}
+}
+
+func toolResult(uuid, id string) map[string]any {
+	return map[string]any{"type": "user", "uuid": uuid, "cwd": "/ws",
+		"message": map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "tool_result", "tool_use_id": id}}}}
+}
+
+// A line longer than the scanner's limit used to end the read there, silently:
+// the agent looked quiet from that tool result on, however much it said after.
+func TestTailReadsPastAnOversizedLine(t *testing.T) {
+	home := t.TempDir()
+	huge := assistant("big", strings.Repeat("x", jsonl.MaxLine+1))
+	writeTurns(t, home, "/ws", "s1", []map[string]any{
+		assistant("a1", "reading the dump"), huge, assistant("a2", "the dump says no"),
+	})
+	turns, cursor := Tail(Claude, home, "/ws", "s1", "a1", 10)
+	if len(turns) != 1 || turns[0].Text != "the dump says no" || cursor != "a2" {
+		t.Fatalf("got %d turns, cursor %q; want the turn after the oversized line", len(turns), cursor)
 	}
 }
 
