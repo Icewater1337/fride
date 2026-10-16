@@ -43,7 +43,7 @@ internal/agent           agent CLIs: flags, detection, transcripts
 internal/orchestrator    the supervising agent above the task agents
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)
-internal/journal         decision log and rationale document
+internal/journal         decision log, rationale document, ledger, idea pages
 internal/server          HTTP + WebSocket
 web/                     the UI, no build step (xterm.js vendored)
 docs/CONFIG.md           config.json reference

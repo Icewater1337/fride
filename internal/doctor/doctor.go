@@ -135,7 +135,18 @@ func Run(cfg *config.Config) *Report {
 	if cfg.Configured() && cfg.Settings.Ledger != nil && cfg.Settings.Ledger.Remote != "" {
 		c := Check{ID: "ledger", Label: "rationale ledger", Needed: "publishing rationale documents",
 			Fix: "check ledger.remote in config.json, and that git can push there (credentials)"}
-		if err := journal.CheckLedger(cfg.Settings.Ledger); err != nil {
+		if err := journal.CheckRemote(cfg.Settings.Ledger.Remote); err != nil {
+			c.Detail = err.Error()
+		} else {
+			c.OK, c.Detail = true, "reachable"
+		}
+		add(c)
+	}
+
+	if journal.IdeasEnabled(cfg) {
+		c := Check{ID: "ideas", Label: "ideas repository", Needed: "publishing idea pages, and finding the ideas that exist",
+			Fix: "check ideas.remote in config.json, and that git can push there (credentials)"}
+		if err := journal.CheckRemote(cfg.Settings.Ideas.Remote); err != nil {
 			c.Detail = err.Error()
 		} else {
 			c.OK, c.Detail = true, "reachable"

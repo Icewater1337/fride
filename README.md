@@ -69,6 +69,11 @@ the task, `docs/rationale/<task>.md`. A *ledger* repository can also collect the
 documents of every task, published through plain git, including GitLab merge
 requests that merge by themselves (see `ledger` in docs/CONFIG.md).
 
+**Ideas.** A task that explores an idea rather than implementing a ticket
+keeps a page about it, written by its agent as the work happens, and
+*Publish idea* sends the page to the team's ideas repository (see `ideas` in
+docs/CONFIG.md).
+
 **config.json.** Everything above, for your stack, in one declarative file,
 written during setup and readable by a person. Reference:
 [docs/CONFIG.md](docs/CONFIG.md). `fride config check` validates it.
@@ -117,6 +122,7 @@ fride infra down --shared                # stop the containers all tasks share
 
 fride note decision "..." --why "..."     # the decision log the rationale document is built from
 fride rationale [task] [--narrate] [--publish]   # --publish: also push it to the ledger repo
+fride idea ls | idea cat <path> | idea publish [task]   # the ideas repository
 
 fride fleet                               # this computer and your others (fleet mode)
 fride task move <task> <computer>         # continue a task on another computer

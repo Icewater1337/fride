@@ -274,6 +274,7 @@ async function openTask(slug, node) {
   loadMem().catch(e => console.error('mem:', e));
   loadUsage().catch(e => console.error('usage:', e));
   loadJournal().catch(e => console.error('journal:', e));
+  loadIdea().catch(e => console.error('idea:', e));
   startPolling();
 }
 
@@ -2046,6 +2047,53 @@ function openEntry(e) {
   }
   $('#jrpop').classList.remove('hidden');
 }
+
+/* ------------------------------------------------------------------ idea */
+
+// The idea page is written by the agent through the document-idea skill while
+// an idea is being explored; this panel only shows it and publishes it. Nothing
+// is pushed until the button is clicked. Hidden where no ideas repository is
+// configured — the computer the task lives on answers that.
+async function loadIdea() {
+  const panel = $('#idea-panel'), host = $('#idea-list'), btn = $('#idea-publish');
+  let r;
+  try { r = await api.get(`${tb()}/tasks/${state.current}/idea`); }
+  catch { panel.classList.add('hidden'); return; }
+  panel.classList.toggle('hidden', !r.enabled);
+  $('#idea-result').textContent = '';
+  host.innerHTML = '';
+  if (!r.pages.length) {
+    host.appendChild(el('div', 'jrmeta',
+      'no idea page yet — the agent writes one under .idea-brain/ when the task is exploring an idea'));
+  }
+  for (const p of r.pages) {
+    const row = el('div', 'jrline');
+    row.appendChild(el('span', 'jrkind note', p.status || 'idea'));
+    row.appendChild(el('span', 'jrtext', p.title));
+    row.title = p.description || p.path;
+    host.appendChild(row);
+  }
+  btn.disabled = !r.pages.length;
+}
+
+$('#idea-refresh').addEventListener('click', loadIdea);
+$('#idea-publish').addEventListener('click', async () => {
+  const b = $('#idea-publish'), out = $('#idea-result');
+  b.disabled = true; b.textContent = 'publishing...'; out.textContent = '';
+  try {
+    const r = await api.post(`${tb()}/tasks/${state.current}/idea/publish`, {});
+    if (r.skipped) out.textContent = r.skipped;
+    else {
+      out.appendChild(document.createTextNode('pushed ' + r.branch));
+      if (r.link) {
+        const a = el('a', null, ' → ' + r.link);
+        a.href = r.link; a.target = '_blank'; a.rel = 'noreferrer';
+        out.appendChild(a);
+      }
+    }
+  } catch (e) { out.textContent = e.message; }
+  b.disabled = false; b.textContent = 'Publish idea';
+});
 
 $('#jr-filter').addEventListener('change', renderJournalList);
 $('#jr-refresh').addEventListener('click', loadJournal);

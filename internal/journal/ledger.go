@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
-	"github.com/Icewater1337/fride/internal/settings"
 )
 
 // The ledger is a git repository collecting every task's rationale document,
@@ -66,23 +65,34 @@ func ledgerOf(cfg *config.Config) (*ledgerConf, error) {
 	if c.push == "" {
 		c.push = "branch"
 	}
-	if l.Author != "" {
-		m := authorParts.FindStringSubmatch(l.Author)
-		if m == nil {
-			return nil, fmt.Errorf("ledger.author must be \"Name <email>\"")
-		}
-		name, email := strings.TrimSpace(m[1]), m[2]
-		c.env = []string{"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=" + email,
-			"GIT_COMMITTER_NAME=" + name, "GIT_COMMITTER_EMAIL=" + email}
+	env, err := authorEnv(l.Author, "ledger.author")
+	if err != nil {
+		return nil, err
 	}
+	c.env = env
 	return c, nil
 }
 
 var authorParts = regexp.MustCompile(`^([^<>]+)<([^<>\s]+@[^<>\s]+)>$`)
 
-// clonePath is a working clone kept with FrIDE's other state, so publishing
-// never touches any of the task's own worktrees.
-func clonePath(cfg *config.Config) string { return filepath.Join(cfg.StateDir, "ledger") }
+// authorEnv turns "Name <email>" into the environment that makes it a
+// commit's author and committer. Empty means git's own configuration.
+func authorEnv(author, field string) ([]string, error) {
+	if author == "" {
+		return nil, nil
+	}
+	m := authorParts.FindStringSubmatch(author)
+	if m == nil {
+		return nil, fmt.Errorf("%s must be \"Name <email>\"", field)
+	}
+	name, email := strings.TrimSpace(m[1]), m[2]
+	return []string{"GIT_AUTHOR_NAME=" + name, "GIT_AUTHOR_EMAIL=" + email,
+		"GIT_COMMITTER_NAME=" + name, "GIT_COMMITTER_EMAIL=" + email}, nil
+}
+
+// The clones are kept with FrIDE's other state, so publishing never touches
+// any of the task's own worktrees.
+func ledgerClone(cfg *config.Config) string { return filepath.Join(cfg.StateDir, "ledger") }
 
 // credentialsRe finds credentials embedded in URLs, which git repeats in its
 // error messages when the remote is written that way.
@@ -107,18 +117,17 @@ func run(dir string, env []string, args ...string) (string, error) {
 	return s, nil
 }
 
-// ensureClone makes sure the local clone exists, points at the configured
-// remote, and is on a current main branch.
-func ensureClone(cfg *config.Config, c *ledgerConf) (string, error) {
-	dir := clonePath(cfg)
+// ensureClone makes sure the local clone in dir exists, points at the
+// configured remote, and is on a current main branch.
+func ensureClone(dir, remote, branch string) (string, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return "", err
 		}
-		if _, err := run("", nil, "clone", "--quiet", c.remote, dir); err != nil {
-			return "", fmt.Errorf("could not clone the ledger: %w", err)
+		if _, err := run("", nil, "clone", "--quiet", remote, dir); err != nil {
+			return "", fmt.Errorf("could not clone %s: %w", redact(remote), err)
 		}
-	} else if _, err := run(dir, nil, "remote", "set-url", "origin", c.remote); err != nil {
+	} else if _, err := run(dir, nil, "remote", "set-url", "origin", remote); err != nil {
 		return "", err
 	}
 	if _, err := run(dir, nil, "fetch", "--quiet", "--prune", "origin"); err != nil {
@@ -126,9 +135,9 @@ func ensureClone(cfg *config.Config, c *ledgerConf) (string, error) {
 	}
 	// A brand-new, empty ledger has no main branch yet; the first publish
 	// creates it.
-	if _, err := run(dir, nil, "rev-parse", "--verify", "--quiet", "origin/"+c.branch); err != nil {
-		if _, err := run(dir, nil, "checkout", "--quiet", "--orphan", c.branch); err != nil {
-			if _, err := run(dir, nil, "checkout", "--quiet", c.branch); err != nil {
+	if _, err := run(dir, nil, "rev-parse", "--verify", "--quiet", "origin/"+branch); err != nil {
+		if _, err := run(dir, nil, "checkout", "--quiet", "--orphan", branch); err != nil {
+			if _, err := run(dir, nil, "checkout", "--quiet", branch); err != nil {
 				return "", err
 			}
 		}
@@ -137,10 +146,10 @@ func ensureClone(cfg *config.Config, c *ledgerConf) (string, error) {
 	}
 	// Reset rather than pull: this clone is a publishing scratch area, and any
 	// local state in it is from a previous publish, not work worth keeping.
-	if _, err := run(dir, nil, "checkout", "--quiet", "-B", c.branch, "origin/"+c.branch); err != nil {
+	if _, err := run(dir, nil, "checkout", "--quiet", "-B", branch, "origin/"+branch); err != nil {
 		return "", err
 	}
-	if _, err := run(dir, nil, "reset", "--quiet", "--hard", "origin/"+c.branch); err != nil {
+	if _, err := run(dir, nil, "reset", "--quiet", "--hard", "origin/"+branch); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -243,7 +252,7 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, err := ensureClone(cfg, c)
+	dir, err := ensureClone(ledgerClone(cfg), c.remote, c.branch)
 	if err != nil {
 		return nil, err
 	}
@@ -355,10 +364,10 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 	return p, nil
 }
 
-// CheckLedger reports whether the ledger can be reached with git's own
-// credentials, for `fride doctor`.
-func CheckLedger(l *settings.Ledger) error {
-	cmd := exec.Command("git", "ls-remote", "--quiet", "--exit-code", l.Remote, "HEAD")
+// CheckRemote reports whether a publishing repository (the ledger, the ideas
+// repository) can be reached with git's own credentials, for `fride doctor`.
+func CheckRemote(remote string) error {
+	cmd := exec.Command("git", "ls-remote", "--quiet", "--exit-code", remote, "HEAD")
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err == nil {

@@ -102,6 +102,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   rationale [task] [--narrate] [--commit] [--publish]
                                         compose docs/rationale/<task>.md; --publish
                                         also pushes it to the ledger (config: ledger)
+  idea ls                               the ideas already in the ideas repository
+  idea cat <path>                       read one of them, e.g. ideas/<slug>.md
+  idea publish [task]                   push the task's idea page(s) (config: ideas)
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
@@ -195,6 +198,8 @@ func main() {
 		cmdNote(cfg, st, os.Args[2:])
 	case "rationale":
 		cmdRationale(cfg, st, os.Args[2:])
+	case "idea":
+		cmdIdea(cfg, st, os.Args[2:])
 	case "repos":
 		cmdRepos(cfg)
 	default:
@@ -1189,6 +1194,51 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 		Kind: kind, Text: text, Why: why, Repo: repo, Source: src,
 	}))
 	fmt.Printf("recorded %s for %s\n", kind, t.Slug)
+}
+
+// cmdIdea is the document-idea skill's window into the ideas repository: what
+// exists already, so an idea is extended rather than duplicated, and the
+// publish the person runs (the UI's Publish idea does the same).
+func cmdIdea(cfg *config.Config, st *store.Store, args []string) {
+	if len(args) == 0 {
+		check(fmt.Errorf("usage: fride idea ls | idea cat <path> | idea publish [task]"))
+	}
+	switch args[0] {
+	case "ls":
+		pages, err := journal.ExistingIdeas(cfg)
+		check(err)
+		if len(pages) == 0 {
+			fmt.Println("no ideas in the ideas repository yet")
+			return
+		}
+		w := tw()
+		fmt.Fprintln(w, "PATH\tSTATUS\tTITLE\tDESCRIPTION")
+		for _, p := range pages {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Path, p.Status, p.Title, p.Description)
+		}
+		w.Flush()
+	case "cat":
+		if len(args) != 2 {
+			check(fmt.Errorf("usage: fride idea cat <path>, e.g. ideas/<slug>.md"))
+		}
+		body, err := journal.ReadIdea(cfg, args[1])
+		check(err)
+		fmt.Print(body)
+	case "publish":
+		t := resolveTask(cfg, st, args[1:])
+		p, err := journal.PublishIdeas(cfg, t.Slug)
+		check(err)
+		if p.Skipped != "" {
+			fmt.Printf("skipped: %s\n", p.Skipped)
+			return
+		}
+		fmt.Printf("pushed %s on %s\n", strings.Join(p.Files, ", "), p.Branch)
+		if p.Link != "" {
+			fmt.Println(p.Link)
+		}
+	default:
+		check(fmt.Errorf("unknown idea command %q — ls, cat or publish", args[0]))
+	}
 }
 
 func cmdRationale(cfg *config.Config, st *store.Store, args []string) {

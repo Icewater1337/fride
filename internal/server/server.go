@@ -235,7 +235,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Workspaces string             `json:"workspaceRoot"`
 		StateDir   string             `json:"stateDir"`
 		Ledger     bool               `json:"ledger"`
-	}{Ledger: journal.LedgerEnabled(s.cfg), Configured: s.cfg.Configured(), Path: filepath.Join(s.cfg.StateDir, "config.json"),
+		Ideas      bool               `json:"ideas"`
+	}{Ledger: journal.LedgerEnabled(s.cfg), Ideas: journal.IdeasEnabled(s.cfg), Configured: s.cfg.Configured(), Path: filepath.Join(s.cfg.StateDir, "config.json"),
 		Profiles: []profileView{}, Problems: []settings.Problem{}, Core: []string{},
 		Workspaces: s.cfg.WorkspaceRoot, StateDir: s.cfg.StateDir}
 	if s.cfg.LoadErr != nil {
@@ -897,6 +898,26 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			out = append(out, ps)
 		}
 		writeJSON(w, 200, out)
+
+	case action == "idea" && r.Method == http.MethodGet:
+		// Opening the task is also when a workspace created before the ideas
+		// repository was configured gets the skill; installing is idempotent.
+		_ = journal.InstallIdeaSkill(s.cfg, slug)
+		pages, err := journal.IdeaPages(s.cfg, slug)
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"enabled": journal.IdeasEnabled(s.cfg),
+			"dir": journal.IdeaDir(s.cfg, slug), "pages": pages})
+
+	case action == "idea/publish" && r.Method == http.MethodPost:
+		p, err := journal.PublishIdeas(s.cfg, slug)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, p)
 
 	case action == "journal" && r.Method == http.MethodGet:
 		entries, err := journal.Read(s.cfg, slug)

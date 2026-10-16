@@ -124,6 +124,7 @@ backend's compose file.
 | `profiles` | The ways the stack can boot. |
 | `requirements` | Things the machine must have, checked by `fride doctor`. |
 | `ledger` | Publish every task's rationale document to a shared git repository. See [ledger](#ledger). |
+| `ideas` | The repository a task's idea pages are published to. See [ideas](#ideas). |
 | `memory` | What one more stack needs, checked before a stack starts. See [memory](#memory). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 
@@ -271,6 +272,49 @@ Publishing by hand: `fride rationale <task> --publish`, or **Publish to the
 ledger** in the rationale dialog. A document that has not changed since the
 last publish is not pushed again. `fride doctor` checks that the ledger can be
 reached.
+
+## ideas
+
+Not every task implements a ticket. When one explores an idea instead (a
+spike, a proof of concept, "what if we…"), its agent keeps a page about the
+idea while the work happens: what it is, what was tried, what came out of it,
+what is still open. With an ideas repository configured, FrIDE installs the
+`document-idea` skill into every workspace that tells the agent how, and
+**Publish idea** in the task view (or `fride idea publish`) commits the page to
+that repository. The skill checks the repository first (`fride idea ls`,
+`fride idea cat`), so an idea that exists is extended, not duplicated.
+
+```json
+"ideas": {
+  "remote": "https://gitlab.example.com/team/specs.git",
+  "branch": "main",
+  "dir": "ideas",
+  "pushOptions": [
+    "merge_request.create",
+    "merge_request.target={{target}}",
+    "merge_request.title=idea: {{title}}",
+    "merge_request.remove_source_branch",
+    "merge_request.merge_when_pipeline_succeeds"
+  ],
+  "author": "Jane Doe <jane@example.com>"
+}
+```
+
+The page is written to `.idea-brain/<dir>/<slug>.md` in the workspace, with
+images in `.idea-brain/references/assets/`: the repository's own layout, so
+publishing copies the folder as it is onto a branch of its own,
+`idea/<task>-<time>`, and adds the page to the `## <dir>` section of the root
+`index.md`. Like the ledger it is plain git: on GitLab the push options open a
+merge request that merges itself, on GitHub git prints the link for a pull
+request.
+
+| field | meaning |
+|---|---|
+| `remote` | The ideas repository's git URL. |
+| `branch` | Its main branch. Default `main`. |
+| `dir` | The folder with one page per idea. Default `ideas`. |
+| `pushOptions` | Passed as `git push -o …`. `{{task}}`, `{{title}}` (the pages' titles), `{{branch}}` and `{{target}}` are filled in. |
+| `author` | `"Name <email>"` for the commits. Without it, git's own configuration applies. |
 
 ## memory
 

@@ -264,10 +264,12 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 	if err := writeGuide(cfg, slug, specs, agentKind, branch); err != nil {
 		return out, fmt.Errorf("workspace created, but its guide file could not be written: %w", err)
 	}
-	// Best effort: a missing hook costs some rationale, not the workspace.
+	// Best effort: a missing hook costs some rationale, not the workspace, and
+	// a missing skill only an idea page.
 	if bin, err := os.Executable(); err == nil {
 		_ = journal.InstallHook(cfg, slug, bin)
 	}
+	_ = journal.InstallIdeaSkill(cfg, slug)
 	return out, nil
 }
 
@@ -339,8 +341,27 @@ Two things make such an entry worth having, so put both in:
 
 Use ` + "`--source user`" + ` only for what the user actually decided. Your own
 choices stay unmarked, so that a reader can tell which calls were theirs.
-`
+` + ideaSection(cfg)
 	return os.WriteFile(filepath.Join(cfg.WorkspaceDir(slug), agent.GuideFile(agent.Normalize(agentKind))), []byte(body), 0o644)
+}
+
+// ideaSection points the agent at the document-idea skill, when the team has
+// an ideas repository to publish to. Agents other than Claude Code do not load
+// skills, so it names the file.
+func ideaSection(cfg *config.Config) string {
+	if !journal.IdeasEnabled(cfg) {
+		return ""
+	}
+	return `
+## Exploring an idea, not a ticket?
+
+When this task is about trying something NEW — a proof of concept, a spike,
+"what if we…" — rather than implementing a defined ticket, follow the
+` + "`document-idea`" + ` skill (` + "`.claude/skills/document-idea/SKILL.md`" + `; read it if your
+agent does not load skills). It keeps a living idea page under ` + "`" + journal.IdeaFolder + "/`" + `, in the
+layout of the team's ideas repository, and the person publishes it with
+*Publish idea* in FrIDE. Ticket work stays in the decision log above.
+`
 }
 
 const stackHeading = "## Running the stack"

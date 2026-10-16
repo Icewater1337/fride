@@ -103,7 +103,7 @@ func TestPublishOnItsOwnBranch(t *testing.T) {
 
 func TestPublishDirectIntoAnEmptyLedger(t *testing.T) {
 	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, false)
-	if err := CheckLedger(cfg.Settings.Ledger); err != nil {
+	if err := CheckRemote(cfg.Settings.Ledger.Remote); err != nil {
 		t.Fatalf("an empty but reachable ledger should pass the check: %v", err)
 	}
 	p, err := Publish(cfg, "proj-42", Options{})
@@ -130,7 +130,7 @@ func TestWaitForMergeGivesUp(t *testing.T) {
 }
 
 func TestCredentialsNeverShown(t *testing.T) {
-	err := CheckLedger(&settings.Ledger{Remote: "https://user:s3cr3t@127.0.0.1:1/ledger.git"})
+	err := CheckRemote("https://user:s3cr3t@127.0.0.1:1/ledger.git")
 	if err == nil {
 		t.Fatal("an unreachable ledger passed the check")
 	}

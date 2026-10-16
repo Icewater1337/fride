@@ -54,6 +54,8 @@ type Settings struct {
 	Fleet *Fleet `json:"fleet,omitempty"`
 	// Ledger publishes every task's rationale document to a shared repository.
 	Ledger *Ledger `json:"ledger,omitempty"`
+	// Ideas is the repository a task's idea pages are published to.
+	Ideas *Ideas `json:"ideas,omitempty"`
 	// Memory is what one more stack needs, checked before a stack starts.
 	Memory *Memory `json:"memory,omitempty"`
 
@@ -242,6 +244,27 @@ type Ledger struct {
 	Author string `json:"author,omitempty"`
 	// OnDone publishes automatically when a task moves to Done. Default true.
 	OnDone *bool `json:"onDone,omitempty"`
+}
+
+// Ideas is the team's ideas repository. While a task explores an idea rather
+// than implementing a ticket, its agent keeps a page about it in the
+// workspace (the document-idea skill FrIDE installs), and Publish idea copies
+// the page into this repository. The skill also reads it, so an idea that
+// exists already is extended instead of duplicated.
+type Ideas struct {
+	// Remote is the repository's git URL. Pushing uses git's own credentials.
+	Remote string `json:"remote"`
+	// Branch is its main branch. Default "main".
+	Branch string `json:"branch,omitempty"`
+	// Dir is the folder holding one page per idea. Default "ideas".
+	Dir string `json:"dir,omitempty"`
+	// PushOptions are passed to `git push -o`, as for the ledger: how a
+	// GitLab server is asked to open a merge request and merge it by itself.
+	// {{task}}, {{title}}, {{branch}} and {{target}} are filled in.
+	PushOptions []string `json:"pushOptions,omitempty"`
+	// Author is "Name <email>" for the commits. Default: git's own
+	// configuration.
+	Author string `json:"author,omitempty"`
 }
 
 // Memory is what one more stack of this project needs, in GB. Before a stack

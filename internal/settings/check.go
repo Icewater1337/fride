@@ -3,6 +3,7 @@ package settings
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -99,6 +100,18 @@ func (s *Settings) Check() []Problem {
 		out = append(out, s.checkProfile(pn, s.Profiles[pn], repos)...)
 	}
 	out = append(out, s.checkPorts()...)
+
+	if i := s.Ideas; i != nil {
+		if strings.TrimSpace(i.Remote) == "" {
+			add(true, "ideas.remote", "name the ideas repository's git URL")
+		}
+		if i.Dir != "" && !filepath.IsLocal(i.Dir) {
+			add(true, "ideas.dir", "a folder inside the repository, such as ideas")
+		}
+		if i.Author != "" && !authorRe.MatchString(i.Author) {
+			add(true, "ideas.author", "write it as \"Name <email>\"")
+		}
+	}
 
 	if m := s.Memory; m != nil {
 		for _, f := range []struct {
