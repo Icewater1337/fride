@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -178,7 +179,20 @@ func hostPorts(s string) []int {
 		if colon < 0 {
 			continue
 		}
-		if p, err := strconv.Atoi(hostSide[colon+1:]); err == nil {
+		// A published range is grouped into one entry:
+		// "0.0.0.0:9000-9001->9000-9001/tcp".
+		lo, hi, isRange := strings.Cut(hostSide[colon+1:], "-")
+		from, err := strconv.Atoi(lo)
+		if err != nil {
+			continue
+		}
+		to := from
+		if isRange {
+			if to, err = strconv.Atoi(hi); err != nil || to < from || to-from > 1000 {
+				continue
+			}
+		}
+		for p := from; p <= to; p++ {
 			out = append(out, p)
 		}
 	}
@@ -407,10 +421,31 @@ func Status(p Plan) []Resolution {
 	return out
 }
 
+// noise matches compose's progress output, which on a first run is most of
+// what it prints: one line per layer pulled, extracted, waited for.
+var noise = regexp.MustCompile(`(?i)^\s*(\S+\s+)?(pulling|pulled|pull complete|pulling fs layer|waiting|downloading|download complete|extracting|verifying checksum|already exists|digest:|status:|creating|created|starting|started|running|healthy|waiting|container \S+ (creating|created|starting|started|running|healthy|waiting))\b|^\s*\[[+]\]|^\s*[0-9a-f]{12}\s`)
+
+// trim condenses compose's output for a message. The error is usually at the
+// end, but a first run buries it under hundreds of pull-progress lines, so
+// those are dropped before the tail is taken.
 func trim(out []byte) string {
-	s := strings.TrimSpace(string(out))
-	if len(s) > 600 {
-		s = "…" + s[len(s)-600:]
+	var keep []string
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || noise.MatchString(l) {
+			continue
+		}
+		keep = append(keep, l)
 	}
-	return strings.ReplaceAll(s, "\n", "; ")
+	if len(keep) == 0 {
+		keep = strings.Split(strings.TrimSpace(string(out)), "\n")
+	}
+	if len(keep) > 8 {
+		keep = keep[len(keep)-8:]
+	}
+	s := strings.Join(keep, "; ")
+	if len(s) > 800 {
+		s = "…" + s[len(s)-800:]
+	}
+	return s
 }

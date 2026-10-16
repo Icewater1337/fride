@@ -951,6 +951,11 @@ func printStatus(s *stack.Status) {
 	}
 	if s.K == 0 {
 		fmt.Printf("task %s — profile %s, not running (no port slot held)\n", s.Slug, s.Profile)
+		// The warnings matter most right here: `stack down` releases the slot
+		// and then reports what it had to leave running.
+		for _, warn := range s.Warnings {
+			fmt.Printf("  ! %s\n", warn)
+		}
 		return
 	}
 	fmt.Printf("task %s — profile %s, slot %d\n", s.Slug, s.Profile, s.K)
