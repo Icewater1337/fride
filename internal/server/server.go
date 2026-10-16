@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
@@ -30,6 +31,7 @@ import (
 	"github.com/Icewater1337/fride/internal/settings"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
+	"github.com/Icewater1337/fride/internal/task"
 	"github.com/Icewater1337/fride/internal/term"
 	"github.com/Icewater1337/fride/internal/usage"
 	"github.com/Icewater1337/fride/internal/workspace"
@@ -50,6 +52,9 @@ type Server struct {
 	fleet *fleetState
 	// localAPI is the API alone, for requests the node proxy serves here.
 	localAPI http.Handler
+	// settingsMu serialises settings edits: each one reads config.json,
+	// changes it and writes it back.
+	settingsMu sync.Mutex
 }
 
 // localHosts are the only Host/Origin hostnames this server will answer to.
@@ -375,13 +380,6 @@ func (s *Server) createTask(name string, repos []repoSpec, kind agent.Kind,
 	if !s.cfg.Configured() {
 		return nil, fmt.Errorf("FrIDE is not set up yet — see SETUP.md (config: %s)", filepath.Join(s.cfg.StateDir, "config.json"))
 	}
-	slug := store.Slugify(name)
-	if err := store.ValidateSlug(slug); err != nil {
-		return nil, err
-	}
-	if len(repos) == 0 {
-		return nil, fmt.Errorf("select at least one repository")
-	}
 	if startAgent {
 		// Checked before any worktree is built: a missing CLI is a mistake in the
 		// request, not something to discover as a terminal tab that exits.
@@ -389,49 +387,16 @@ func (s *Server) createTask(name string, repos []repoSpec, kind agent.Kind,
 			return nil, err
 		}
 	}
-	// Checked before anything is built, for the same reason the agent CLI is: a
-	// profile that does not exist is a mistake in the request, not something to
-	// discover at the first stack up.
-	if profile != "" {
-		if _, _, ok := s.cfg.Settings.Profile(profile); !ok {
-			return nil, fmt.Errorf("unknown profile %q (have %v)", profile, s.cfg.Settings.ProfileNames())
-		}
-	}
-	if branch == "" {
-		branch = workspace.SuggestBranch(name)
-	}
-	if err := workspace.ValidateBranch(branch); err != nil {
-		return nil, err
-	}
 	specs := make([]workspace.RepoSpec, 0, len(repos))
 	for _, r := range repos {
 		specs = append(specs, workspace.RepoSpec{Name: r.Name, BaseRef: r.BaseRef})
 	}
-	created, err := workspace.Create(s.cfg, slug, specs, string(kind), branch)
+	t, _, err := task.Create(s.cfg, s.st, task.Request{Name: name, Repos: specs, Agent: kind,
+		Branch: branch, Profile: profile, Dangerous: dangerous})
 	if err != nil {
-		// leave nothing half-built behind
-		_, _ = workspace.Remove(s.cfg, slug, true)
 		return nil, err
 	}
-	t := &store.Task{Slug: slug, Name: name, Status: store.StatusOpen,
-		Created: time.Now(), Agent: string(kind), Dangerous: dangerous,
-		Profile: profile}
-	for _, c := range created {
-		t.Repos = append(t.Repos, store.TaskRepo{Name: c.Repo, BaseRef: c.BaseRef, Branch: c.Branch})
-	}
-	if err := s.st.Add(t); err != nil {
-		return nil, err
-	}
-	// Remembered for the next New task, which is what makes the choice a
-	// one-off rather than something to repeat on every task.
-	s.cfg.Settings.SetAgent(string(kind))
-	// Run the repos' setup steps (dependency installs) now, in the background,
-	// so the first Start is fast instead of stalling for minutes.
-	names := make([]string, 0, len(t.Repos))
-	for _, r := range t.Repos {
-		names = append(names, r.Name)
-	}
-	stack.SetupAsync(s.cfg, slug, names)
+	slug := t.Slug
 	if startAgent {
 		if _, err := s.startAgent(slug, ""); err != nil {
 			log.Printf("task %s: could not start %s: %v", slug, kind, err)
@@ -689,12 +654,15 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		kept := []string{}
 		for _, rr := range res {
 			if !rr.Removed {
-				kept = append(kept, rr.Repo)
+				kept = append(kept, rr.Repo+" ("+rr.Detail+")")
 			}
 		}
-		if len(kept) > 0 && !force && !purge {
+		// force keeps what it must not discard (commits on a detached HEAD), so
+		// a kept repo stops the delete with or without it: forgetting the task
+		// would leave its folder behind, unowned.
+		if len(kept) > 0 {
 			writeJSON(w, 409, map[string]any{
-				"error":   "workspace kept: " + strings.Join(kept, ", ") + " have uncommitted work",
+				"error":   "workspace kept: " + strings.Join(kept, "; "),
 				"results": res,
 			})
 			return
@@ -1169,21 +1137,39 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.AddBase != "" {
-			p := req.AddBase
-			if fi, err := os.Stat(p); err != nil || !fi.IsDir() {
-				writeErr(w, 400, fmt.Errorf("%s is not a directory", p))
+			if fi, err := os.Stat(req.AddBase); err != nil || !fi.IsDir() {
+				writeErr(w, 400, fmt.Errorf("%s is not a directory", req.AddBase))
 				return
 			}
-			s.cfg.Settings.AddBaseFolder(p)
+		}
+		// Save writes the whole file, so it must start from what is on disk
+		// now, not from what this server read at some point. While config.json
+		// fails to parse, the settings in memory are empty: saving them
+		// replaced the file with next to nothing. And an agent or a person may
+		// have edited the file since — a profile added by hand was dropped by
+		// the next edit made here.
+		s.settingsMu.Lock()
+		defer s.settingsMu.Unlock()
+		if s.cfg.LoadErr != nil && !s.cfg.NotConfigured() {
+			writeErr(w, 409, fmt.Errorf("config.json has an error, so it is not written: %v — fix the file and re-check first", s.cfg.LoadErr))
+			return
+		}
+		cur, err := settings.Load(s.cfg.StateDir)
+		if err != nil && !errors.Is(err, settings.ErrNotConfigured) {
+			writeErr(w, 409, fmt.Errorf("config.json has changed and has an error, so it is not written: %v", err))
+			return
+		}
+		if req.AddBase != "" {
+			cur.AddBaseFolder(req.AddBase)
 		}
 		if req.RemoveBase != "" {
-			s.cfg.Settings.RemoveBaseFolder(req.RemoveBase)
+			cur.RemoveBaseFolder(req.RemoveBase)
 		}
 		if req.Project != "" {
 			if req.IDE != nil {
-				s.cfg.Settings.SetIDE(req.Project, *req.IDE)
+				cur.SetIDE(req.Project, *req.IDE)
 			}
-			s.cfg.Settings.SetRepo(req.Project, func(p *settings.Repo) {
+			cur.SetRepo(req.Project, func(p *settings.Repo) {
 				if req.Copy == nil && !req.ResetCopy {
 					return // an IDE-only update must not clear the copy list
 				}
@@ -1194,10 +1180,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			})
 		}
-		if err := s.cfg.Settings.Save(); err != nil {
+		if err := cur.Save(); err != nil {
 			writeErr(w, 500, err)
 			return
 		}
+		s.cfg.Settings, s.cfg.LoadErr = cur, nil
 		s.cfg.Reload() // base folders may have changed the project list
 		s.handleSettings(w, &http.Request{Method: http.MethodGet, Host: r.Host})
 
@@ -1358,13 +1345,15 @@ func (s *Server) upgrader() websocket.Upgrader {
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
 		CheckOrigin: func(r *http.Request) bool {
-			// Another node of the fleet, already identified by the network.
-			if _, ok := fleet.Caller(r); ok {
-				return true
-			}
 			o := r.Header.Get("Origin")
 			if o == "" {
-				return s.allowedHost(r.Host) // non-browser client
+				// A non-browser client: the CLI here, or another node of the
+				// fleet. Being a fleet caller is not enough on its own: that
+				// is any device of the user's, browsers included (fleetGuard).
+				if _, ok := fleet.Caller(r); ok {
+					return r.Host == fleet.Host
+				}
+				return s.allowedHost(r.Host)
 			}
 			return s.allowedOrigin(o) && s.allowedHost(r.Host)
 		},

@@ -39,6 +39,7 @@ internal/move            continue a task on another computer: snapshot, bundles,
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide
+internal/task            task creation, shared by the CLI, the server and the orchestrator
 internal/agent           agent CLIs: flags, detection, transcripts
 internal/orchestrator    the supervising agent above the task agents
 internal/term            PTY sessions (agent and shell tabs)
@@ -60,3 +61,9 @@ Conventions:
   example: stopping reaps by port because build tools fork servers out of the
   launcher's process group.
 - Keep the UI build-free and the binary self-contained.
+- In a decision that destroys something (delete a branch, remove a worktree,
+  wipe a folder), an error is never the harmless answer. A count that cannot
+  be read keeps the branch; a slug that is taken is refused, not cleaned up.
+- The fleet listener serves `apiRoutes` to the user's other devices, and
+  answers only `Host: fride` with no `Origin` (`fleet.Host`). A new
+  server-to-server call must send exactly that.

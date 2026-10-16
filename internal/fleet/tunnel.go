@@ -125,7 +125,7 @@ func openTunnel(ctx context.Context, n Network, addr string, port int) (net.Conn
 	if err != nil {
 		return nil, nil, err
 	}
-	req := fmt.Sprintf("GET /fleet/tunnel?port=%d HTTP/1.1\r\nHost: fride\r\nUpgrade: %s\r\nConnection: Upgrade\r\n\r\n", port, tunnelProto)
+	req := fmt.Sprintf("GET /fleet/tunnel?port=%d HTTP/1.1\r\nHost: %s\r\nUpgrade: %s\r\nConnection: Upgrade\r\n\r\n", port, Host, tunnelProto)
 	if _, err := io.WriteString(c, req); err != nil {
 		c.Close()
 		return nil, nil, err

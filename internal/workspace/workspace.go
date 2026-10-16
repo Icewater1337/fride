@@ -36,7 +36,14 @@ type Created struct {
 	Branch  string
 	Copied  []string
 	Notes   []string
+	// NewBranch: this call created the branch, rather than checking out one
+	// that already existed. Only such a branch may be deleted by Undo.
+	NewBranch bool
 }
+
+// ErrExists is returned by Create when the task's folder is already there. It
+// belongs to another task, or to the user: nothing in it may be touched.
+var ErrExists = errors.New("already exists")
 
 func git(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
@@ -186,30 +193,52 @@ func PruneStale(cfg *config.Config) {
 	}
 }
 
-// Create builds the workspace. It is all-or-nothing at the directory level: on
-// failure the caller should call Remove to clean up whatever was made.
-func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) ([]Created, error) {
-	ws := cfg.WorkspaceDir(slug)
-	if _, err := os.Stat(ws); err == nil {
-		return nil, fmt.Errorf("%s already exists", ws)
-	}
+// Create builds the workspace. It is all-or-nothing, and it cleans up after
+// itself: on failure it removes exactly what it made — never a folder, worktree
+// or branch that was there before. A caller must not clean up after it. An
+// earlier version left that to the caller, which ran a forced Remove and so
+// wiped the existing task whenever the slug was already taken.
+func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) (out []Created, err error) {
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("name at least one repo")
 	}
-	if err := os.MkdirAll(ws, 0o755); err != nil {
-		return nil, err
-	}
-	// A folder deleted outside the app leaves its registration behind, which
-	// would refuse this slug or claim the branch is still checked out.
-	PruneStale(cfg)
 	if branch == "" {
 		branch = BranchName(slug)
 	}
 	if err := ValidateBranch(branch); err != nil {
 		return nil, err
 	}
-	var out []Created
+	ws := cfg.WorkspaceDir(slug)
+	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
+		return nil, err
+	}
+	// Mkdir, not MkdirAll: it fails when the folder exists, atomically, so two
+	// creates of one slug (a double-clicked Create, the CLI racing the UI)
+	// cannot both get past here. The folder is this call's own from now on.
+	if err := os.Mkdir(ws, 0o755); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%s %w", ws, ErrExists)
+		}
+		return nil, err
+	}
+	// pending is the repo being added when a step fails: its worktree or new
+	// branch may exist although it never made it into out.
+	var pending *Created
+	defer func() {
+		if err != nil {
+			made := out
+			if pending != nil {
+				made = append(made, *pending)
+			}
+			undo(cfg, slug, made)
+			out = nil
+		}
+	}()
+	// A folder deleted outside the app leaves its registration behind, which
+	// would refuse this slug or claim the branch is still checked out.
+	PruneStale(cfg)
 	for _, sp := range specs {
+		pending = nil
 		repo, ok := cfg.Repo(sp.Name)
 		if !ok {
 			return out, fmt.Errorf("unknown repo %q", sp.Name)
@@ -253,6 +282,10 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 		default:
 			addArgs = []string{"worktree", "add", "--no-track", "-b", branch, dest, base}
 		}
+		c.NewBranch = localErr != nil
+		// Set before the add: a failed `worktree add -b` can leave the branch
+		// behind, and undo has to know it was this call's.
+		pending = &c
 		if _, err := git(repo.Main, addArgs...); err != nil {
 			return out, fmt.Errorf("%s: %w (is branch %q checked out elsewhere?)", repo.Name, err, branch)
 		}
@@ -261,8 +294,9 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 		c.Notes = append(c.Notes, notes...)
 		out = append(out, c)
 	}
+	pending = nil
 	if err := writeGuide(cfg, slug, specs, agentKind, branch); err != nil {
-		return out, fmt.Errorf("workspace created, but its guide file could not be written: %w", err)
+		return out, fmt.Errorf("the workspace's guide file could not be written: %w", err)
 	}
 	// Best effort: a missing hook costs some rationale, not the workspace, and
 	// a missing skill only an idea page.
@@ -271,6 +305,33 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 	}
 	_ = journal.InstallIdeaSkill(cfg, slug)
 	return out, nil
+}
+
+// Undo takes back a workspace Create returned, for a caller whose next step
+// failed (the task could not be registered). Like Create's own cleanup, it
+// removes only what Create made.
+func Undo(cfg *config.Config, slug string, created []Created) {
+	undo(cfg, slug, created)
+}
+
+func undo(cfg *config.Config, slug string, made []Created) {
+	for i := len(made) - 1; i >= 0; i-- {
+		c := made[i]
+		repo, ok := cfg.Repo(c.Repo)
+		if !ok {
+			continue
+		}
+		_, _ = git(repo.Main, "worktree", "remove", "--force", cfg.RepoDir(slug, c.Repo))
+		_, _ = git(repo.Main, "worktree", "prune")
+		if c.NewBranch {
+			// Fresh from its base, so nothing is on it. branch -D refuses a
+			// branch that is checked out anywhere, which keeps it safe even so.
+			_, _ = git(repo.Main, "branch", "-D", c.Branch)
+		}
+	}
+	// Create made this folder with Mkdir, so everything left in it — guide,
+	// hook, copied local config — is the same call's.
+	_ = os.RemoveAll(cfg.WorkspaceDir(slug))
 }
 
 // writeGuide drops the agent's own instructions file at the workspace root,
@@ -482,17 +543,27 @@ type RemoveResult struct {
 	Detail  string
 }
 
-// Remove takes the workspace down. A repo with uncommitted work is kept and
-// reported rather than force-removed, and the task branch is deleted only where
-// it holds no unique commits.
 // Purge is Remove followed by deleting the directory outright, for when the
 // point is to get rid of the folder rather than to retire the task tidily. It
 // still goes through git first so the main repositories do not keep stale
 // worktree registrations pointing at a path that no longer exists.
+//
+// It refuses when Remove kept a repo even with force: what force cannot
+// discard (commits on a detached HEAD, a worktree git cannot read) would be
+// lost for good with the folder.
 func Purge(cfg *config.Config, slug string) ([]RemoveResult, error) {
 	res, err := Remove(cfg, slug, true)
 	if err != nil {
 		return res, err
+	}
+	var kept []string
+	for _, r := range res {
+		if !r.Removed {
+			kept = append(kept, r.Repo+" ("+r.Detail+")")
+		}
+	}
+	if len(kept) > 0 {
+		return res, fmt.Errorf("workspace kept: %s", strings.Join(kept, "; "))
 	}
 	if err := os.RemoveAll(cfg.WorkspaceDir(slug)); err != nil {
 		return res, err
@@ -504,6 +575,14 @@ func Purge(cfg *config.Config, slug string) ([]RemoveResult, error) {
 	return res, nil
 }
 
+// Remove takes the workspace down. A repo with uncommitted work is kept and
+// reported rather than force-removed, and the task branch is deleted only where
+// it holds no unique commits.
+//
+// Every decision here destroys something when it goes the wrong way, so an
+// error never counts as the harmless answer: a branch whose unpushed commits
+// cannot be counted is kept, and so is a worktree whose HEAD cannot be read.
+// force discards uncommitted work only — never commits.
 func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error) {
 	ws := cfg.WorkspaceDir(slug)
 	if _, err := os.Stat(ws); err != nil {
@@ -516,12 +595,34 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 			continue
 		}
+		keep := func(detail string) {
+			allGone = false
+			res = append(res, RemoveResult{Repo: repo.Name, Removed: false, Detail: detail})
+		}
 		// Ask the worktree what it is on. The branch is the user's choice and is
 		// recorded per repo, so deriving it from the slug would delete the wrong
-		// branch — or, more often, silently leave the right one behind.
-		branch, _ := git(dir, "rev-parse", "--abbrev-ref", "HEAD")
-		if branch == "HEAD" {
-			branch = "" // detached: nothing to clean up
+		// branch — or, more often, silently leave the right one behind. The
+		// full ref, not --abbrev-ref: a short name can also be a tag or a path.
+		head, err := git(dir, "rev-parse", "--verify", "--quiet", "HEAD")
+		if err != nil {
+			keep("kept — cannot read its HEAD (" + err.Error() + "); inspect with: git -C " + dir + " status")
+			continue
+		}
+		ref, err := git(dir, "symbolic-ref", "--quiet", "HEAD")
+		if err != nil {
+			// Detached. Commits made here are reachable from this worktree's
+			// HEAD alone, and removing the worktree drops that — and its
+			// reflog — for good.
+			n, err := countCommits(repo.Main, head, "--branches", "--remotes", "--tags")
+			switch {
+			case err != nil:
+				keep("kept — detached HEAD, and whether its commits are on a branch could not be checked (" + err.Error() + ")")
+				continue
+			case n > 0:
+				keep(fmt.Sprintf("kept — detached HEAD with %d commit(s) on no branch; keep them with: git -C %s switch -c <branch>", n, dir))
+				continue
+			}
+			ref = ""
 		}
 		// A headless `claude -p` run leaves a stale lock behind even though its
 		// pid is gone; clear it so removal is not blocked by a dead session.
@@ -531,21 +632,19 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 			args = []string{"worktree", "remove", "--force", dir}
 		}
 		if _, err := git(repo.Main, args...); err != nil {
-			allGone = false
-			res = append(res, RemoveResult{Repo: repo.Name, Removed: false,
-				Detail: "kept — uncommitted work or locked; inspect with: git -C " + dir + " status"})
+			keep("kept — uncommitted work or locked; inspect with: git -C " + dir + " status")
 			continue
 		}
 		detail := "removed"
-		if _, err := git(repo.Main, "rev-parse", "--verify", "--quiet", branch); branch != "" && err == nil {
-			n := 0
-			if s, err := git(repo.Main, "rev-list", "--count", branch, "--not", "--remotes"); err == nil {
-				n, _ = strconv.Atoi(strings.TrimSpace(s))
-			}
-			if n == 0 {
+		if branch := strings.TrimPrefix(ref, "refs/heads/"); branch != ref {
+			n, err := countCommits(repo.Main, ref, "--remotes")
+			switch {
+			case err != nil:
+				detail = fmt.Sprintf("removed — KEPT branch %s (its unpushed commits could not be counted: %v)", branch, err)
+			case n == 0:
 				_, _ = git(repo.Main, "branch", "-D", branch)
 				detail = "removed (branch had no unique commits — deleted)"
-			} else {
+			default:
 				detail = fmt.Sprintf("removed — KEPT branch %s (%d unpushed commit(s))", branch, n)
 			}
 		}
@@ -569,6 +668,19 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		_ = os.Remove(ws) // only succeeds when empty, which is what we want
 	}
 	return res, nil
+}
+
+// countCommits counts the commits reachable from rev and from none of the refs
+// the exclude options name (--remotes, --branches, …). The trailing "--" ends
+// the revisions: without it a branch named like a folder of the checkout
+// (docs, api) is an "ambiguous argument", and rev-list fails.
+func countCommits(repo, rev string, exclude ...string) (int, error) {
+	args := append([]string{"rev-list", "--count", rev, "--not"}, exclude...)
+	s, err := git(repo, append(args, "--")...)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(s))
 }
 
 // Repos lists which of the known repos actually exist in a workspace.
