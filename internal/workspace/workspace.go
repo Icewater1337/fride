@@ -736,3 +736,24 @@ func countLines(path string) int {
 	}
 	return n
 }
+
+// WriteGuide (re)writes the agent's guide file at the workspace root — for a
+// workspace that arrived from another computer, whose guide named that
+// computer's paths.
+func WriteGuide(cfg *config.Config, slug string, repos []string, agentKind, branch string) error {
+	specs := make([]RepoSpec, 0, len(repos))
+	for _, r := range repos {
+		specs = append(specs, RepoSpec{Name: r})
+	}
+	return writeGuide(cfg, slug, specs, agentKind, branch)
+}
+
+// CopyLocalConfig copies a repository's git-ignored local config from its main
+// checkout into a worktree, as a new workspace does.
+func CopyLocalConfig(cfg *config.Config, repo, dest string) (copied []string, notes []string) {
+	r, ok := cfg.Repo(repo)
+	if !ok {
+		return nil, []string{"unknown repository " + repo}
+	}
+	return copyIncludes(cfg, repo, r.Main, dest)
+}

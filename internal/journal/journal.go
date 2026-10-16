@@ -163,3 +163,7 @@ func Count(cfg *config.Config, slug string) map[Kind]int {
 	}
 	return out
 }
+
+// Dir is where a task's journal lives — outside the workspace, so it has to be
+// carried along when a task moves to another computer.
+func Dir(cfg *config.Config, slug string) string { return dir(cfg, slug) }

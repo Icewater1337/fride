@@ -48,7 +48,9 @@ A task is one unit of work. It opens a workspace — a folder holding one git
 worktree per repository — plus an agent session and a private port slot for
 the stack. How the stack runs is described in config.json (see SETUP.md).
 
-  serve [--port N]                      run the web UI (default 7777, or $FRIDE_PORT)
+  serve [--port N] [--fleet [--name N]] run the web UI (default 7777, or $FRIDE_PORT);
+                                        --fleet links it with your other computers
+  fleet                                 this computer and the others in your fleet
   doctor                                is this machine ready? (exit 1 if not)
 
   scan [folder...] [--json]             first look at repositories: build tools,
@@ -68,6 +70,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
                                         how a container-backed service is provided
   task status <task> <open|in_progress|done>
   task hide|unhide <task>               take a task off the board (nothing is deleted)
+  task move <task> <computer> [--stack] [--no-agent]
+                                        continue the task on another computer: branches,
+                                        uncommitted work, decision log and conversation
   task rm <task> [--force]              remove the workspace
 
   stack up [task] [--wait] [--timeout 10m] [--ide <svc,...>]
@@ -140,6 +145,9 @@ func main() {
 		return
 	case "orch":
 		cmdOrch(os.Args[2:])
+		return
+	case "fleet":
+		cmdFleet(os.Args[2:])
 		return
 	}
 	requireConfig(cfg, os.Args[1])
@@ -301,6 +309,9 @@ func cmdServe(cfg *config.Config, st *store.Store, args []string) {
 			filepath.Join(cfg.StateDir, "config.json"))
 	}
 	srv := server.New(cfg, st, term.NewManager(), sub, port)
+	if on, name := fleetEnabled(cfg, args); on {
+		joinFleet(cfg, srv, name)
+	}
 	check(srv.Listen(port))
 }
 
@@ -606,6 +617,9 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		fmt.Printf("  open it with:   cd %s && %s\n", cfg.WorkspaceDir(slug), agent.Bin(kind))
 		fmt.Printf("  start it with:  fride stack up %s --wait\n", slug)
 
+	case "move":
+		cmdTaskMove(cfg, st, args[1:])
+
 	case "profile":
 		if len(args) < 3 {
 			check(fmt.Errorf("usage: fride task profile <task> <profile>   (profiles: %v)", cfg.Settings.ProfileNames()))
@@ -873,6 +887,7 @@ func cmdStack(cfg *config.Config, st *store.Store, args []string) {
 	t := resolveTask(cfg, st, rest)
 	switch sub {
 	case "up":
+		fleetSlotsFromServer()
 		var viaIDE []string
 		if ideList != "" {
 			viaIDE = strings.Split(ideList, ",")

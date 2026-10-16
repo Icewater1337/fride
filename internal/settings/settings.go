@@ -50,6 +50,8 @@ type Settings struct {
 	Profiles map[string]*Profile `json:"profiles,omitempty"`
 	// Requirements are machine prerequisites, checked by `fride doctor`.
 	Requirements []Requirement `json:"requirements,omitempty"`
+	// Fleet links this computer with the user's other computers (FLEET.md).
+	Fleet *Fleet `json:"fleet,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -190,6 +192,17 @@ type IDERun struct {
 	Script string            `json:"script,omitempty"` // npm script
 	Module string            `json:"module,omitempty"` // uvicorn app, module:attr
 	Env    map[string]string `json:"env,omitempty"`
+}
+
+// Fleet configures this computer's membership in the user's fleet.
+type Fleet struct {
+	// Enabled joins the fleet whenever `fride serve` runs.
+	Enabled bool `json:"enabled"`
+	// Name is this computer's name in the fleet. Default: its hostname.
+	Name string `json:"name,omitempty"`
+	// Ephemeral removes this computer from the tailnet when it goes offline —
+	// for throwaway setups.
+	Ephemeral bool `json:"ephemeral,omitempty"`
 }
 
 // Requirement is a machine prerequisite. Exactly one of Env and Command.

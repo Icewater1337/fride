@@ -21,6 +21,7 @@ import (
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/doctor"
 	"github.com/Icewater1337/fride/internal/files"
+	"github.com/Icewater1337/fride/internal/fleet"
 	"github.com/Icewater1337/fride/internal/ide"
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/orchestrator"
@@ -43,6 +44,10 @@ type Server struct {
 	// background loop, so it exists only in the served process — the CLI talks
 	// to it over HTTP rather than starting one of its own.
 	orch *orchestrator.Orchestrator
+	// fleet is set when this computer is part of the user's fleet (fleet.go).
+	fleet *fleetState
+	// localAPI is the API alone, for requests the node proxy serves here.
+	localAPI http.Handler
 }
 
 // localHosts are the only Host/Origin hostnames this server will answer to.
@@ -98,10 +103,23 @@ func New(cfg *config.Config, st *store.Store, terms *term.Manager, web fs.FS, po
 	return s
 }
 
+// Routes is the browser-facing handler: the UI, the API, and the fleet routes.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
+	s.apiRoutes(mux)
+	mux.HandleFunc("/api/orchestrator", s.handleOrchestrator)
+	mux.HandleFunc("/api/orchestrator/", s.handleOrchestrator)
+	s.localFleetRoutes(mux)
+	api := http.NewServeMux()
+	s.apiRoutes(api)
+	s.localAPI = api
+	return mux
+}
 
+// apiRoutes is the task API, served to the browser on localhost and to the
+// user's other computers over the fleet network.
+func (s *Server) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/repos", s.handleRepos)
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/tasks", s.handleTasks) // GET list, POST create
@@ -111,10 +129,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/instances", s.handleInstances) // every slot holder
 	mux.HandleFunc("/api/suggest-branch", s.handleSuggestBranch)
 	mux.HandleFunc("/api/env", s.handleEnv)
-	mux.HandleFunc("/api/orchestrator", s.handleOrchestrator)
-	mux.HandleFunc("/api/orchestrator/", s.handleOrchestrator)
 	mux.HandleFunc("/ws/term", s.handleTermWS) // terminal stream
-	return mux
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -785,6 +800,23 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, st)
 
+	case action == "move" && r.Method == http.MethodPost:
+		var req struct {
+			To         string `json:"to"`
+			StartAgent bool   `json:"startAgent"`
+			StartStack bool   `json:"startStack"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		res, err := s.moveTask(t, req.To, req.StartAgent, req.StartStack)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, res)
+
 	case action == "stack" && r.Method == http.MethodGet:
 		writeJSON(w, 200, stack.Get(s.cfg, slug))
 
@@ -1248,6 +1280,10 @@ func (s *Server) upgrader() websocket.Upgrader {
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
 		CheckOrigin: func(r *http.Request) bool {
+			// Another node of the fleet, already identified by the network.
+			if _, ok := fleet.Caller(r); ok {
+				return true
+			}
 			o := r.Header.Get("Origin")
 			if o == "" {
 				return s.allowedHost(r.Host) // non-browser client
@@ -1265,6 +1301,10 @@ type wsIn struct {
 }
 
 func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
+	if node := r.URL.Query().Get("node"); node != "" && node != s.selfName() && s.fleet != nil {
+		s.proxyTermWS(w, r, node)
+		return
+	}
 	id := r.URL.Query().Get("id")
 	sess, ok := s.terms.Get(id)
 	if !ok {

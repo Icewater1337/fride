@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -30,10 +31,7 @@ func TestEndToEnd(t *testing.T) {
 		}
 	}
 	root := t.TempDir()
-	fride := filepath.Join(root, "fride")
-	if out, err := exec.Command("go", "build", "-o", fride, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	fride := buildFride(t)
 
 	repos := filepath.Join(root, "repos")
 	gitRepo(t, filepath.Join(repos, "api"), map[string]string{
@@ -152,6 +150,40 @@ http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 	if out := run("stack", "slots"); strings.Contains(out, "e2e") {
 		t.Errorf("slot not released:\n%s", out)
 	}
+}
+
+var (
+	buildOnce sync.Once
+	builtBin  string
+	buildErr  error
+)
+
+// buildFride builds the binary once per test run.
+func buildFride(t *testing.T) string {
+	t.Helper()
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "fride-e2e-bin-*")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		builtBin = filepath.Join(dir, "fride")
+		if out, err := exec.Command("go", "build", "-o", builtBin, ".").CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("build: %v\n%s", err, out)
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
+	}
+	return builtBin
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if builtBin != "" {
+		os.RemoveAll(filepath.Dir(builtBin))
+	}
+	os.Exit(code)
 }
 
 func gitRepo(t *testing.T, dir string, files map[string]string) {

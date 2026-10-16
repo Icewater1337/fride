@@ -326,3 +326,61 @@ func GuideFile(k Kind) string {
 // GuideFiles is every name this tool might have written, so removing a
 // workspace cleans up whichever one it created.
 func GuideFiles() []string { return []string{"CLAUDE.md", "AGENTS.md"} }
+
+// Transcript is one Claude Code transcript file and the working directory it
+// was recorded in.
+type Transcript struct {
+	Path string
+	Cwd  string
+}
+
+// ClaudeTranscripts lists the transcript files recorded in a workspace or any
+// folder inside it — what has to travel with the workspace for a conversation
+// to be resumable somewhere else.
+func ClaudeTranscripts(home, workspaceDir string) []Transcript {
+	projects := filepath.Join(home, ".claude", "projects")
+	des, err := os.ReadDir(projects)
+	if err != nil {
+		return nil
+	}
+	prefix := claudeEncode(filepath.Clean(workspaceDir))
+	var out []Transcript
+	for _, de := range des {
+		if n := de.Name(); !de.IsDir() || (n != prefix && !strings.HasPrefix(n, prefix+"-")) {
+			continue
+		}
+		files, _ := filepath.Glob(filepath.Join(projects, de.Name(), "*.jsonl"))
+		for _, f := range files {
+			if cwd := transcriptCwd(f); cwd != "" && Under(cwd, workspaceDir) {
+				out = append(out, Transcript{Path: f, Cwd: cwd})
+			}
+		}
+	}
+	return out
+}
+
+// transcriptCwd is the first working directory a transcript records.
+func transcriptCwd(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+	for sc.Scan() {
+		var e struct {
+			CWD string `json:"cwd"`
+		}
+		if json.Unmarshal(sc.Bytes(), &e) == nil && e.CWD != "" {
+			return e.CWD
+		}
+	}
+	return ""
+}
+
+// ClaudeProjectDir is where Claude Code keeps the transcripts of conversations
+// started in cwd.
+func ClaudeProjectDir(home, cwd string) string {
+	return filepath.Join(home, ".claude", "projects", claudeEncode(filepath.Clean(cwd)))
+}

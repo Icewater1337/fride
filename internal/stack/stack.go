@@ -90,6 +90,21 @@ func readPID(cfg *config.Config, slug, name string) int {
 	return pid
 }
 
+// FleetBusy, when set, reports slots held by the user's other computers. Ports
+// are base+slot on every computer, so a slot in use elsewhere is avoided here:
+// that is what lets a remote stack be opened on this computer's localhost
+// without colliding with a local one.
+var FleetBusy func(k int) bool
+
+func busyFor(cfg *config.Config, slug string) func(k int) bool {
+	return func(k int) bool {
+		if FleetBusy != nil && FleetBusy(k) {
+			return true
+		}
+		return instanceBusy(cfg, slug, k)
+	}
+}
+
 // UpOptions tunes Up.
 type UpOptions struct {
 	// ViaIDE names services handed to their JetBrains IDE instead of being
@@ -102,7 +117,7 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 	if _, err := Resolve(cfg, slug, 0); err != nil {
 		return nil, err
 	}
-	k, err := AllocK(cfg, slug, func(k int) bool { return instanceBusy(cfg, slug, k) })
+	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
 		return nil, err
 	}
@@ -628,7 +643,7 @@ func Infra(cfg *config.Config, slug string) ([]infra.Resolution, error) {
 
 // InfraUp starts the task's containers without starting the stack.
 func InfraUp(cfg *config.Config, slug string) ([]infra.Resolution, []string, error) {
-	k, err := AllocK(cfg, slug, func(k int) bool { return instanceBusy(cfg, slug, k) })
+	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -680,5 +695,5 @@ func Reserve(cfg *config.Config, slug string) (int, error) {
 	if _, err := Resolve(cfg, slug, 0); err != nil {
 		return 0, err
 	}
-	return AllocK(cfg, slug, func(k int) bool { return instanceBusy(cfg, slug, k) })
+	return AllocK(cfg, slug, busyFor(cfg, slug))
 }
