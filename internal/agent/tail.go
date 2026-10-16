@@ -1,12 +1,13 @@
 package agent
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/jsonl"
 )
 
 // Turn is one message of a live agent conversation, flattened to the little the
@@ -49,8 +50,11 @@ func Tail(k Kind, home, workspaceDir, sessionID, afterUUID string, max int) ([]T
 	if path == "" {
 		return nil, afterUUID
 	}
-	turns := readTurns(path)
-	if len(turns) == 0 {
+	turns, err := readTurns(path)
+	if err != nil || len(turns) == 0 {
+		// An unreadable transcript reads as quiet, with the cursor left where it
+		// was: reporting the part read before the failure would move the cursor
+		// to it, and the next look would replay what came after as news.
 		return nil, afterUUID
 	}
 	from := 0
@@ -82,64 +86,113 @@ func Tail(k Kind, home, workspaceDir, sessionID, afterUUID string, max int) ([]T
 // typing a sentence at it does not answer the question — it answers some
 // question, unpredictably, and says the user approved it.
 //
+// Only the latest turn can be showing a dialog, so only its calls count. A
+// call left dangling further back — the process was killed mid-tool and the
+// conversation resumed — is history, and counting it would mark the task
+// blocked for good and refuse every instruction to it. Two things end a turn:
+// a new assistant message (the API answers every call before the next one, so
+// whatever was still open was abandoned), and a prompt typed at the agent. And
+// since is when the process now running started: a call recorded before it
+// cannot be a dialog that process is showing.
+//
 // Read from the transcript rather than the screen because the screen is a
 // repainted TUI and this decision is too consequential to take from a guess.
-func Pending(k Kind, home, workspaceDir, sessionID string) string {
+// For the same reason a transcript that cannot be read is an error, not a "".
+func Pending(k Kind, home, workspaceDir, sessionID string, since time.Time) (string, error) {
 	if !Tailable(k) || sessionID == "" {
-		return ""
+		return "", nil
 	}
 	path := transcriptPath(home, workspaceDir, sessionID)
 	if path == "" {
-		return ""
+		return "", nil // nothing written yet, so nothing asked
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-
 	names := map[string]string{} // tool_use id -> tool name
 	var order []string
-	for sc.Scan() {
+	message := "" // the assistant message the open calls belong to
+	endTurn := func() { names, order = map[string]string{}, nil }
+	err = jsonl.Scan(f, func(line []byte) bool {
 		var e struct {
-			Type        string `json:"type"`
-			IsSidechain bool   `json:"isSidechain"`
+			Type        string    `json:"type"`
+			UUID        string    `json:"uuid"`
+			IsSidechain bool      `json:"isSidechain"`
+			IsMeta      bool      `json:"isMeta"`
+			Timestamp   time.Time `json:"timestamp"`
 			Message     struct {
-				Content []struct {
-					Type      string `json:"type"`
-					ID        string `json:"id"`
-					Name      string `json:"name"`
-					ToolUseID string `json:"tool_use_id"`
-				} `json:"content"`
+				ID      string          `json:"id"`
+				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(sc.Bytes(), &e) != nil || e.IsSidechain {
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain {
 			// A subagent's tool calls are answered inside its own loop and never
 			// reach a dialog, so counting them would report a block that is not
 			// there.
-			continue
+			return true
 		}
-		for _, b := range e.Message.Content {
-			switch b.Type {
-			case "tool_use":
-				if b.ID != "" {
+		var blocks []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			ToolUseID string `json:"tool_use_id"`
+		}
+		var prompt string
+		if json.Unmarshal(e.Message.Content, &prompt) != nil {
+			_ = json.Unmarshal(e.Message.Content, &blocks)
+		}
+		switch e.Type {
+		case "assistant":
+			// One message is written as one line per content block, all sharing
+			// its id; a line without one is taken as a message of its own.
+			id := e.Message.ID
+			if id == "" {
+				id = e.UUID
+			}
+			if id != message {
+				endTurn()
+				message = id
+			}
+			if !e.Timestamp.IsZero() && e.Timestamp.Before(since) {
+				return true
+			}
+			for _, b := range blocks {
+				if b.Type == "tool_use" && b.ID != "" {
 					names[b.ID] = b.Name
 					order = append(order, b.ID)
 				}
-			case "tool_result":
-				delete(names, b.ToolUseID)
+			}
+		case "user":
+			typed, results := strings.TrimSpace(prompt) != "", false
+			for _, b := range blocks {
+				switch b.Type {
+				case "tool_result":
+					delete(names, b.ToolUseID)
+					results = true
+				case "text":
+					typed = true
+				}
+			}
+			// Tool results come back as user lines too; only something said is
+			// a new turn. Meta lines are the CLI talking to itself.
+			if typed && !results && !e.IsMeta {
+				endTurn()
 			}
 		}
+		return true
+	})
+	if err != nil {
+		return "", err
 	}
 	for i := len(order) - 1; i >= 0; i-- {
 		if n, ok := names[order[i]]; ok {
-			return n
+			return n, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // transcriptPath locates the JSONL a conversation is being written to. Claude
@@ -178,20 +231,16 @@ func transcriptPath(home, workspaceDir, sessionID string) string {
 // entries, which are the CLI talking to itself; and user entries whose content
 // is a block list, which are tool results being fed back in rather than
 // anything a person said.
-func readTurns(path string) []Turn {
+func readTurns(path string) ([]Turn, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	// A single line can carry a whole tool result and dwarfs the default limit.
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-
 	var out []Turn
 	seen := map[string]bool{}
-	for sc.Scan() {
+	err = jsonl.Scan(f, func(line []byte) bool {
 		var e struct {
 			Type        string          `json:"type"`
 			UUID        string          `json:"uuid"`
@@ -200,24 +249,25 @@ func readTurns(path string) []Turn {
 			Timestamp   time.Time       `json:"timestamp"`
 			Message     json.RawMessage `json:"message"`
 		}
-		if json.Unmarshal(sc.Bytes(), &e) != nil {
-			continue
+		if json.Unmarshal(line, &e) != nil {
+			return true
 		}
 		if e.UUID == "" || e.IsSidechain || e.IsMeta || seen[e.UUID] {
-			continue // resumed and forked transcripts repeat earlier lines
+			return true // resumed and forked transcripts repeat earlier lines
 		}
 		if e.Type != "assistant" && e.Type != "user" {
-			continue
+			return true
 		}
 		t, ok := flatten(e.Type, e.Message)
 		if !ok {
-			continue
+			return true
 		}
 		seen[e.UUID] = true
 		t.UUID, t.Time = e.UUID, e.Timestamp
 		out = append(out, t)
-	}
-	return out
+		return true
+	})
+	return out, err
 }
 
 // flatten turns one message into a Turn, reporting false for the ones that

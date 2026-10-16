@@ -6,10 +6,10 @@
 // watches their agents, answers the questions they stop on, nudges the ones
 // that have stalled, and escalates to the user when it genuinely cannot decide.
 //
-// The reasoning is done by a headless Claude Code session with NO tools of its
-// own (see brain.go). Every effect it has on the machine goes through the Host
-// below, so what the orchestrator can do is a list in one file rather than
-// whatever a shell happened to allow.
+// The reasoning is done by a headless Claude Code session that can read files
+// but has no shell and cannot write (see brain.go). Every effect it has on the
+// machine goes through the Host below, so what the orchestrator can do is a
+// list in one file rather than whatever a shell happened to allow.
 package orchestrator
 
 import (

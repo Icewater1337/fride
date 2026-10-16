@@ -40,7 +40,7 @@ const (
 	brainTimeout = 4 * time.Minute
 	// brainModel is a deliberate choice rather than the user's default: this is
 	// a routing and triage job over short observations, run on a timer, and it
-	// must not quietly cost Opus money every twenty seconds.
+	// must not quietly cost Opus money on every tick that finds something.
 	brainModel = "sonnet"
 	// brainTools is the read-only set. Write, Edit and Bash are absent by
 	// omission rather than by a deny rule, so a new tool appearing in the CLI
@@ -103,8 +103,8 @@ var actionKinds = []string{
 type Reply struct {
 	// Say is what to show in the chat. It may be empty on a tick where nothing
 	// happened worth reporting — silence is the correct output for "all three
-	// agents are still working", and saying so every twenty seconds would bury
-	// the messages that matter.
+	// agents are still working", and saying so on every look would bury the
+	// messages that matter.
 	Say string `json:"say"`
 	// NeedsUser stops the monitor from acting further until the user replies.
 	// It is how "I cannot decide this one" is expressed.
@@ -233,29 +233,36 @@ Rules for what you say:
 - Keep send_to_agent text to a single, concrete instruction. It is typed into a
   terminal prompt, so it must be one line.`
 
-// brain is one long-running headless conversation. It resumes its own session
-// on every turn rather than re-sending a transcript: the CLI keeps the history,
-// and the resumed prefix is served from the prompt cache.
+// brain runs turns of one long-running headless conversation. It resumes the
+// session on every turn rather than re-sending a transcript: the CLI keeps the
+// history, and the resumed prefix is served from the prompt cache.
+//
+// Which session that is, is not kept here. The orchestrator owns it, under its
+// own lock, because a Reset can land while a turn is in flight and has to win:
+// a brain that wrote its session id back on return undid "Conversation
+// cleared" every time.
 type brain struct {
 	bin string
 	dir string
-	// session is the conversation id. Empty until the first turn returns one.
-	session string
 }
 
-// Think runs one turn and returns the parsed reply.
+// Think runs one turn of session ("" starts a new conversation) and returns the
+// parsed reply together with the session to resume next time.
+//
+// The session comes back even from a failed turn when the CLI reported one: the
+// conversation still happened, and starting afresh would silently drop
+// everything it knows.
 //
 // A turn that fails because its own conversation could not be reopened is
 // retried once from a clean one. That transcript can go — deleted, or left
 // behind by a change of working directory — and without this the orchestrator
 // would fail identically forever, holding a session id that no longer resolves.
-func (b *brain) Think(ctx context.Context, input string) (Reply, error) {
-	r, err := b.turn(ctx, input)
-	if err != nil && b.session != "" && isLostSession(err) {
-		b.session = ""
-		return b.turn(ctx, input)
+func (b *brain) Think(ctx context.Context, input, session string) (Reply, string, error) {
+	r, next, err := b.turn(ctx, input, session)
+	if err != nil && session != "" && isLostSession(err) {
+		return b.turn(ctx, input, "")
 	}
-	return r, err
+	return r, next, err
 }
 
 // isLostSession spots the CLI refusing to resume. The message is matched rather
@@ -268,27 +275,33 @@ func isLostSession(err error) bool {
 		strings.Contains(s, "session") && strings.Contains(s, "not found")
 }
 
-func (b *brain) turn(ctx context.Context, input string) (Reply, error) {
+func (b *brain) turn(ctx context.Context, input, session string) (Reply, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, brainTimeout)
 	defer cancel()
 
 	argv := []string{
-		"-p", input,
+		"-p",
 		"--output-format", "json",
 		"--json-schema", schema(),
-		// No tools, and a system prompt that REPLACES the default one. The
-		// default is written for an agent that edits files and would both cost
-		// more per turn and describe capabilities this session does not have.
+		// Read-only tools, and a system prompt that REPLACES the default one.
+		// The default is written for an agent that edits files and would both
+		// cost more per turn and describe capabilities this session does not
+		// have.
 		"--tools", brainTools,
 		"--system-prompt", systemPrompt,
 		"--model", brainModel,
 		"--permission-mode", "dontAsk",
 	}
-	if b.session != "" {
-		argv = append(argv, "--resume", b.session)
+	if session != "" {
+		argv = append(argv, "--resume", session)
 	}
 	cmd := exec.CommandContext(ctx, b.bin, argv...)
 	cmd.Dir = b.dir
+	// The prompt goes on stdin, which `-p` reads when it is given no prompt
+	// argument. As an argument it would be bounded by the OS: Linux caps a
+	// single one at 128 KiB, and the state of a handful of supervised tasks,
+	// each with its recent turns and its screen, gets there.
+	cmd.Stdin = strings.NewReader(input)
 	// A clean top-level session: the conversation has to be resumable, and a
 	// child session's transcript is never written. See agent.CleanEnv.
 	cmd.Env = agent.CleanEnv()
@@ -297,13 +310,13 @@ func (b *brain) turn(ctx context.Context, input string) (Reply, error) {
 	if err != nil {
 		var ee *exec.ExitError
 		if ok := asExit(err, &ee); ok && len(ee.Stderr) > 0 {
-			return Reply{}, fmt.Errorf("the orchestrator could not think: %s",
+			return Reply{}, session, fmt.Errorf("the orchestrator could not think: %s",
 				firstLine(string(ee.Stderr)))
 		}
 		if ctx.Err() != nil {
-			return Reply{}, fmt.Errorf("the orchestrator timed out after %s", brainTimeout)
+			return Reply{}, session, fmt.Errorf("the orchestrator timed out after %s", brainTimeout)
 		}
-		return Reply{}, fmt.Errorf("the orchestrator could not think: %w", err)
+		return Reply{}, session, fmt.Errorf("the orchestrator could not think: %w", err)
 	}
 
 	var res struct {
@@ -314,15 +327,13 @@ func (b *brain) turn(ctx context.Context, input string) (Reply, error) {
 		Structured json.RawMessage `json:"structured_output"`
 	}
 	if err := json.Unmarshal(out, &res); err != nil {
-		return Reply{}, fmt.Errorf("the orchestrator returned something unreadable: %w", err)
+		return Reply{}, session, fmt.Errorf("the orchestrator returned something unreadable: %w", err)
 	}
 	if res.SessionID != "" {
-		// Kept even on an error turn: the conversation still happened, and
-		// starting a fresh one would silently drop everything it knows.
-		b.session = res.SessionID
+		session = res.SessionID
 	}
 	if res.IsError {
-		return Reply{}, fmt.Errorf("the orchestrator failed: %s", firstLine(res.Result))
+		return Reply{}, session, fmt.Errorf("the orchestrator failed: %s", firstLine(res.Result))
 	}
 	raw := res.Structured
 	if len(raw) == 0 {
@@ -332,10 +343,10 @@ func (b *brain) turn(ctx context.Context, input string) (Reply, error) {
 	}
 	var r Reply
 	if err := json.Unmarshal(raw, &r); err != nil {
-		return Reply{}, fmt.Errorf("the orchestrator returned something unreadable: %w", err)
+		return Reply{}, session, fmt.Errorf("the orchestrator returned something unreadable: %w", err)
 	}
 	r.Say = strings.TrimSpace(r.Say)
-	return r, nil
+	return r, session, nil
 }
 
 func asExit(err error, dst **exec.ExitError) bool {

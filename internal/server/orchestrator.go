@@ -281,8 +281,15 @@ func (h orchHost) Observe(slug, cursor string) (orchestrator.Observation, error)
 				// An agent that stopped mid-tool-call is sitting on a
 				// confirmation, not at a prompt. Only checked when it has
 				// stopped: a pending call in a working agent is just a tool
-				// that has not finished yet.
-				ob.Blocked = agent.Pending(kind, h.s.cfg.Home, dir, id)
+				// that has not finished yet. Only calls made since this
+				// process started can be its dialog.
+				tool, err := agent.Pending(kind, h.s.cfg.Home, dir, id, sess.Created)
+				if err != nil {
+					// Not knowing is not the same as knowing it is clear:
+					// typing at a dialog approves whatever it is showing.
+					tool = "a tool (its transcript could not be read: " + err.Error() + ")"
+				}
+				ob.Blocked = tool
 			}
 		}
 	}

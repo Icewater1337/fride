@@ -40,6 +40,7 @@ internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide
 internal/agent           agent CLIs: flags, detection, transcripts
+internal/jsonl           reading JSONL that survives long lines and reports errors
 internal/orchestrator    the supervising agent above the task agents
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)

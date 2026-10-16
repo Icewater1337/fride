@@ -480,7 +480,7 @@ func (s *Server) startAgent(slug string, resumeID string) (*term.Session, error)
 	if err != nil {
 		return nil, err
 	}
-	sess.Dangerous = dangerous
+	sess.SetDangerous(dangerous)
 	switch {
 	case resumeID != "":
 		sess.Claim(resumeID)

@@ -9,12 +9,14 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
@@ -32,26 +34,32 @@ const (
 	KindShell = "shell"
 )
 
+// Session is one PTY and the process in it.
+//
+// ID, Task, Kind, Dir and Created are fixed when it is made and may be read
+// freely. Every other field changes while the session runs — from the PTY
+// reader, the idle watcher and HTTP handlers at once — and is only touched
+// under mu. That includes encoding it: see MarshalJSON.
 type Session struct {
-	ID      string    `json:"id"`
-	Task    string    `json:"task"`
-	Title   string    `json:"title"`
-	Kind    string    `json:"kind"` // KindAgent | KindShell
-	Dir     string    `json:"dir"`
-	Created time.Time `json:"created"`
+	ID      string
+	Task    string
+	Title   string
+	Kind    string // KindAgent | KindShell
+	Dir     string
+	Created time.Time
 	// Dangerous records that this agent was launched with permission checks
 	// bypassed, so the UI can keep flagging it even after the task's setting
 	// changes — the flag is fixed at exec time.
-	Dangerous bool `json:"dangerous,omitempty"`
+	Dangerous bool
 	// ResumedFrom is the Claude transcript id this session owns — either the one
 	// it was resumed from, or the one it created. It is what makes a resume
 	// button disappear once its conversation is live again.
-	ResumedFrom string `json:"resumedFrom,omitempty"`
+	ResumedFrom string
 
 	// Busy is true while the process is actively producing output; Attention is
 	// set when it stops, i.e. the agent finished its turn and is waiting on you.
-	Busy      bool `json:"busy"`
-	Attention bool `json:"attention"`
+	Busy      bool
+	Attention bool
 
 	mu         sync.Mutex
 	claims     []string
@@ -63,6 +71,42 @@ type Session struct {
 	exitMsg    string
 	lastOutput time.Time
 	rows, cols uint16
+}
+
+// sessionJSON is what the UI is sent for a session.
+type sessionJSON struct {
+	ID          string    `json:"id"`
+	Task        string    `json:"task"`
+	Title       string    `json:"title"`
+	Kind        string    `json:"kind"`
+	Dir         string    `json:"dir"`
+	Created     time.Time `json:"created"`
+	Dangerous   bool      `json:"dangerous,omitempty"`
+	ResumedFrom string    `json:"resumedFrom,omitempty"`
+	Busy        bool      `json:"busy"`
+	Attention   bool      `json:"attention"`
+}
+
+// MarshalJSON encodes a copy taken under the lock. Encoding the struct itself
+// read Busy, Attention and Title while the PTY reader and the idle watcher
+// were writing them.
+func (s *Session) MarshalJSON() ([]byte, error) {
+	s.mu.Lock()
+	v := sessionJSON{
+		ID: s.ID, Task: s.Task, Title: s.Title, Kind: s.Kind, Dir: s.Dir,
+		Created: s.Created, Dangerous: s.Dangerous, ResumedFrom: s.ResumedFrom,
+		Busy: s.Busy, Attention: s.Attention,
+	}
+	s.mu.Unlock()
+	return json.Marshal(v)
+}
+
+// SetDangerous records that the process was started with permission checks
+// bypassed.
+func (s *Session) SetDangerous(on bool) {
+	s.mu.Lock()
+	s.Dangerous = on
+	s.mu.Unlock()
 }
 
 // idleAfter is how long output must stop before a session counts as waiting.
@@ -101,17 +145,20 @@ func (s *Session) Resize(rows, cols uint16) error {
 		// would tell the TUI it has no room and make it reflow to a single line.
 		return nil
 	}
+	// Set under the lock, so that it and Redraw's restore cannot land in the
+	// opposite order to the sizes they recorded.
 	s.mu.Lock()
-	f, closed := s.ptmx, s.closed
-	if !closed {
-		s.rows, s.cols = rows, cols
-	}
-	s.mu.Unlock()
-	if closed || f == nil {
+	defer s.mu.Unlock()
+	if s.closed || s.ptmx == nil {
 		return nil
 	}
-	return pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols})
+	s.rows, s.cols = rows, cols
+	return pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 }
+
+// redrawPause is how long Redraw holds the nudged size. A variable so that a
+// test can widen the window a resize has to land in.
+var redrawPause = 60 * time.Millisecond
 
 // Redraw makes a fullscreen TUI repaint itself from scratch.
 //
@@ -126,34 +173,49 @@ func (s *Session) Resize(rows, cols uint16) error {
 // is nudged by one row and put straight back. The pause between the two is what
 // makes it work: without it the second Setsize can land before the process has
 // handled the first SIGWINCH, and both collapse into no change at all.
+//
+// "Back" is the size as it is when the pause ends, not as it was when it began.
+// Every browser that attaches triggers this, and it sends its own size at the
+// same moment; restoring the size read beforehand would quietly undo that
+// resize and leave the TUI drawn for a pane it is no longer in.
 func (s *Session) Redraw() {
 	s.mu.Lock()
-	f, closed, rows, cols := s.ptmx, s.closed, s.rows, s.cols
-	s.mu.Unlock()
-	if closed || f == nil || rows < 2 || cols == 0 {
+	if s.closed || s.ptmx == nil || s.rows < 2 || s.cols == 0 {
+		s.mu.Unlock()
 		return
 	}
-	_ = pty.Setsize(f, &pty.Winsize{Rows: rows - 1, Cols: cols})
-	time.Sleep(60 * time.Millisecond)
-	_ = pty.Setsize(f, &pty.Winsize{Rows: rows, Cols: cols})
+	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: s.rows - 1, Cols: s.cols})
+	s.mu.Unlock()
+
+	time.Sleep(redrawPause)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.ptmx == nil {
+		return
+	}
+	_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: s.rows, Cols: s.cols})
 }
 
 // Subscribe replays the scrollback and then streams live output. The returned
 // cancel func must be called by the caller when the websocket goes away.
+//
+// The scrollback is queued before the lock is let go. publish needs the same
+// lock to deliver, so nothing live can overtake the history — otherwise a
+// chunk could arrive first and the history be painted over it. The send does
+// not block: the channel is new and has room.
 func (s *Session) Subscribe() (<-chan []byte, func()) {
 	ch := make(chan []byte, 64)
 	s.mu.Lock()
-	history := make([]byte, len(s.buf))
-	copy(history, s.buf)
+	if len(s.buf) > 0 {
+		ch <- append([]byte(nil), s.buf...)
+	}
 	if s.subs == nil {
 		s.subs = map[chan []byte]struct{}{}
 	}
 	s.subs[ch] = struct{}{}
 	s.mu.Unlock()
 
-	if len(history) > 0 {
-		ch <- history
-	}
 	return ch, func() {
 		s.mu.Lock()
 		if _, ok := s.subs[ch]; ok {
@@ -225,13 +287,24 @@ func (s *Session) SetTitle(t string) {
 	s.mu.Unlock()
 }
 
-// Kill terminates the session's process group.
+// Kill ends the session: SIGKILL to its process group, then the PTY closed.
+//
+// The group, not just the process: an agent's tool calls and a shell's
+// commands run as its children, and one that ignores the hangup from the PTY
+// closing would outlive the tab that started it, still holding its port or its
+// files. The PTY start makes the child a session leader, so its group id is its
+// pid. A child that moves itself into a group of its own — a shell's
+// background job — is not reached by this, only by that hangup.
 func (s *Session) Kill() {
 	s.mu.Lock()
-	cmd := s.cmd
+	cmd, exited := s.cmd, s.closed
 	s.mu.Unlock()
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+	// Only while it has not been reaped. Before that the pid cannot have been
+	// given to anything else, so the group it names is certainly this one.
+	if cmd != nil && cmd.Process != nil && !exited {
+		if syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) != nil {
+			_ = cmd.Process.Kill()
+		}
 	}
 	s.close("killed")
 }

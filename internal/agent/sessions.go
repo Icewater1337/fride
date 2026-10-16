@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/jsonl"
 )
 
 // Recorded is one past conversation that can be reopened.
@@ -100,11 +101,8 @@ func claudeAccumulate(path, workspaceDir string, byID map[string]*Recorded, seen
 		return
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	// Transcript lines carry whole tool results and dwarf the default limit.
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 
-	confirmed := false
+	confirmed, foreign := false, false
 	// The transcript's own start, taken from any line: the first entries of a
 	// conversation begun by /clear are the command and its echo, not an
 	// assistant turn, and those are exactly the ones being dated here.
@@ -119,7 +117,9 @@ func claudeAccumulate(path, workspaceDir string, byID map[string]*Recorded, seen
 	// Taken from the LAST ai-title entry: the title is rewritten as the
 	// conversation develops, and the newest one describes it best.
 	var title string
-	for sc.Scan() {
+	// A read error leaves the conversation counted as far as it could be read,
+	// which only understates its size; the list is for choosing what to reopen.
+	_ = jsonl.Scan(f, func(line []byte) bool {
 		var e struct {
 			Type      string    `json:"type"`
 			UUID      string    `json:"uuid"`
@@ -134,8 +134,8 @@ func claudeAccumulate(path, workspaceDir string, byID map[string]*Recorded, seen
 				} `json:"usage"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(sc.Bytes(), &e) != nil {
-			continue
+		if json.Unmarshal(line, &e) != nil {
+			return true
 		}
 		// Title entries carry no cwd, so they are read before the confirmation
 		// below would skip them — and only kept once the file has been
@@ -145,10 +145,11 @@ func claudeAccumulate(path, workspaceDir string, byID map[string]*Recorded, seen
 		}
 		if !confirmed {
 			if e.CWD == "" {
-				continue
+				return true
 			}
 			if !Under(e.CWD, workspaceDir) {
-				return // encoded-name collision: a different workspace
+				foreign = true // encoded-name collision: a different workspace
+				return false
 			}
 			confirmed = true
 		}
@@ -157,10 +158,10 @@ func claudeAccumulate(path, workspaceDir string, byID map[string]*Recorded, seen
 		}
 		// Resumed and forked transcripts repeat earlier lines.
 		if e.Type != "assistant" || e.UUID == "" || seen[e.UUID] {
-			continue
+			return true
 		}
 		if e.Message.Usage.InputTokens == 0 && e.Message.Usage.OutputTokens == 0 {
-			continue
+			return true
 		}
 		seen[e.UUID] = true
 		id := e.SessionID
@@ -182,9 +183,10 @@ func claudeAccumulate(path, workspaceDir string, byID map[string]*Recorded, seen
 		if title != "" {
 			r.Title = title
 		}
-	}
+		return true
+	})
 	// A title written after the last assistant turn still belongs to it.
-	if title != "" {
+	if title != "" && !foreign {
 		if id := sessionIDFor(byID, path); id != "" {
 			byID[id].Title = title
 		}
@@ -205,8 +207,8 @@ func sessionIDFor(byID map[string]*Recorded, path string) string {
 // --- codex ---------------------------------------------------------------------
 
 // Codex writes ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl, whose
-// first line carries the session id and the cwd. Only that line is read: the
-// rest of the file can be large and nothing here needs it.
+// first line carries the session id and the cwd. Only that line is parsed; the
+// rest is counted, as a rough size, and never decoded.
 func codexSessions(home, workspaceDir string) []Recorded {
 	root := filepath.Join(home, ".codex", "sessions")
 	var out []Recorded
@@ -219,11 +221,6 @@ func codexSessions(home, workspaceDir string) []Recorded {
 			return nil
 		}
 		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 256*1024), 4*1024*1024)
-		if !sc.Scan() {
-			return nil
-		}
 		var head struct {
 			Payload struct {
 				ID        string    `json:"id"`
@@ -231,10 +228,18 @@ func codexSessions(home, workspaceDir string) []Recorded {
 				Timestamp time.Time `json:"timestamp"`
 			} `json:"payload"`
 		}
-		if json.Unmarshal(sc.Bytes(), &head) != nil || head.Payload.ID == "" {
-			return nil
-		}
-		if !Under(head.Payload.CWD, workspaceDir) {
+		lines, ours := 0, false
+		// A read error keeps the count so far: it is a size for a label.
+		_ = jsonl.Scan(f, func(line []byte) bool {
+			lines++
+			if lines > 1 {
+				return true
+			}
+			ours = json.Unmarshal(line, &head) == nil && head.Payload.ID != "" &&
+				Under(head.Payload.CWD, workspaceDir)
+			return ours
+		})
+		if !ours {
 			return nil
 		}
 		last := head.Payload.Timestamp
@@ -243,11 +248,7 @@ func codexSessions(home, workspaceDir string) []Recorded {
 			// is when it was last written, which is what "most recent" should mean.
 			last = fi.ModTime()
 		}
-		n := 0
-		for sc.Scan() {
-			n++
-		}
-		out = append(out, Recorded{ID: head.Payload.ID, Messages: n, LastActivity: last, Dir: head.Payload.CWD})
+		out = append(out, Recorded{ID: head.Payload.ID, Messages: lines - 1, LastActivity: last, Dir: head.Payload.CWD})
 		return nil
 	})
 	return out
@@ -366,17 +367,19 @@ func transcriptCwd(path string) string {
 		return ""
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-	for sc.Scan() {
+	// A transcript unreadable before its first cwd is left out, which leaves
+	// it where it is rather than taking it anywhere.
+	cwd := ""
+	_ = jsonl.Scan(f, func(line []byte) bool {
 		var e struct {
 			CWD string `json:"cwd"`
 		}
-		if json.Unmarshal(sc.Bytes(), &e) == nil && e.CWD != "" {
-			return e.CWD
+		if json.Unmarshal(line, &e) == nil && e.CWD != "" {
+			cwd = e.CWD
 		}
-	}
-	return ""
+		return cwd == ""
+	})
+	return cwd
 }
 
 // ClaudeProjectDir is where Claude Code keeps the transcripts of conversations
