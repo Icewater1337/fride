@@ -1,0 +1,6 @@
+# built binary
+/fride
+
+# go
+*.test
+*.out

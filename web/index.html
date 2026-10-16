@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FrIDE</title>
+<script>try{var t=localStorage.getItem('fride-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div class="brand">Fr<span>IDE</span><small id="stack-name"></small></div>
+  <nav>
+    <button id="nav-board" class="navbtn active">Board</button>
+    <button id="nav-orch" class="navbtn">Orchestrator</button>
+    <button id="nav-instances" class="navbtn">Slots</button>
+    <button id="nav-settings" class="navbtn">Settings</button>
+  </nav>
+  <div id="switcher" class="switcher"></div>
+  <div class="spacer"></div>
+  <button id="theme-toggle" class="iconbtn" title="Switch between light and dark" aria-label="Switch theme"></button>
+  <button id="btn-new" class="primary">New task</button>
+</header>
+
+<main>
+  <!-- ---------------------------------------------------------- setup -->
+  <section id="setup" class="view">
+    <div class="setup-card">
+      <h2>Welcome to FrIDE</h2>
+      <p>FrIDE has no configuration yet, so it does not know where your repositories are or how
+        your app starts. A coding agent sets that up with you: it asks which folders to scan and
+        which repositories are the core of your app, then works out how to install and run each
+        one and keeps trying until the stack starts.</p>
+      <ol>
+        <li>Open a terminal in the FrIDE repository (where you built <code>fride</code>).</li>
+        <li>Start your coding agent there — <code>claude</code>, <code>codex</code> or another.</li>
+        <li>Ask it: <em>&ldquo;Set up FrIDE for me.&rdquo;</em> It follows <code>SETUP.md</code>.</li>
+      </ol>
+      <p class="hint">Prefer to write it yourself? The file is <code id="setup-path"></code>;
+        <code>docs/CONFIG.md</code> describes every field.</p>
+      <div id="setup-problems"></div>
+      <div class="setup-actions">
+        <button id="setup-reload" class="primary">I&rsquo;m done — reload</button>
+      </div>
+      <div id="setup-env"></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- board -->
+  <section id="board" class="view active">
+    <div id="envbar" class="envbar hidden"></div>
+    <div class="columns">
+      <div class="column" data-status="open">
+        <h2>Open <span class="count" id="count-open">0</span></h2>
+        <div class="cards" id="col-open"></div>
+      </div>
+      <div class="column" data-status="in_progress">
+        <h2>In Progress <span class="count" id="count-in_progress">0</span></h2>
+        <div class="cards" id="col-in_progress"></div>
+      </div>
+      <div class="column" data-status="done">
+        <h2>Done <span class="count" id="count-done">0</span></h2>
+        <div class="cards" id="col-done"></div>
+      </div>
+    </div>
+    <div class="boardfoot">
+      <button id="toggle-hidden" class="ghost">Show hidden</button>
+      <span id="hidden-count" class="hint"></span>
+    </div>
+    <p class="hint">Drag a card between columns, or open a task and use the status buttons.
+      Moving a task to <strong>Done</strong> stops its stack. Hiding one only takes it off the
+      board — its worktrees, branches and any running stack stay exactly as they are.</p>
+  </section>
+
+  <!-- ---------------------------------------------------------- orchestrator -->
+  <section id="orch" class="view">
+    <div class="task-body">
+      <aside class="sidebar">
+        <div class="panel">
+          <h3>Mode</h3>
+          <div id="orch-mode" class="agent-picker"></div>
+        </div>
+        <div class="panel grow">
+          <h3>Workspaces it orchestrates</h3>
+          <div id="orch-tasks" class="orch-tasks"></div>
+          <p class="hint">Read from each agent's own transcript, so what it
+            reacts to is what the agent actually said.</p>
+        </div>
+        <div class="panel">
+          <h3>When it wants to act</h3>
+          <div id="orch-autonomy" class="agent-picker"></div>
+        </div>
+        <div class="orchbtns">
+          <button id="orch-apply" class="primary">Apply</button>
+          <button id="orch-reset" class="ghost"
+                  title="Forget the conversation and start a new one. What it is supervising stays.">Clear</button>
+        </div>
+        <div id="orch-error" class="error"></div>
+      </aside>
+
+      <div class="workarea">
+        <div id="orch-status" class="orch-status"></div>
+        <div id="orch-log" class="orch-log"></div>
+        <div class="orch-compose">
+          <textarea id="orch-input" rows="3" spellcheck="false"
+            placeholder="Start a task with backend and frontend from main on feat/PROJ-42-search"></textarea>
+          <button id="orch-send" class="primary">Send</button>
+        </div>
+        <p class="hint">Enter sends, Shift+Enter makes a new line.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- instances -->
+  <section id="instances" class="view">
+    <h2>Port slots</h2>
+    <p class="hint">Each running task holds a slot <em>k</em>, and every per-task port is the
+      service&rsquo;s base port + <em>k</em> — so tasks never collide with each other, and slot 0
+      (the base ports themselves) is left to your main checkouts.</p>
+    <table id="instances-table"><thead>
+      <tr><th>slot</th><th>task</th><th>ports</th><th>listening</th></tr>
+    </thead><tbody></tbody></table>
+  </section>
+
+  <!-- ---------------------------------------------------------- project settings -->
+  <section id="settings" class="view">
+    <h2>Settings</h2>
+    <p class="hint">Stored in <code id="cfg-path"></code>. Base folders are scanned for git
+      repositories; each repository can carry local, git-ignored config into its worktree in a new
+      workspace. Profiles — how the stack boots — are edited in the file itself (usually by your
+      agent); <button id="cfg-reload" class="mini">reload config.json</button> after a change.</p>
+
+    <h3 class="sh">Profiles</h3>
+    <div id="profile-list" class="profiles"></div>
+    <div id="cfg-problems"></div>
+
+    <h3 class="sh">Base folders</h3>
+    <div id="base-list" class="baselist"></div>
+    <div class="baseadd">
+      <input id="base-input" type="text" placeholder="/Users/you/work/another-folder" autocomplete="off">
+      <button id="base-add" class="ghost">Add folder</button>
+    </div>
+
+    <h3 class="sh">Repositories</h3>
+    <table id="proj-table"><thead>
+      <tr><th>Repository</th><th>Core</th><th>Copies into new worktrees</th><th>IDE</th></tr>
+    </thead><tbody></tbody></table>
+  </section>
+
+  <!-- ---------------------------------------------------------- task detail -->
+  <section id="task" class="view">
+    <div class="task-head">
+      <button id="back" class="ghost">&larr; Board</button>
+      <h2 id="task-title"></h2>
+      <span id="task-status-badge" class="badge"></span>
+      <span id="task-perm-badge" class="badge perm hidden"></span>
+      <button id="task-mode-badge" class="badge mode" title="The profile this task boots with — click to switch"></button>
+      <div class="spacer"></div>
+      <div class="statusbtns">
+        <button data-set-status="open" class="ghost">Open</button>
+        <button data-set-status="in_progress" class="ghost">In Progress</button>
+        <button data-set-status="done" class="ghost">Done</button>
+      </div>
+      <button id="btn-delete" class="danger">Delete</button>
+    </div>
+
+    <div class="task-body">
+      <aside class="sidebar">
+        <div class="panel">
+          <h3>Stack</h3>
+          <div class="stackbtns">
+            <button id="btn-up" class="primary">Start</button>
+            <button id="btn-down" class="ghost">Stop</button>
+          </div>
+          <div id="ide-choices"></div>
+          <div id="stack-entry"></div>
+          <table id="stack-table"><tbody></tbody></table>
+          <div id="stack-db" class="db"></div>
+          <div id="stack-log" class="stacklog hidden"><div class="stacklog-head"><span id="stack-log-name"></span><button id="stack-log-close" class="mini">close</button></div><pre id="stack-log-body"></pre></div>
+          <div id="install-state" class="hidden"></div>
+          <div id="stack-warnings"></div>
+        </div>
+        <div class="panel grow">
+          <h3>Files
+            <button id="files-up" class="mini" title="Up one level">..</button>
+            <button id="files-reveal" class="mini" title="Open this folder in the desktop file manager">open folder</button>
+          </h3>
+          <div id="files-path" class="path"></div>
+          <div id="files-list" class="files"></div>
+        </div>
+        <div class="panel">
+          <h3>Rationale <button id="jr-refresh" class="mini" title="Reload">&#8635;</button></h3>
+          <button id="jr-open" class="jrlink">Open the document &rarr;</button>
+          <select id="jr-filter"></select>
+          <div id="jr-list" class="jrlist"></div>
+        </div>
+        <div class="panel">
+          <h3>Repos</h3>
+          <div id="repo-list"></div>
+        </div>
+        <div class="panel">
+          <h3>Uncommitted <button id="git-refresh" class="mini" title="Refresh">↻</button></h3>
+          <div id="git-body" class="git">—</div>
+        </div>
+        <div class="panel">
+          <h3>Tokens <button id="usage-refresh" class="mini" title="Refresh">↻</button></h3>
+          <div id="usage-body" class="usage">—</div>
+        </div>
+      </aside>
+
+      <div class="workarea">
+        <div class="tabs" id="term-tabs">
+          <button id="btn-newagent" class="mini" title="New agent session in the workspace">+ claude</button>
+          <span id="resume-list" class="resume-list"></span>
+          <button id="btn-newterm" class="mini" title="New shell tab">+ shell</button>
+        </div>
+        <div id="term-host" class="term-host"></div>
+        <div id="file-view" class="file-view hidden">
+          <div class="file-view-head">
+            <span id="file-view-name"></span>
+            <button id="file-close" class="mini">close</button>
+          </div>
+          <pre id="file-view-body"></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ---------------------------------------------------------- modals -->
+<div id="jrpop" class="modal hidden">
+  <div class="modal-card">
+    <div id="jrpop-head" class="jrpop-head"></div>
+    <div id="jrpop-text" class="jrpop-text"></div>
+    <div id="jrpop-why"></div>
+    <div class="modal-actions"><button id="jrpop-close" class="ghost">Close</button></div>
+  </div>
+</div>
+
+<div id="docpop" class="modal hidden">
+  <div class="modal-card wide">
+    <h2>Design rationale</h2>
+    <div id="docpop-path" class="hint"></div>
+    <pre id="docpop-body" class="docbody"></pre>
+    <div class="modal-actions">
+      <label class="jrnar"><input id="docpop-narrate" type="checkbox"> with narrative</label>
+      <div class="spacer"></div>
+      <button id="docpop-write" class="ghost">Write to the repo</button>
+      <button id="docpop-close" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <h2>New task</h2>
+    <label>Name
+      <input id="new-name" type="text" placeholder="PROJ-42 search filters" autocomplete="off">
+    </label>
+    <div class="slug-preview">workspace: <code id="slug-preview">—</code></div>
+    <label>Branch
+      <input id="new-branch" type="text" placeholder="feat/PROJ-42-search-filters"
+             autocomplete="off" spellcheck="false">
+    </label>
+    <div class="hint" id="branch-hint">Created in every selected repository, and what your
+      commits get pushed to. Suggested from the name — edit it and the suggestion stops.</div>
+    <p class="hint">The workspace is the folder this task opens; each repository below gets
+      its own git worktree inside it.</p>
+    <h3>Repositories &amp; base branch</h3>
+    <div id="repo-picker" class="repo-picker"></div>
+    <h3>How the stack boots</h3>
+    <div id="mode-picker" class="agent-picker"></div>
+    <div class="hint" id="mode-hint"></div>
+
+    <h3>Agent</h3>
+    <div id="agent-picker" class="agent-picker"></div>
+    <label class="checkline">
+      <input id="new-start" type="checkbox" checked>
+      <span id="new-start-label">Start an agent session in the workspace</span>
+    </label>
+    <label class="checkline">
+      <input id="new-dangerous" type="checkbox"> Skip all permission checks
+      (<code id="new-danger-flag">--dangerously-skip-permissions</code>)
+    </label>
+    <div class="hint" id="perm-hint">Default is <code>--permission-mode auto</code>.
+      Skipping lets the agent run anything in this workspace without asking.</div>
+    <div id="modal-error" class="error"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="ghost">Cancel</button>
+      <button id="modal-create" class="primary">Create</button>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
