@@ -37,7 +37,7 @@ they actually use, where secrets come from, what needs a login.
 
 ## 1. Build FrIDE
 
-FrIDE is one Go binary (Go 1.25 or newer):
+FrIDE is one Go binary (Go 1.27 or newer; an older `go` downloads the right toolchain by itself):
 
 ```bash
 go build -o fride .

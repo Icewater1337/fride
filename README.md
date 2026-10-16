@@ -41,7 +41,7 @@ writes `~/.fride/config.json` and proves that it works. When it is done:
 ./fride serve            # http://127.0.0.1:7777
 ```
 
-Requirements: Go 1.25+, git, lsof (macOS and Linux), and at least one agent
+Requirements: Go 1.27+, git, lsof (macOS and Linux), and at least one agent
 CLI. Docker only if your stack uses containers.
 
 ## Concepts
