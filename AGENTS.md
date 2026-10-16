@@ -28,11 +28,13 @@ Layout:
 
 ```
 main.go                  CLI; every UI action is also a subcommand
-orch_cli.go              `fride orch …`, a client for the running server
+orch_cli.go, fleet_cli.go `fride orch …` / `fride fleet`, clients of the running server
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
 internal/infra           docker compose: shared and per-task containers
+internal/fleet           fleet mode: tailnet (tsnet) / loopback network, identity, tunnels
+internal/move            continue a task on another computer: snapshot, bundles, restore
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide
@@ -44,6 +46,7 @@ internal/journal         decision log and rationale document
 internal/server          HTTP + WebSocket
 web/                     the UI, no build step (xterm.js vendored)
 docs/CONFIG.md           config.json reference
+docs/FLEET.md            fleet mode
 ```
 
 Conventions:

@@ -123,6 +123,7 @@ backend's compose file.
 | `defaultProfile` | The profile a new task boots with. |
 | `profiles` | The ways the stack can boot. |
 | `requirements` | Things the machine must have, checked by `fride doctor`. |
+| `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 
 ## repos.&lt;name&gt;
 

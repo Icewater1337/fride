@@ -67,6 +67,22 @@ checkout. That is how ten tasks can run the same app at once.
 written during setup and readable by a person. Reference:
 [docs/CONFIG.md](docs/CONFIG.md). `fride config check` validates it.
 
+## Your computers, as one (fleet mode)
+
+`fride serve --fleet` links the computers you work on, over your own Tailscale
+tailnet, signed in with your Google (or other) account. Only your own devices
+are answered. Then:
+
+- the board shows every computer's tasks, and their terminals and files work
+  from any of them;
+- a new task can run on any of your computers;
+- **Continue on…** moves a task to another computer: branches, *uncommitted
+  work*, decision log and the agent's conversation, which resumes there;
+- **Open here** serves a stack running on another computer on this one's
+  `localhost`, port for port, so the same URL and its login just work.
+
+See [docs/FLEET.md](docs/FLEET.md).
+
 ## CLI
 
 Everything the UI does is a subcommand, so the agent inside a workspace can
@@ -95,6 +111,9 @@ fride infra down --shared                # stop the containers all tasks share
 
 fride note decision "..." --why "..."     # the decision log the rationale document is built from
 fride rationale [task] [--narrate]
+
+fride fleet                               # this computer and your others (fleet mode)
+fride task move <task> <computer>         # continue a task on another computer
 
 fride orch say "start a task with backend and frontend from main on feat/PROJ-42"
 fride orch watch <task>... [--ask]

@@ -78,6 +78,15 @@ func (s *Server) StartFleet(n fleet.Network, name string) error {
 	return nil
 }
 
+// StopFleet leaves the fleet: mirrors close and the node leaves the network.
+func (s *Server) StopFleet() {
+	if s.fleet == nil {
+		return
+	}
+	s.fleet.mirrors.Close("", "")
+	_ = s.fleet.net.Close()
+}
+
 // fleetRoutes is what other computers of the fleet may call: the API (so the
 // UI on any computer can work with this one's tasks) and the fleet's own
 // endpoints. No static UI and no orchestrator: those stay local.

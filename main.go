@@ -15,10 +15,12 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -311,6 +313,15 @@ func cmdServe(cfg *config.Config, st *store.Store, args []string) {
 	srv := server.New(cfg, st, term.NewManager(), sub, port)
 	if on, name := fleetEnabled(cfg, args); on {
 		joinFleet(cfg, srv, name)
+		// Leave the fleet properly on Ctrl-C or a stop signal: an ephemeral
+		// node logs out, so it disappears from the tailnet at once.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sig
+			srv.StopFleet()
+			os.Exit(0)
+		}()
 	}
 	check(srv.Listen(port))
 }

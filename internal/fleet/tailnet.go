@@ -18,7 +18,8 @@ import (
 // Tailnet is a node joined to the user's tailnet through tsnet: a device of
 // its own named fride-<name>, with its state (keys) under dir.
 type Tailnet struct {
-	srv *tsnet.Server
+	srv       *tsnet.Server
+	ephemeral bool
 
 	mu    sync.Mutex
 	state State
@@ -33,7 +34,7 @@ func JoinTailnet(dir, name string, ephemeral bool) (*Tailnet, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	t := &Tailnet{state: State{Phase: "starting", Kind: "tailnet"}}
+	t := &Tailnet{state: State{Phase: "starting", Kind: "tailnet"}, ephemeral: ephemeral}
 	t.srv = &tsnet.Server{
 		Dir:       dir,
 		Hostname:  Prefix + CleanName(name),
@@ -184,9 +185,16 @@ func (t *Tailnet) Peers(ctx context.Context) ([]Peer, error) {
 	return out, nil
 }
 
+// Close leaves the tailnet. An ephemeral node also logs out, which removes the
+// device from the tailnet at once rather than some time after it went quiet.
 func (t *Tailnet) Close() error {
 	t.mu.Lock()
 	t.state.Phase = "stopped"
 	t.mu.Unlock()
+	if t.ephemeral && t.lc != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = t.lc.Logout(ctx)
+		cancel()
+	}
 	return t.srv.Close()
 }

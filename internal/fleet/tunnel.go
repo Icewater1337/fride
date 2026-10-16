@@ -225,13 +225,14 @@ func (ms *Mirrors) count(m *Mirror, d int) {
 	ms.mu.Unlock()
 }
 
-// Close stops mirroring a task's ports (all of a node's when task is "").
+// Close stops mirroring a task's ports (all of a node's when task is "", all
+// of them when node is "" too).
 func (ms *Mirrors) Close(node, task string) int {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	n := 0
 	for p, m := range ms.m {
-		if m.Node == node && (task == "" || m.Task == task) {
+		if (node == "" || m.Node == node) && (task == "" || m.Task == task) {
 			m.ln.Close()
 			delete(ms.m, p)
 			n++
