@@ -379,18 +379,30 @@ func Down(p Plan) error {
 	return nil
 }
 
-// DownShared stops the shared project. Nothing calls this automatically — it
-// is the explicit `fride infra down --shared`, because pulling these out from
-// under a running task breaks it.
-func DownShared(files []string) error {
-	if len(files) == 0 {
-		return fmt.Errorf("no compose files")
+// DownShared stops the shared project and reports how many containers it had.
+// Nothing calls this automatically — it is the explicit `fride infra down
+// --shared`, because pulling these out from under a running task breaks it.
+//
+// It needs no compose file: compose finds a project's containers by label. That
+// matters because the shared set belongs to no single task — a task whose
+// profile has no containers, or one whose worktree is gone, must still be able
+// to stop it. It runs from a neutral directory so that a compose file in the
+// caller's working directory is not picked up instead.
+func DownShared() (int, error) {
+	out, err := exec.Command("docker", "ps", "-aq", "--filter", "label=com.docker.compose.project="+SharedProject).Output()
+	if err != nil {
+		return 0, fmt.Errorf("asking docker for the shared containers: %w", err)
 	}
-	cmd := composeCmd(SharedProject, filepath.Dir(files[0]), files, "down", "--remove-orphans")
+	n := len(strings.Fields(string(out)))
+	if n == 0 {
+		return 0, nil
+	}
+	cmd := exec.Command("docker", "compose", "-p", SharedProject, "down", "--remove-orphans")
+	cmd.Dir = os.TempDir()
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("stopping the shared containers: %s", trim(out))
+		return n, fmt.Errorf("stopping the shared containers: %s", trim(out))
 	}
-	return nil
+	return n, nil
 }
 
 // Status reports what a plan uses and whether it is up, without starting or

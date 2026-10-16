@@ -83,7 +83,8 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
 
   infra [status] [task]                 the containers behind a task
   infra up [task]                       start them without starting the stack
-  infra down [task] [--shared]          stop the task's own containers, or the shared set
+  infra down [task]                     stop the task's own containers
+  infra down --shared                   stop the containers all tasks share
 
   usage [task]                          token consumption of the task workspace
   note <kind> "<text>" [--why "..."]    record plan|decision|assumption|issue|note
@@ -1013,6 +1014,17 @@ func cmdInfra(cfg *config.Config, st *store.Store, args []string) {
 		}
 	}
 	shared, args := flagBool(args, "--shared")
+	if sub == "down" && shared {
+		// The shared set belongs to no task, so none is needed to stop it.
+		n, err := stack.InfraDownShared()
+		check(err)
+		if n == 0 {
+			fmt.Println("no shared containers were running")
+		} else {
+			fmt.Printf("stopped %d shared container(s)\n", n)
+		}
+		return
+	}
 	t := resolveTask(cfg, st, args)
 	switch sub {
 	case "status":
@@ -1046,12 +1058,8 @@ func cmdInfra(cfg *config.Config, st *store.Store, args []string) {
 			fmt.Printf("  ! %s\n", w)
 		}
 	case "down":
-		check(stack.InfraDown(cfg, t.Slug, shared))
-		if shared {
-			fmt.Println("shared containers stopped")
-		} else {
-			fmt.Printf("%s: its own containers stopped (shared ones are left for other tasks; --shared stops those)\n", t.Slug)
-		}
+		check(stack.InfraDown(cfg, t.Slug))
+		fmt.Printf("%s: its own containers stopped (shared ones are left for other tasks; `fride infra down --shared` stops those)\n", t.Slug)
 	}
 }
 

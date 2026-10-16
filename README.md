@@ -90,7 +90,8 @@ fride stack logs [task] <service>
 fride stack down [task]
 fride stack slots
 
-fride infra [status|up|down] [task] [--shared]
+fride infra [status|up|down] [task]       # the containers behind a task
+fride infra down --shared                # stop the containers all tasks share
 
 fride note decision "..." --why "..."     # the decision log the rationale document is built from
 fride rationale [task] [--narrate]

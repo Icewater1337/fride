@@ -649,9 +649,8 @@ func InfraUp(cfg *config.Config, slug string) ([]infra.Resolution, []string, err
 	return infra.Up(ip)
 }
 
-// InfraDown stops the task's own containers; shared=true stops the shared set
-// of the task's profile instead.
-func InfraDown(cfg *config.Config, slug string, shared bool) error {
+// InfraDown stops the task's own containers.
+func InfraDown(cfg *config.Config, slug string) error {
 	plan, err := Resolve(cfg, slug, LookupK(cfg, slug))
 	if err != nil {
 		return err
@@ -663,10 +662,16 @@ func InfraDown(cfg *config.Config, slug string, shared bool) error {
 	if !any {
 		return nil
 	}
-	if shared {
-		return infra.DownShared(ip.Files)
-	}
 	return infra.Down(ip)
+}
+
+// InfraDownShared stops the containers every task shares, whichever profile
+// started them; it returns how many there were.
+func InfraDownShared() (int, error) {
+	if err := infra.Available(); err != nil {
+		return 0, err
+	}
+	return infra.DownShared()
 }
 
 // Reserve allocates the task's slot without starting anything, so its ports
