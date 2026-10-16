@@ -189,7 +189,7 @@ That is how one profile covers "this task changes the backend and the worker" ne
 | `targetPort` | The port inside the container. Default `port`. |
 | `scope` | `shared` (the default) means one container serves every task, in the compose project `fride-shared`. `task` means the task gets its own container in `fride-<task>`, published on the service's `port + slot`. That needs a base `port`. `off` means no container. |
 | `oneShot` | `true` for a container that runs to completion, such as a bucket init. |
-| `env` | Environment for **task-scoped** containers, templated, for example to point a container at this task's backend instead of a compose service name. |
+| `env` | Environment for **task-scoped** containers, templated, for example to point a container at this task's backend instead of a compose service name. Inside a container, `localhost` is the container itself: reach a service on your machine at `http://host.docker.internal:{{ports.api}}`. |
 
 Containers that are already published on their port are adopted, not duplicated. That covers a plain `docker compose up` in your main checkout. A port held by something outside docker is reused too. Compose is always run with `--no-deps`: the profile decides where each dependency comes from, so it must list every container the stack needs.
 

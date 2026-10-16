@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,7 +120,10 @@ var composeRe = regexp.MustCompile(`^(docker-)?compose([.-][A-Za-z0-9_.-]+)?\.ya
 // One scans a single repository.
 func One(path string) Repo {
 	r := Repo{Name: filepath.Base(path), Path: path, Ecosystems: []string{}, Markers: []string{}}
-	r.Remote = git(path, "remote", "get-url", "origin")
+	// Remote URLs can carry credentials (https://user:token@host/…), and this
+	// output is read by an agent and shown in its transcript — so they are
+	// always stripped.
+	r.Remote = RedactURL(git(path, "remote", "get-url", "origin"))
 	r.Branch = git(path, "rev-parse", "--abbrev-ref", "HEAD")
 	if ref := git(path, "symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"); ref != "" {
 		r.DefaultBase = ref
@@ -426,7 +430,12 @@ func localConfig(repo string) []string {
 	return res
 }
 
-var portLineRe = regexp.MustCompile(`(?i)(server\.port|\bport\b|_PORT\b|--port)\s*[:=]?\s*["']?(\d{2,5})`)
+// portLineRe matches a port being set: `server.port=8080`, `port: 3000`,
+// `PORT=8080`, `--port 5173`, `port: ${SERVER_PORT:8080}`.
+var portLineRe = regexp.MustCompile(`(?i)(server\.port|\bport\b|_PORT\b|--port)\s*[:=]?\s*["'$]?[{(]?\s*\w*[:-]?\d{2,5}|(server\.port|\bport\b|_PORT\b)\s*[:=]\s*\$\{`)
+
+// secretLineRe keeps lines that might hold a credential out of the hints.
+var secretLineRe = regexp.MustCompile(`(?i)secret|password|passwd|token|apikey|api_key|credential|private`)
 
 // portHints greps the usual places a port is configured, so the agent knows
 // which files decide a service's port before it reads them in full.
@@ -476,7 +485,7 @@ func portHints(repo string) []string {
 					line = line[:100] + "…"
 				}
 				// Never echo a value that looks like a secret; ports never do.
-				if strings.Contains(strings.ToLower(line), "secret") || strings.Contains(strings.ToLower(line), "password") {
+				if secretLineRe.MatchString(line) || strings.Contains(line, "@") {
 					continue
 				}
 				out = append(out, rel+":"+itoa(n)+": "+line)
@@ -492,3 +501,16 @@ func portHints(repo string) []string {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// RedactURL removes credentials from a URL: https://user:token@host/x becomes
+// https://host/x. Anything that does not parse as a URL with a host (an scp-
+// style git@host:path remote, a local path) is returned unchanged, since it
+// carries no password.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
+}
