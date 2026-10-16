@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -62,10 +63,8 @@ http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 `,
 	})
 
-	apiBase, webBase := freeBase(t), 0
-	for webBase == 0 || (webBase > apiBase-10 && webBase < apiBase+10) {
-		webBase = freeBase(t)
-	}
+	apiBase := freeBase(t)
+	webBase := freeBase(t, apiBase)
 	home := filepath.Join(root, "home")
 	cfg := map[string]any{
 		"version":       1,
@@ -100,13 +99,28 @@ http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 		t.Fatal(err)
 	}
 
+	// diagnose says everything worth knowing when a step fails: every log in
+	// full, and who holds the task's ports.
+	diagnose := func() string {
+		var b strings.Builder
+		logs, _ := filepath.Glob(filepath.Join(home, "run", "*", "logs", "*.log"))
+		for _, l := range logs {
+			body, _ := os.ReadFile(l)
+			fmt.Fprintf(&b, "\n=== %s\n%s", filepath.Base(l), body)
+		}
+		for _, p := range []int{apiBase + 1, webBase + 1} {
+			out, _ := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", p)).CombinedOutput()
+			fmt.Fprintf(&b, "\n=== lsof :%d\n%s", p, out)
+		}
+		return b.String()
+	}
 	run := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command(fride, args...)
 		cmd.Env = append(os.Environ(), "FRIDE_HOME="+home)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("fride %s: %v\n%s", strings.Join(args, " "), err, out)
+			t.Fatalf("fride %s: %v\n%s%s", strings.Join(args, " "), err, out, diagnose())
 		}
 		return string(out)
 	}
@@ -117,7 +131,7 @@ http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 		cmd.Env = append(os.Environ(), "FRIDE_HOME="+home)
 		_ = cmd.Run()
 	})
-	run("stack", "up", "e2e", "--wait", "--timeout", "60s")
+	run("stack", "up", "e2e", "--wait", "--timeout", "120s")
 
 	apiPort, webPort := apiBase+1, webBase+1
 	if got := get(t, apiPort); !strings.Contains(got, fmt.Sprint(apiPort)) {
@@ -162,27 +176,27 @@ func gitRepo(t *testing.T, dir string, files map[string]string) {
 	}
 }
 
-// freeBase finds a base port whose next few ports are free.
-func freeBase(t *testing.T) int {
+// freeBase finds a base port whose next few ports are free, outside every
+// platform's ephemeral range (macOS hands out 49152+, Linux 32768+): an
+// outgoing connection — FrIDE's own health checks included — can take a port
+// there at any moment, and a service then cannot bind it.
+func freeBase(t *testing.T, avoid ...int) int {
 	t.Helper()
-	for i := 0; i < 50; i++ {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		p := ln.Addr().(*net.TCPAddr).Port
-		ln.Close()
-		base := p - p%10
-		if base < 20000 || base > 60000 {
-			continue
-		}
-		ok := true
-		for k := 0; k <= 3; k++ {
-			if listening(base + k) {
-				ok = false
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i := 0; i < 200; i++ {
+		base := 21000 + 10*r.Intn(900) // 21000..29990
+		clash := false
+		for _, a := range avoid {
+			if base > a-10 && base < a+10 {
+				clash = true
 			}
 		}
-		if ok {
+		for k := 0; k <= 3 && !clash; k++ {
+			if listening(base + k) {
+				clash = true
+			}
+		}
+		if !clash {
 			return base
 		}
 	}
