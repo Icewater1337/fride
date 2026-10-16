@@ -108,7 +108,9 @@ service needs at runtime, find out:
   own base port, with the spawning service told that port.
 - **A health URL**, if there is one (`/actuator/health`, `/health`, `/`).
 - **Machine prerequisites**: tokens, a JDK, docker for Testcontainers. Add them
-  as `requirements`.
+  as `requirements`. Where it is cheap, make the check prove the prerequisite
+  *works*, not just that it is configured. A credential line can exist in a
+  file and still be rejected. Never print a secret in a check.
 
 Keep notes as you go. The developer will want to know *why* each setting is
 what it is.

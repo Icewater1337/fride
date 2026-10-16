@@ -48,7 +48,7 @@ A task is one unit of work. It opens a workspace — a folder holding one git
 worktree per repository — plus an agent session and a private port slot for
 the stack. How the stack runs is described in config.json (see SETUP.md).
 
-  serve [--port N]                      run the web UI (default 7777)
+  serve [--port N]                      run the web UI (default 7777, or $FRIDE_PORT)
   doctor                                is this machine ready? (exit 1 if not)
 
   scan [folder...] [--json]             first look at repositories: build tools,
@@ -286,7 +286,8 @@ func flagBool(args []string, name string) (bool, []string) {
 // ---------------------------------------------------------------- serve
 
 func cmdServe(cfg *config.Config, st *store.Store, args []string) {
-	port := 7777
+	// FRIDE_PORT is also what `fride orch` talks to, so one variable moves both.
+	port := orchPort()
 	if v, _ := flagValue(args, "--port"); v != "" {
 		p, err := strconv.Atoi(v)
 		check(err)
