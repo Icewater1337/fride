@@ -10,9 +10,12 @@
 // target first says which base commits it has (fetching its own remote if
 // needed), and only history after those is sent.
 //
-// Besides the repositories: the task itself, its decision log, and the Claude
+// Besides the repositories: the task itself, its decision log, the Claude
 // Code transcripts recorded in the workspace, rewritten to the new paths so the
-// conversation can be resumed there with everything the agent already knew.
+// conversation can be resumed there with everything the agent already knew, and
+// every file at the workspace root outside the repositories — a plan, notes,
+// idea pages, the agent's local settings. The source deletes only what
+// travelled.
 //
 // The stack does not travel: it is stopped on the source and started fresh on
 // the target, on a slot of its own.
@@ -36,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,8 +53,9 @@ import (
 	"github.com/Icewater1337/fride/internal/store"
 )
 
-// Version of the archive format.
-const Version = 1
+// Version of the archive format. 2 added Root: an older target would ignore it
+// and the source would then delete files that never arrived.
+const Version = 2
 
 // Manifest describes a task in transit.
 type Manifest struct {
@@ -63,8 +68,22 @@ type Manifest struct {
 	Workspace   string       `json:"workspace"`
 	Repos       []Repo       `json:"repos"`
 	Transcripts []Transcript `json:"transcripts,omitempty"`
+	// Root is every file at the workspace root outside the repositories.
+	Root []RootFile `json:"root,omitempty"`
 	// Resume is the conversation to reopen on arrival.
 	Resume string `json:"resume,omitempty"`
+}
+
+// RootFile is one file at the workspace root, outside the repositories. Its
+// size and time are as Snapshot saw them: Forget deletes the source's copy only
+// while both still match, so a file changed since is kept.
+type RootFile struct {
+	// Path is relative to the workspace, with forward slashes; in the
+	// archive it is root/<Path>.
+	Path    string      `json:"path"`
+	Mode    os.FileMode `json:"mode"`
+	Size    int64       `json:"size"`
+	ModTime time.Time   `json:"modTime"`
 }
 
 // Repo is one repository of the task in transit.
@@ -107,6 +126,18 @@ func git(dir string, env []string, args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
+// removeUnder is os.RemoveAll for a path that must lie strictly inside root.
+// Paths here are built from slugs and names another computer sent; a ".."
+// that slipped past a check where the path was built once reached the whole
+// state directory, so the check is made again at the one place that deletes.
+func removeUnder(root, p string) error {
+	rel, err := filepath.Rel(root, p)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("refusing to remove %s: it is not inside %s", p, root)
+	}
+	return os.RemoveAll(p)
+}
+
 func wipRef(slug, repo string) string      { return "refs/fride/wip/" + slug + "/" + repo }
 func incomingRef(slug, repo string) string { return "refs/fride/incoming/" + slug + "/" + repo }
 func incomingWIP(slug, repo string) string { return "refs/fride/incoming-wip/" + slug + "/" + repo }
@@ -145,6 +176,11 @@ func Snapshot(cfg *config.Config, t *store.Task, from string) (*Manifest, error)
 		}
 		m.Repos = append(m.Repos, r)
 	}
+	root, err := rootFiles(m.Workspace, t.Repos)
+	if err != nil {
+		return nil, fmt.Errorf("listing the workspace's own files: %w", err)
+	}
+	m.Root = root
 	for _, tr := range agent.ClaudeTranscripts(cfg.Home, m.Workspace) {
 		m.Transcripts = append(m.Transcripts, Transcript{File: tr.Path, Cwd: tr.Cwd})
 	}
@@ -154,6 +190,46 @@ func Snapshot(cfg *config.Config, t *store.Task, from string) (*Manifest, error)
 		}
 	}
 	return m, nil
+}
+
+// sidecarDir is the task's own metadata folder in the workspace. It does not
+// travel: registering the task on the target writes it afresh.
+const sidecarDir = ".fride"
+
+// rootFiles lists the regular files of the workspace outside the task's
+// repositories and its sidecar folder. Symlinks and other special files are
+// not carried, and so never deleted by Forget either.
+func rootFiles(ws string, repos []store.TaskRepo) ([]RootFile, error) {
+	skip := map[string]bool{sidecarDir: true}
+	for _, r := range repos {
+		skip[r.Name] = true
+	}
+	var out []RootFile
+	err := filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(ws, p)
+		if err != nil || rel == "." {
+			return err
+		}
+		if d.IsDir() {
+			if filepath.Dir(rel) == "." && skip[rel] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		out = append(out, RootFile{Path: filepath.ToSlash(rel), Mode: fi.Mode().Perm(), Size: fi.Size(), ModTime: fi.ModTime()})
+		return nil
+	})
+	return out, err
 }
 
 // snapshotWIP commits the worktree's uncommitted state — staged or not,
@@ -220,7 +296,7 @@ func WriteArchive(w io.Writer, cfg *config.Config, m *Manifest, have map[string]
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
+	defer removeUnder(os.TempDir(), tmp)
 
 	// Bundles first, so the manifest written last records what was sent.
 	man := *m
@@ -258,6 +334,12 @@ func WriteArchive(w io.Writer, cfg *config.Config, m *Manifest, have map[string]
 					return err
 				}
 			}
+		}
+	}
+	ws := cfg.WorkspaceDir(m.Task.Slug)
+	for _, f := range m.Root {
+		if err := addFile(tw, "root/"+f.Path, filepath.Join(ws, filepath.FromSlash(f.Path))); err != nil {
+			return err
 		}
 	}
 	man.Transcripts = nil
@@ -315,6 +397,9 @@ func Detach(cfg *config.Config, m *Manifest) error {
 		if _, err := os.Stat(wt); err != nil {
 			continue
 		}
+		// As Remove does: a headless agent run leaves a stale lock behind, and
+		// --force once does not remove a locked worktree.
+		_, _ = git(main.Main, nil, "worktree", "unlock", wt)
 		if _, err := git(main.Main, nil, "worktree", "remove", "--force", wt); err != nil {
 			return fmt.Errorf("%s: %w", r.Name, err)
 		}
@@ -361,11 +446,16 @@ func applyWIP(wt, wip string) error {
 	}
 	patch.Close()
 	defer os.Remove(patch.Name())
-	cmd := exec.Command("git", "diff", "--binary", "HEAD", wip)
+	// Plumbing, and every flag spelled out: porcelain `git diff` honours the
+	// user's configuration (diff.noprefix, color.ui=always, diff.external,
+	// textconv), and any of them makes a patch that `git apply` rejects — the
+	// uncommitted work then never comes back.
+	cmd := exec.Command("git", "diff-tree", "-p", "--binary", "--no-color", "--no-ext-diff",
+		"--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", wip)
 	cmd.Dir = wt
 	out, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("git diff: %w", err)
+		return fmt.Errorf("git diff-tree: %w", err)
 	}
 	if len(out) == 0 {
 		return nil
@@ -378,10 +468,50 @@ func applyWIP(wt, wip string) error {
 }
 
 // Forget removes what is left of the task on the source after a successful
-// move: the workspace folder. The branches stay — they are the user's — and
-// so do the snapshot refs, for a while, as a way back.
-func Forget(cfg *config.Config, slug string) error {
-	return os.RemoveAll(cfg.WorkspaceDir(slug))
+// move: the files that travelled, the sidecar, the folders they leave empty and
+// then the workspace folder. Anything else — a file changed since the
+// snapshot, a symlink, whatever appeared later — is kept, and listed in kept:
+// deleting it would lose it on both computers. The sidecar goes regardless, or
+// the store would adopt the task straight back from what is left. The branches
+// stay — they are the user's — and so do the snapshot refs, for a while, as a
+// way back.
+func Forget(cfg *config.Config, m *Manifest) (kept []string, err error) {
+	ws := cfg.WorkspaceDir(m.Task.Slug)
+	for _, f := range m.Root {
+		p := filepath.Join(ws, filepath.FromSlash(f.Path))
+		fi, err := os.Lstat(p)
+		if err != nil || !fi.Mode().IsRegular() || fi.Size() != f.Size || !fi.ModTime().Equal(f.ModTime) {
+			continue
+		}
+		if err := removeUnder(ws, p); err != nil {
+			return nil, err
+		}
+	}
+	if err := removeUnder(ws, filepath.Join(ws, sidecarDir)); err != nil {
+		return nil, err
+	}
+	// Deepest first, and os.Remove only takes a folder that is empty.
+	var dirs []string
+	_ = filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			dirs = append(dirs, p)
+		}
+		return nil
+	})
+	for i := len(dirs) - 1; i >= 0; i-- {
+		_ = os.Remove(dirs[i])
+	}
+	if _, err := os.Lstat(ws); os.IsNotExist(err) {
+		return nil, nil
+	}
+	_ = filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(ws, p)
+			kept = append(kept, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	return kept, nil
 }
 
 // ---------------------------------------------------------------- target
@@ -423,8 +553,26 @@ func Check(cfg *config.Config, st *store.Store, slug string, repos []string) []s
 	return problems
 }
 
+func incomingDir(cfg *config.Config) string { return filepath.Join(cfg.StateDir, "incoming") }
+
 func stagingDir(cfg *config.Config, slug string) string {
-	return filepath.Join(cfg.StateDir, "incoming", slug)
+	return filepath.Join(incomingDir(cfg), slug)
+}
+
+// checkRootPath refuses a root file that would land outside the workspace, in
+// one of its repositories or in its sidecar. The archive comes from another
+// computer, and the paths in it are only as good as that computer's code.
+func checkRootPath(p string, repos []Repo) error {
+	clean := filepath.Clean(filepath.FromSlash(p))
+	first, _, _ := strings.Cut(filepath.ToSlash(clean), "/")
+	bad := p == "" || filepath.IsAbs(clean) || clean == "." || first == ".." || first == sidecarDir
+	for _, r := range repos {
+		bad = bad || first == r.Name
+	}
+	if bad {
+		return fmt.Errorf("refusing workspace file %q", p)
+	}
+	return nil
 }
 
 // Prepare receives the archive and fetches its bundles into side refs. Nothing
@@ -434,18 +582,19 @@ func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error
 	if err != nil {
 		return nil, err
 	}
+	drop := func() { _ = removeUnder(cfg.StateDir, tmp) }
 	if err := extract(r, tmp); err != nil {
-		os.RemoveAll(tmp)
+		drop()
 		return nil, err
 	}
 	m, err := readManifest(tmp)
 	if err != nil {
-		os.RemoveAll(tmp)
+		drop()
 		return nil, err
 	}
 	slug := m.Task.Slug
 	if err := store.ValidateSlug(slug); err != nil {
-		os.RemoveAll(tmp)
+		drop()
 		return nil, err
 	}
 	repos := make([]string, 0, len(m.Repos))
@@ -453,16 +602,26 @@ func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error
 		repos = append(repos, rp.Name)
 	}
 	if p := Check(cfg, st, slug, repos); len(p) > 0 {
-		os.RemoveAll(tmp)
+		drop()
 		return nil, errors.New(strings.Join(p, "; "))
 	}
+	for _, f := range m.Root {
+		if err := checkRootPath(f.Path, m.Repos); err != nil {
+			drop()
+			return nil, err
+		}
+	}
 	staging := stagingDir(cfg, slug)
-	_ = os.RemoveAll(staging)
+	if err := removeUnder(incomingDir(cfg), staging); err != nil {
+		drop()
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(staging), 0o755); err != nil {
+		drop()
 		return nil, err
 	}
 	if err := os.Rename(tmp, staging); err != nil {
-		os.RemoveAll(tmp)
+		drop()
 		return nil, err
 	}
 	for _, rp := range m.Repos {
@@ -512,14 +671,23 @@ func Staged(cfg *config.Config, slug string) (*Manifest, error) {
 // guide writes the agent's guide file; it is passed in so this package stays
 // free of the workspace package's dependencies.
 func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, dest string) []string, guide func(repos []string, agent, branch string) error, hook func() error) (*Manifest, []string, error) {
+	if err := store.ValidateSlug(slug); err != nil {
+		return nil, nil, err
+	}
 	staging := stagingDir(cfg, slug)
 	m, err := readManifest(staging)
 	if err != nil {
 		return nil, nil, err
 	}
 	ws := cfg.WorkspaceDir(slug)
-	if err := os.MkdirAll(ws, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
 		return nil, nil, err
+	}
+	// Mkdir, not MkdirAll: Prepare checked that the folder was free, and one
+	// that appeared since is somebody else's — a failure below removes the
+	// workspace, which must then be this call's own.
+	if err := os.Mkdir(ws, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("%s already exists here: %w", ws, err)
 	}
 	var notes []string
 	var made []string
@@ -529,7 +697,7 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 				_, _ = git(main.Main, nil, "worktree", "remove", "--force", cfg.RepoDir(slug, name))
 			}
 		}
-		_ = os.RemoveAll(ws)
+		_ = removeUnder(cfg.WorkspaceRoot, ws)
 		return nil, notes, err
 	}
 	for _, rp := range m.Repos {
@@ -552,6 +720,24 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 			}
 		}
 		notes = append(notes, local(rp.Name, wt)...)
+	}
+	// The workspace's own files, before the guide and the hook: those are
+	// this computer's to write, with its own paths.
+	for _, f := range m.Root {
+		if err := checkRootPath(f.Path, m.Repos); err != nil {
+			return fail(err)
+		}
+		dst := filepath.Join(ws, filepath.FromSlash(f.Path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fail(err)
+		}
+		b, err := os.ReadFile(filepath.Join(staging, "root", filepath.FromSlash(f.Path)))
+		if err != nil {
+			return fail(fmt.Errorf("workspace file %s: %w", f.Path, err))
+		}
+		if err := os.WriteFile(dst, b, f.Mode.Perm()|0o600); err != nil {
+			return fail(fmt.Errorf("workspace file %s: %w", f.Path, err))
+		}
 	}
 
 	// The journal, then the task itself: Add writes its sidecar.
@@ -645,11 +831,14 @@ func installTranscripts(cfg *config.Config, staging string, m *Manifest, ws stri
 
 // Abort throws a prepared move away.
 func Abort(cfg *config.Config, slug string) {
+	if store.ValidateSlug(slug) != nil {
+		return
+	}
 	if m, err := readManifest(stagingDir(cfg, slug)); err == nil {
 		cleanup(cfg, slug, m)
 		return
 	}
-	_ = os.RemoveAll(stagingDir(cfg, slug))
+	_ = removeUnder(incomingDir(cfg), stagingDir(cfg, slug))
 }
 
 func cleanup(cfg *config.Config, slug string, m *Manifest) {
@@ -659,7 +848,7 @@ func cleanup(cfg *config.Config, slug string, m *Manifest) {
 			_, _ = git(main.Main, nil, "update-ref", "-d", incomingWIP(slug, rp.Name))
 		}
 	}
-	_ = os.RemoveAll(stagingDir(cfg, slug))
+	_ = removeUnder(incomingDir(cfg), stagingDir(cfg, slug))
 }
 
 func readManifest(dir string) (*Manifest, error) {

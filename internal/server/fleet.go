@@ -29,9 +29,12 @@ import (
 //
 // The browser only ever talks to its own computer's server, on localhost, with
 // the usual Host/Origin checks. Everything that concerns another computer is
-// forwarded by this server, server to server, over the network — where every
-// request is identified by the network itself (fleet.Guard). So exposing a
-// computer to the fleet never exposes it to the web.
+// forwarded by this server, server to server, over the network. On the fleet
+// listener fleet.Guard admits only devices of the same user — but any of them,
+// including a phone or a laptop whose browser has some web page open. A page
+// can send requests to a node's tailnet address, and with DNS rebinding read
+// the answers. fleetGuard is what keeps browsers out: it admits only the
+// requests a FrIDE server makes (see fleet.Host).
 type fleetState struct {
 	net     fleet.Network
 	name    string
@@ -64,7 +67,7 @@ func (s *Server) StartFleet(n fleet.Network, name string) error {
 	if err != nil {
 		return fmt.Errorf("fleet: listening: %w", err)
 	}
-	srv := &http.Server{Handler: fleet.Guard(n, s.fleetRoutes()), ReadHeaderTimeout: 15 * time.Second}
+	srv := &http.Server{Handler: fleet.Guard(n, fleetGuard(s.fleetRoutes())), ReadHeaderTimeout: 15 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Printf("fleet: %v", err)
@@ -85,6 +88,27 @@ func (s *Server) StopFleet() {
 	}
 	s.fleet.mirrors.Close("", "")
 	_ = s.fleet.net.Close()
+}
+
+// fleetGuard admits only the requests one FrIDE server sends another: Host
+// fleet.Host, and no Origin. A browser cannot send them. Its Host is the host
+// and port it was pointed at — a tailnet address or name, or under DNS
+// rebinding the attacker's own domain — and since this listener is never on
+// port 80 that is never the bare "fride". It also adds an Origin to every
+// cross-origin request and every WebSocket handshake. Handlers decode JSON
+// whatever the Content-Type, so without this a blind no-cors POST would do.
+func fleetGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != fleet.Host {
+			http.Error(w, "forbidden: unexpected Host header", http.StatusForbidden)
+			return
+		}
+		if r.Header.Get("Origin") != "" {
+			http.Error(w, "forbidden: browser requests are not served to the fleet", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // fleetRoutes is what other computers of the fleet may call: the API (so the
@@ -168,7 +192,7 @@ func (f *fleetState) call(p fleet.Peer, method, path string, in, out any) error 
 	if err != nil {
 		return err
 	}
-	req.Host = "fride"
+	req.Host = fleet.Host
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -289,7 +313,7 @@ func (s *Server) handleNodeProxy(w http.ResponseWriter, r *http.Request) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = p.Addr
 			pr.Out.URL.Path = "/api/" + path
-			pr.Out.Host = "fride"
+			pr.Out.Host = fleet.Host
 			pr.Out.Header.Del("Origin")
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Referer")
@@ -313,7 +337,7 @@ func (s *Server) proxyTermWS(w http.ResponseWriter, r *http.Request, node string
 	q := r.URL.Query()
 	q.Del("node")
 	d := websocket.Dialer{NetDialContext: s.fleet.net.DialContext, HandshakeTimeout: 10 * time.Second}
-	remote, _, err := d.Dial("ws://"+p.Addr+"/ws/term?"+q.Encode(), http.Header{"Host": {"fride"}})
+	remote, _, err := d.Dial("ws://"+p.Addr+"/ws/term?"+q.Encode(), http.Header{"Host": {fleet.Host}})
 	if err != nil {
 		http.Error(w, node+": "+err.Error(), 502)
 		return
@@ -486,7 +510,7 @@ func (s *Server) moveTask(t *store.Task, to string, startAgent, startStack bool)
 	pr, pw := io.Pipe()
 	go func() { pw.CloseWithError(move.WriteArchive(pw, s.cfg, m, have)) }()
 	req, _ := http.NewRequest("POST", "http://"+p.Addr+"/fleet/import/prepare", pr)
-	req.Host = "fride"
+	req.Host = fleet.Host
 	req.Header.Set("Content-Type", "application/gzip")
 	resp, err := s.fleet.stream.Do(req)
 	if err != nil {
@@ -517,15 +541,21 @@ func (s *Server) moveTask(t *store.Task, to string, startAgent, startStack bool)
 		map[string]any{"slug": t.Slug, "startAgent": startAgent, "startStack": startStack}, &fin); err != nil {
 		return rollback(err)
 	}
-	if err := move.Forget(s.cfg, t.Slug); err != nil {
+	notes := fin.Notes
+	if kept, err := move.Forget(s.cfg, m); err != nil {
 		log.Printf("move %s: removing the old workspace: %v", t.Slug, err)
+	} else if len(kept) > 0 {
+		note := fmt.Sprintf("%s keeps %s: %s did not travel (changed during the move, or not a regular file)",
+			s.fleet.name, s.cfg.WorkspaceDir(t.Slug), strings.Join(kept, ", "))
+		log.Printf("move %s: %s", t.Slug, note)
+		notes = append(notes, note)
 	}
 	_ = stack.FreeK(s.cfg, t.Slug)
 	if err := s.st.Delete(t.Slug); err != nil {
 		log.Printf("move %s: forgetting the task: %v", t.Slug, err)
 	}
 	log.Printf("move %s: now on %s (%s)", t.Slug, to, m.Summary())
-	return map[string]any{"node": to, "slug": t.Slug, "notes": fin.Notes, "moved": m.Summary()}, nil
+	return map[string]any{"node": to, "slug": t.Slug, "notes": notes, "moved": m.Summary()}, nil
 }
 
 // ---------------------------------------------------------------- the target's half
@@ -549,6 +579,10 @@ func (s *Server) handleImportCheck(w http.ResponseWriter, r *http.Request) {
 		Repos []string `json:"repos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := store.ValidateSlug(req.Slug); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -591,6 +625,11 @@ func (s *Server) handleImportFinish(w http.ResponseWriter, r *http.Request) {
 		StartStack bool   `json:"startStack"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	// The slug names folders that are created, and removed again on failure.
+	if err := store.ValidateSlug(req.Slug); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -650,6 +689,12 @@ func (s *Server) handleImportAbort(w http.ResponseWriter, r *http.Request) {
 		Slug string `json:"slug"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	// Abort removes <state>/incoming/<slug>: a slug of ".." would be the whole
+	// state directory.
+	if err := store.ValidateSlug(req.Slug); err != nil {
 		writeErr(w, 400, err)
 		return
 	}

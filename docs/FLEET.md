@@ -33,7 +33,14 @@ your tailnet uses. What that gives FrIDE:
 The browser only ever talks to its own computer's FrIDE on `localhost`, as
 always. That FrIDE forwards anything about another computer's tasks to that
 computer, server to server, over the tailnet. Joining a fleet never exposes
-FrIDE to the web or to your local network.
+FrIDE to your local network.
+
+"A device of its own user" also includes your phone and any laptop on the
+tailnet, and web pages open in their browsers. So the fleet port answers only
+requests that another FrIDE makes: those carry `Host: fride` and no `Origin`.
+A browser always sends the host and port it was pointed at, and an `Origin` on
+cross-site requests and WebSocket handshakes, so a web page cannot get a
+request through, not even with DNS rebinding.
 
 Each computer still owns its tasks: their worktrees, terminals and stacks live
 there. Nothing is centralised, and there is no server to keep running.
@@ -77,7 +84,9 @@ In a task's header, **Continue on…** asks where it should go. From the shell:
    left untouched.
 3. The target says which base commits it already has; it fetches its own remote
    if needed. The source sends git bundles with only the history after those,
-   plus the decision log and the Claude Code transcripts.
+   plus the decision log, the Claude Code transcripts, and every file at the
+   workspace root outside the repositories: a `PLAN.md`, notes, idea pages,
+   `.claude/settings.local.json`. Symlinks there are not sent.
 4. The target fetches everything into side refs and checks it. Only then does
    the source let go of its worktrees.
 5. The target creates the workspace: the same branches, the uncommitted work
@@ -87,6 +96,10 @@ In a task's header, **Continue on…** asks where it should go. From the shell:
    asked, starts the stack.
 6. If anything fails after the source let go, the source restores its worktrees
    exactly as they were. The work is never in only one half-finished place.
+7. Once the target has the task, the source deletes its copy of what was sent,
+   and nothing else. A workspace file that changed after step 2, or that was not
+   sent (a symlink, a file created during the move), stays where it is, and the
+   move says so. The folder then holds only those files and no task.
 
 Nothing is pushed anywhere. The bundles go straight from computer to computer.
 The source keeps the task's branches, and its snapshot as

@@ -34,6 +34,7 @@ import (
 	"github.com/Icewater1337/fride/internal/settings"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
+	"github.com/Icewater1337/fride/internal/task"
 	"github.com/Icewater1337/fride/internal/term"
 	"github.com/Icewater1337/fride/internal/usage"
 	"github.com/Icewater1337/fride/internal/workspace"
@@ -567,8 +568,6 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		profile, rest := flagValue(rest, "--profile")
 		chosen, rest := flagValue(rest, "--agent")
 		branch, rest := flagValue(rest, "--branch")
-		slug := store.Slugify(name)
-		check(store.ValidateSlug(slug))
 		if chosen == "" {
 			// The one the last task used, so the CLI and the New task dialog
 			// remember the same choice.
@@ -599,26 +598,13 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 			// Not fatal: the workspace is still worth having.
 			fmt.Printf("note: %s (%s)\n", info.Detail, info.Label)
 		}
-		if profile != "" {
-			if _, _, ok := cfg.Settings.Profile(profile); !ok {
-				check(fmt.Errorf("unknown profile %q (have %v)", profile, cfg.Settings.ProfileNames()))
-			}
-		}
-		if branch == "" {
-			branch = workspace.SuggestBranch(name)
-		}
-		check(workspace.ValidateBranch(branch))
-		created, err := workspace.Create(cfg, slug, specs, string(kind), branch)
-		if err != nil {
-			_, _ = workspace.Remove(cfg, slug, true)
-			check(err)
-		}
-		t := &store.Task{Slug: slug, Name: name, Status: store.StatusOpen,
-			Created: time.Now(), Agent: string(kind), Profile: profile}
-		var names []string
+		// The setup steps (dependency installs) start detached, so they carry
+		// on after this command returns; `stack up` waits for them if needed.
+		t, created, err := task.Create(cfg, st, task.Request{Name: name, Repos: specs,
+			Agent: kind, Branch: branch, Profile: profile})
+		check(err)
+		slug := t.Slug
 		for _, c := range created {
-			t.Repos = append(t.Repos, store.TaskRepo{Name: c.Repo, BaseRef: c.BaseRef, Branch: c.Branch})
-			names = append(names, c.Repo)
 			fmt.Printf("%s: from %s\n", c.Repo, c.BaseRef)
 			if len(c.Copied) > 0 {
 				fmt.Printf("  copied %d local file(s): %s\n", len(c.Copied), strings.Join(c.Copied, ", "))
@@ -627,11 +613,6 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 				fmt.Printf("  note: %s\n", n)
 			}
 		}
-		check(st.Add(t))
-		cfg.Settings.SetAgent(string(kind))
-		// The setup steps (dependency installs) run detached, so they carry on
-		// after this command returns; `stack up` waits for them if needed.
-		stack.SetupAsync(cfg, slug, names)
 		fmt.Printf("\nworkspace ready: %s\n", cfg.WorkspaceDir(slug))
 		fmt.Printf("  open it with:   cd %s && %s\n", cfg.WorkspaceDir(slug), agent.Bin(kind))
 		fmt.Printf("  start it with:  fride stack up %s --wait\n", slug)
@@ -801,8 +782,13 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 				kept++
 			}
 		}
+		// Even --force keeps what it must not discard (commits on a detached
+		// HEAD); forgetting the task then would leave its folder orphaned.
 		if kept > 0 && !force {
-			check(fmt.Errorf("workspace kept — %d repo(s) still have work (use --force to discard)", kept))
+			check(fmt.Errorf("workspace kept — %d repo(s) still have work (use --force to discard uncommitted work)", kept))
+		}
+		if kept > 0 {
+			check(fmt.Errorf("workspace kept — %d repo(s) hold what --force does not discard (see above)", kept))
 		}
 		check(stack.FreeK(cfg, t.Slug))
 		check(st.Delete(t.Slug))

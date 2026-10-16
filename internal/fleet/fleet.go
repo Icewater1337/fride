@@ -35,6 +35,12 @@ const Port = 7777
 // Prefix marks a tailnet device as a FrIDE node: its hostname is Prefix+name.
 const Prefix = "fride-"
 
+// Host is the Host header of every request one node sends another, and the
+// only one a node's fleet listener answers. A browser always names the host it
+// was pointed at, so it can never send this one; the server package relies on
+// that to keep web pages off the fleet API.
+const Host = "fride"
+
 // Identity is who is behind a connection.
 type Identity struct {
 	UserID    string `json:"userId"`
