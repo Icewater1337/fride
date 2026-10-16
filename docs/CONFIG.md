@@ -163,11 +163,11 @@ A service waits for its repo's setup to finish before it starts. A setup that fa
 | `pre` | A command run before every start, for example to remove a stale sidecar container. If it fails, the failure is logged and the service still starts. |
 | `port` | The **base** port. A task in slot *k* uses `port + k`. See [Ports](#ports). |
 | `external` | `true` for a listener that something else starts, such as a proxy a dev server spawns. FrIDE starts nothing for it. It only watches `port + k`, so `--wait` and the entry link work. |
-| `env` | Extra environment variables for `run`, templated. |
+| `env` | Extra environment variables for `run`, templated. Each replaces a variable of the same name that FrIDE inherited, so a `PORT` or `API_URL` exported in your shell never wins over the task's own. |
 | `files` | Keys set in KEY=VALUE files (dotenv, `.properties`) before every start: `{ ".env": { "PORT": "{{port}}" } }`. Paths are relative to `dir`. Other keys and comments are kept. A value that refers to a service the task does not have **removes** the key instead, so the app falls back to its own default rather than to a port nothing listens on. |
 | `url` | How to open the service, templated. Default `http://localhost:{{port}}`. |
 | `health` | An HTTP URL that answers below 500 once the service is ready. A redirect counts, so a login redirect means the service is up. Without it, "listening" counts as ready. |
-| `dependsOn` | Services to wait for (listening) before `run`. |
+| `dependsOn` | Services to wait for (listening, on `127.0.0.1` or `[::1]`) before `run`. |
 | `container` | Where the service comes from when it is not run from source. See below. |
 | `ide` | A JetBrains run configuration: `{ "kind": "gradle", "task": ":app:bootRun", "args": "..." }`, `{ "kind": "npm", "script": "dev" }` or `{ "kind": "uvicorn", "module": "app.main:app" }`. With this set, *Start* can hand the service to the IDE (or `stack up --ide api`). |
 | `facts` | Regexes over the service's log. The last match (or its first group) is shown in the status view. Useful for a private database URL or a generated password. |
@@ -191,13 +191,17 @@ That is how one profile covers "this task changes the backend and the worker" ne
 | `service` | The compose service name. Default: the service's key. |
 | `port` | The host port compose publishes. A shared container is used on this port. |
 | `targetPort` | The port inside the container. Default `port`. |
-| `scope` | `shared` (the default) means one container serves every task, in the compose project `fride-shared`. `task` means the task gets its own container in `fride-<task>`, published on the service's `port + slot`. That needs a base `port`. `off` means no container. |
+| `scope` | `shared` (the default) means one container serves every task, in the compose project `fride-<id>-shared`. `task` means the task gets its own container in `fride-<id>-task-<task>`, published on the service's `port + slot`. That needs a base `port`. `off` means no container. `<id>` is a short hash of the FrIDE home, so two FrIDE setups never share a project. |
 | `oneShot` | `true` for a container that runs to completion, such as a bucket init. |
 | `env` | Environment for **task-scoped** containers, templated, for example to point a container at this task's backend instead of a compose service name. Inside a container, `localhost` is the container itself: reach a service on your machine at `http://host.docker.internal:{{ports.api}}`. |
 
 Containers that are already published on their port are adopted, not duplicated. That covers a plain `docker compose up` in your main checkout. A port held by something outside docker is reused too. Compose is always run with `--no-deps`: the profile decides where each dependency comes from, so it must list every container the stack needs.
 
 `fride stack down` stops only the task's own containers. Shared ones keep running for other tasks; `fride infra down --shared` stops them.
+
+A running stack keeps the profile and scopes it was started with. `fride task profile` and `fride task service` apply at the next start, and `fride stack down` stops what was started, not what the task's profile says by then.
+
+Containers started by a FrIDE from before these project names live in the projects `fride-shared` and `fride-<task>`. `fride stack down` still stops a task's own. Stop the old shared ones with `docker compose -p fride-shared down`.
 
 ## Templates
 
@@ -217,7 +221,7 @@ Containers that are already published on their port are adopted, not duplicated.
 | `{{main.<name>}}` | a repository's main checkout |
 | `{{env.<NAME>}}` | an environment variable of the FrIDE process |
 
-A variable that is not available in a task makes the value unavailable: a service the task does not have, a repo it did not check out, or an unset environment variable. In `files` and container `env`, that removes the key. In `env`, it leaves the variable out. In `run`, it is an error.
+A variable that is not available in a task makes the value unavailable: a service the task does not have, a repo it did not check out, or an unset environment variable. In `files` and container `env`, that removes the key. In `env`, it leaves the variable out, an inherited one of the same name included. In `run`, it is an error.
 
 ## Ports
 

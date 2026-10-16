@@ -12,7 +12,7 @@ import (
 func regCfg(t *testing.T) *config.Config {
 	t.Helper()
 	slotBusyFor = func(*config.Config, Entry) bool { return false }
-	t.Cleanup(func() { slotBusyFor = func(cfg *config.Config, e Entry) bool { return instanceBusy(cfg, e.Name, e.K) } })
+	t.Cleanup(func() { slotBusyFor = slotBusy })
 	return &config.Config{Registry: filepath.Join(t.TempDir(), "slots"), MaxK: 3}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -40,7 +41,13 @@ func RunService(cfg *config.Config, slug, name string) error {
 	if k == 0 {
 		return fmt.Errorf("task %s holds no slot", slug)
 	}
-	plan, err := Resolve(cfg, slug, k)
+	// The options Up started the stack with, which a running stack keeps even
+	// after the task's profile is switched.
+	opts := Opts(cfg, slug)
+	if rec := readRecord(cfg, slug); rec != nil {
+		opts = rec.opts()
+	}
+	plan, err := resolveWith(cfg, slug, k, opts)
 	if err != nil {
 		return err
 	}
@@ -59,7 +66,7 @@ func RunService(cfg *config.Config, slug, name string) error {
 
 	for _, d := range r.Spec.DependsOn {
 		dr := plan.Services[d]
-		if dr == nil || dr.Port <= 0 || dr.Mode == ModeOff || dr.Mode == ModeAbsent {
+		if dr == nil || dr.Port <= 0 || !dr.Mode.Present() {
 			say("dependency %s is not part of this task — not waiting for it", d)
 			continue
 		}
@@ -69,7 +76,7 @@ func RunService(cfg *config.Config, slug, name string) error {
 		}
 		say("waiting for %s on :%d", d, dr.Port)
 		deadline := time.Now().Add(limit)
-		for !infra.Listening(dr.Port) {
+		for !infra.Accepting(dr.Port) {
 			if time.Now().After(deadline) {
 				return fmt.Errorf("%s never came up on :%d (waited %s)", d, dr.Port, limit)
 			}
@@ -91,17 +98,9 @@ func RunService(cfg *config.Config, slug, name string) error {
 		}
 	}
 
-	env := os.Environ()
-	for k, v := range r.Spec.Env {
-		out, err := plan.Expand(name, v)
-		var u *settings.Unavailable
-		if errors.As(err, &u) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("env %s: %w", k, err)
-		}
-		env = append(env, k+"="+out)
+	env, err := serviceEnv(os.Environ(), plan, r)
+	if err != nil {
+		return err
 	}
 	run, err := plan.Expand(name, r.Spec.Run)
 	if err != nil {
@@ -113,6 +112,43 @@ func RunService(cfg *config.Config, slug, name string) error {
 	say("run: %s", run)
 	sh := Shell()
 	return syscall.Exec(sh, []string{sh, "-c", run}, env)
+}
+
+// serviceEnv is the environment a service runs in: the inherited one without
+// any key the service configures, then the configured values.
+//
+// The removal is not tidiness. syscall.Exec passes duplicate keys through, and
+// shells disagree on which one wins — bash and sh take the last, zsh the
+// FIRST. Under zsh, the default shell on macOS, a PORT or API_URL exported in
+// the user's shell beat the task's own, and the task silently talked to the
+// main checkout. A key whose value this task cannot have is removed as well,
+// as applyFiles removes one: the service falls back to its own default rather
+// than to whatever the user's shell happened to point at.
+func serviceEnv(inherited []string, plan *Plan, r *Resolved) ([]string, error) {
+	env := make([]string, 0, len(inherited)+len(r.Spec.Env))
+	for _, kv := range inherited {
+		k, _, _ := strings.Cut(kv, "=")
+		if _, configured := r.Spec.Env[k]; !configured {
+			env = append(env, kv)
+		}
+	}
+	keys := make([]string, 0, len(r.Spec.Env))
+	for k := range r.Spec.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out, err := plan.Expand(r.Name, r.Spec.Env[k])
+		var u *settings.Unavailable
+		if errors.As(err, &u) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("env %s: %w", k, err)
+		}
+		env = append(env, k+"="+out)
+	}
+	return env, nil
 }
 
 func setupPaths(cfg *config.Config, slug, repo string) (lock, state, log string) {
@@ -187,6 +223,36 @@ func RunSetup(cfg *config.Config, slug, repo string, out io.Writer) error {
 	}
 	setState("done")
 	return nil
+}
+
+// setupRunning returns a repo of the task whose setup is under way, or "".
+//
+// The state file alone cannot say: it still reads "running" after the setup
+// was killed — by Down, by a crash. The lock can: RunSetup holds it for as
+// long as it runs, and the kernel drops it when the process dies.
+func setupRunning(cfg *config.Config, slug string) string {
+	states, _ := filepath.Glob(filepath.Join(cfg.RunDir(slug), "setup-*.state"))
+	sort.Strings(states)
+	for _, st := range states {
+		repo := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(st), "setup-"), ".state")
+		if !strings.HasPrefix(SetupState(cfg, slug, repo), "running") {
+			continue
+		}
+		lockPath, _, _ := setupPaths(cfg, slug, repo)
+		f, err := os.Open(lockPath)
+		if err != nil {
+			continue
+		}
+		held := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB) != nil
+		if !held {
+			_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		}
+		f.Close()
+		if held {
+			return repo
+		}
+	}
+	return ""
 }
 
 func runStep(dir, command string, out io.Writer) error {
