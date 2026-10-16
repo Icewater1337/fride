@@ -102,7 +102,7 @@ func TestPublishOnItsOwnBranch(t *testing.T) {
 }
 
 func TestPublishDirectIntoAnEmptyLedger(t *testing.T) {
-	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct"}, false)
+	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, false)
 	if err := CheckLedger(cfg.Settings.Ledger); err != nil {
 		t.Fatalf("an empty but reachable ledger should pass the check: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestPublishDirectIntoAnEmptyLedger(t *testing.T) {
 }
 
 func TestWaitForMergeGivesUp(t *testing.T) {
-	cfg, _ := ledgerCfg(t, &settings.Ledger{WaitForMerge: 1}, true)
+	cfg, _ := ledgerCfg(t, &settings.Ledger{WaitForMerge: 1, Author: "Jane Doe <jane@example.com>"}, true)
 	p, err := Publish(cfg, "proj-42", Options{})
 	if err != nil {
 		t.Fatal(err)

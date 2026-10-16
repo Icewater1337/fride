@@ -299,6 +299,9 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 		return p, nil
 	}
 	if _, err := run(dir, c.env, "commit", "--quiet", "-m", "docs: record design rationale for "+slug); err != nil {
+		if strings.Contains(err.Error(), "identity unknown") {
+			return nil, fmt.Errorf("git does not know who is committing to the ledger — set ledger.author in config.json (\"Name <email>\")")
+		}
 		return nil, err
 	}
 
