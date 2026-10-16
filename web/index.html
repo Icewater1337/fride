@@ -14,6 +14,7 @@
   <nav>
     <button id="nav-board" class="navbtn active">Board</button>
     <button id="nav-orch" class="navbtn">Orchestrator</button>
+    <button id="nav-computers" class="navbtn hidden">Computers</button>
     <button id="nav-instances" class="navbtn">Slots</button>
     <button id="nav-settings" class="navbtn">Settings</button>
   </nav>
@@ -49,6 +50,7 @@
 
   <!-- ---------------------------------------------------------- board -->
   <section id="board" class="view active">
+    <div id="fleetbar" class="envbar hidden"></div>
     <div id="envbar" class="envbar hidden"></div>
     <div class="columns">
       <div class="column" data-status="open">
@@ -112,6 +114,22 @@
     </div>
   </section>
 
+  <!-- ---------------------------------------------------------- computers -->
+  <section id="computers" class="view">
+    <h2>Computers</h2>
+    <p class="hint">Your computers running FrIDE, linked through your tailnet. Each one owns its
+      tasks; this page, the board and every task view work the same from any of them. Only
+      devices signed in to your own account are answered.</p>
+    <div id="computer-self" class="panel"></div>
+    <h3 class="sh">Your other computers</h3>
+    <table id="computers-table"><thead>
+      <tr><th>computer</th><th>state</th><th>os</th><th>tasks</th></tr>
+    </thead><tbody></tbody></table>
+    <h3 class="sh">Open on this computer</h3>
+    <p class="hint">Stacks of other computers served on this one's localhost, port for port.</p>
+    <div id="mirror-list" class="baselist"></div>
+  </section>
+
   <!-- ---------------------------------------------------------- instances -->
   <section id="instances" class="view">
     <h2>Port slots</h2>
@@ -154,6 +172,7 @@
       <button id="back" class="ghost">&larr; Board</button>
       <h2 id="task-title"></h2>
       <span id="task-status-badge" class="badge"></span>
+      <span id="task-node-badge" class="badge node hidden"></span>
       <span id="task-perm-badge" class="badge perm hidden"></span>
       <button id="task-mode-badge" class="badge mode" title="The profile this task boots with — click to switch"></button>
       <div class="spacer"></div>
@@ -162,6 +181,7 @@
         <button data-set-status="in_progress" class="ghost">In Progress</button>
         <button data-set-status="done" class="ghost">Done</button>
       </div>
+      <button id="btn-move" class="ghost hidden" title="Continue this task on another of your computers">Continue on…</button>
       <button id="btn-delete" class="danger">Delete</button>
     </div>
 
@@ -229,6 +249,24 @@
 </main>
 
 <!-- ---------------------------------------------------------- modals -->
+<div id="movepop" class="modal hidden">
+  <div class="modal-card">
+    <h2>Continue on another computer</h2>
+    <p class="hint">The agent and the stack stop here. The task's branches travel with
+      everything not committed yet, plus its decision log and the agent's conversation;
+      the other computer recreates the workspace and copies its own local config.</p>
+    <div id="move-targets" class="agent-picker"></div>
+    <label class="checkline"><input id="move-agent" type="checkbox" checked>
+      Start the agent there, resuming the conversation</label>
+    <label class="checkline"><input id="move-stack" type="checkbox"> Start the stack there</label>
+    <div id="move-status" class="hint"></div>
+    <div class="modal-actions">
+      <button id="move-cancel" class="ghost">Cancel</button>
+      <button id="move-go" class="primary">Move it</button>
+    </div>
+  </div>
+</div>
+
 <div id="jrpop" class="modal hidden">
   <div class="modal-card">
     <div id="jrpop-head" class="jrpop-head"></div>
@@ -255,6 +293,10 @@
 <div id="modal" class="modal hidden">
   <div class="modal-card">
     <h2>New task</h2>
+    <div id="node-line" class="hidden">
+      <h3>Run on</h3>
+      <div id="node-picker" class="agent-picker"></div>
+    </div>
     <label>Name
       <input id="new-name" type="text" placeholder="PROJ-42 search filters" autocomplete="off">
     </label>

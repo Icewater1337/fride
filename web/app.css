@@ -637,3 +637,16 @@ pre.docbody {
 .setup-check .dot.fail { background: var(--danger); }
 .state .up, .state .mini { margin-left: 6px; }
 body.unconfigured #btn-new, body.unconfigured nav, body.unconfigured #switcher { display: none; }
+
+/* ---------------------------------------------------------------- fleet */
+.pill.node { border-style: dashed; }
+.pill.node.here { opacity: .7; }
+.badge.node.remote { color: var(--accent); border-color: var(--accent); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; }
+.dot.good { background: var(--ok); }
+.dot.fail { background: var(--danger); }
+.comp-head { display: flex; align-items: center; gap: 8px; }
+.signin { margin-top: 8px; font-size: 13px; }
+#computer-self { max-width: 760px; }
+#fleetbar a { margin-left: 6px; word-break: break-all; }
+.task-head button, .task-head .badge { white-space: nowrap; }

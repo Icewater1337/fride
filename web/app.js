@@ -51,7 +51,40 @@ const state = {
   viaIde: new Set(),   // services to open in their IDE on the next Start
   config: null,        // /api/config: profiles, core repos, whether set up
   newProfile: '',      // the choice in the New task modal
+  fleet: { enabled: false, self: '', peers: [], mirrors: [], state: {} },
+  currentNode: '',     // the computer the open task lives on ('' = this one)
+  newNode: '',         // the computer chosen in the New task modal
 };
+
+/* ------------------------------------------------------------------ fleet */
+
+// A task lives on one computer; its API is reached through this computer's
+// server, which forwards to the owner. '' or this computer's own name means here.
+function isLocal(node) { return !node || node === state.fleet.self; }
+function nodeBase(node) { return isLocal(node) ? '/api' : '/api/node/' + encodeURIComponent(node); }
+function tb() { return nodeBase(state.currentNode); }
+
+async function loadFleet() {
+  try { state.fleet = Object.assign({ peers: [], mirrors: [], state: {} }, await api.get('/api/fleet')); }
+  catch { state.fleet = { enabled: false, self: '', peers: [], mirrors: [], state: {} }; }
+  $('#nav-computers').classList.toggle('hidden', !state.fleet.enabled);
+  const bar = $('#fleetbar');
+  const st = state.fleet.state || {};
+  if (state.fleet.enabled && st.phase === 'needs-login') {
+    bar.className = 'envbar bad';
+    bar.innerHTML = '';
+    bar.appendChild(el('b', null, 'Sign this computer in to your tailnet to link it with your other computers: '));
+    if (st.authUrl) {
+      const a = el('a', null, st.authUrl);
+      a.href = st.authUrl; a.target = '_blank';
+      bar.appendChild(a);
+    }
+  } else {
+    bar.className = 'envbar hidden';
+  }
+  return state.fleet;
+}
+function onlinePeers() { return (state.fleet.peers || []).filter(p => p.online); }
 
 /* ------------------------------------------------------------------ views */
 
@@ -63,6 +96,7 @@ function showView(name) {
   $('#nav-orch').classList.toggle('active', name === 'orch');
   $('#nav-instances').classList.toggle('active', name === 'instances');
   $('#nav-settings').classList.toggle('active', name === 'settings');
+  $('#nav-computers').classList.toggle('active', name === 'computers');
 }
 
 /* ------------------------------------------------------------------ agents */
@@ -71,8 +105,8 @@ function showView(name) {
 // describe the same agent, so the descriptions are fetched once and cached.
 // Re-fetched whenever the modal opens: a CLI installed since the server started
 // must become selectable without restarting it.
-async function loadAgents() {
-  const d = await api.get('/api/agents');
+async function loadAgents(base = '/api') {
+  const d = await api.get(base + '/agents');
   state.agents = d.agents || [];
   state.agentDefault = d.default || 'claude';
   return d;
@@ -95,20 +129,22 @@ function renderSwitcher() {
   const live = state.tasks.filter(t => t.status !== 'done' && !t.hidden);
   if (!live.length) { host.appendChild(el('span', 'empty', 'no open tasks')); return; }
   for (const t of live) {
-    const chip = el('div', 'chip' + (t.slug === state.current ? ' active' : '') +
+    const here = t.slug === state.current && (isLocal(t.node) ? isLocal(state.currentNode) : t.node === state.currentNode);
+    const chip = el('div', 'chip' + (here ? ' active' : '') +
                           (t.attention ? ' attn' : ''));
     if (t.attention) chip.appendChild(el('span', 'dot attn'));
     else if (t.stack && t.stack.up) chip.appendChild(el('span', 'dot stack'));
     chip.appendChild(el('span', null, t.name));
     chip.title = t.attention ? `${t.agent || 'the agent'} is waiting for input`
                : (t.stack && t.stack.up ? 'stack running' : t.status.replace('_', ' '));
-    chip.addEventListener('click', () => openTask(t.slug));
+    chip.addEventListener('click', () => openTask(t.slug, t.node));
     host.appendChild(chip);
   }
 }
 
 async function refreshTasks() {
-  state.tasks = await api.get('/api/tasks');
+  await loadFleet();
+  state.tasks = await api.get('/api/fleet/tasks');
   renderSwitcher();
   return state.tasks;
 }
@@ -134,7 +170,7 @@ function renderColumns(tasks) {
 }
 
 async function loadBoard() {
-  state.tasks = await api.get('/api/tasks');
+  state.tasks = await api.get('/api/fleet/tasks');
   renderSwitcher();
   renderColumns(state.tasks);
   // Cached server-side, so this is a local round-trip unless the probe is stale.
@@ -147,6 +183,9 @@ function card(t) {
   c.dataset.slug = t.slug;
   c.appendChild(el('h3', null, t.name));
   const meta = el('div', 'meta');
+  if (state.fleet.enabled) {
+    meta.appendChild(el('span', 'pill node' + (isLocal(t.node) ? ' here' : ''), isLocal(t.node) ? 'this computer' : t.node));
+  }
   for (const r of (t.repos || [])) meta.appendChild(el('span', 'pill', r.name));
   if (t.stack && t.stack.up) {
     meta.appendChild(el('span', 'pill up', t.stack.entryUrl
@@ -172,7 +211,7 @@ function card(t) {
   hb.addEventListener('click', async ev => {
     ev.stopPropagation();
     hb.disabled = true;
-    try { await api.put(`/api/tasks/${t.slug}/hidden`, { hidden: !t.hidden }); }
+    try { await api.put(`${nodeBase(t.node)}/tasks/${t.slug}/hidden`, { hidden: !t.hidden }); }
     catch (e) { alert(e.message); }
     await loadBoard();
   });
@@ -184,10 +223,10 @@ function card(t) {
   btns.appendChild(db);
   c.appendChild(btns);
 
-  c.addEventListener('click', () => openTask(t.slug));
+  c.addEventListener('click', () => openTask(t.slug, t.node));
   c.addEventListener('dragstart', e => {
     c.classList.add('dragging');
-    e.dataTransfer.setData('text/plain', t.slug);
+    e.dataTransfer.setData('text/plain', JSON.stringify({ slug: t.slug, node: t.node || '' }));
   });
   c.addEventListener('dragend', () => c.classList.remove('dragging'));
   return c;
@@ -199,22 +238,28 @@ for (const col of document.querySelectorAll('.column')) {
   col.addEventListener('drop', async e => {
     e.preventDefault();
     col.classList.remove('dragover');
-    const slug = e.dataTransfer.getData('text/plain');
-    if (!slug) return;
-    await setStatus(slug, col.dataset.status);
+    let ref = {};
+    try { ref = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+    if (!ref.slug) return;
+    await setStatus(ref.slug, col.dataset.status, ref.node);
     await loadBoard();
   });
 }
 
-async function setStatus(slug, status) {
-  try { await api.put(`/api/tasks/${slug}/status`, { status }); }
+async function setStatus(slug, status, node) {
+  try { await api.put(`${nodeBase(node)}/tasks/${slug}/status`, { status }); }
   catch (err) { alert(err.message); }
 }
 
 /* ------------------------------------------------------------------ task detail */
 
-async function openTask(slug) {
+function findTask(slug, node) {
+  return state.tasks.find(x => x.slug === slug && (isLocal(x.node) ? isLocal(node) : x.node === node));
+}
+
+async function openTask(slug, node) {
   state.current = slug;
+  state.currentNode = isLocal(node) ? '' : node;
   state.filePath = '';
   state.viaIde.clear();
   stopOrch(); // reachable from the orchestrator view via the task switcher
@@ -232,7 +277,7 @@ async function openTask(slug) {
 }
 
 async function refreshTask() {
-  const t = await api.get('/api/tasks/' + state.current);
+  const t = await api.get(tb() + '/tasks/' + state.current);
   $('#task-title').textContent = t.name;
   const badge = $('#task-status-badge');
   badge.textContent = t.status.replace('_', ' ');
@@ -263,7 +308,7 @@ async function refreshTask() {
     if (asked === null || asked.trim() === curProfile) return;
     if (!names.includes(asked.trim())) { alert('No profile ' + asked); return; }
     try {
-      await api.put(`/api/tasks/${state.current}/profile`, { profile: asked.trim() });
+      await api.put(`${tb()}/tasks/${state.current}/profile`, { profile: asked.trim() });
     } catch (e) { alert(e.message); return; }
     await refreshTask();
     if (t.stack && t.stack.up) {
@@ -271,6 +316,8 @@ async function refreshTask() {
             'stop and start it to pick this up.');
     }
   };
+
+  renderNodeBadge(t);
 
   const perm = $('#task-perm-badge');
   perm.textContent = t.dangerous ? ag.dangerLabel : ag.safeLabel;
@@ -282,7 +329,7 @@ async function refreshTask() {
     const next = !t.dangerous;
     if (next && !confirm(`Start future ${ag.label} sessions with ${ag.dangerFlag}?\n\n` +
                          'The agent will run anything in this workspace without asking.')) return;
-    await api.put(`/api/tasks/${state.current}/permissions`, { dangerous: next });
+    await api.put(`${tb()}/tasks/${state.current}/permissions`, { dangerous: next });
     await refreshTask();
   };
   renderStack(t.stack);
@@ -312,6 +359,36 @@ function renderStack(s) {
     entry.appendChild(el('span', 'warn', s.error));
   } else if (!s || !s.k) {
     entry.appendChild(el('span', 'hint', 'not running — press Start'));
+  } else if (s.entryUrl && !isLocal(state.currentNode)) {
+    // The stack runs on another computer. Its URLs name that computer's
+    // localhost; "Open here" serves the same ports on this one's.
+    if (mirroredHere(state.currentNode, state.current)) {
+      const a = el('a', null, s.entryUrl + '  (open the app — served from ' + state.currentNode + ')');
+      a.href = s.entryUrl; a.target = '_blank';
+      entry.appendChild(a);
+      const stop = el('button', 'mini', 'stop opening here');
+      stop.addEventListener('click', async () => {
+        await api.del(`/api/fleet/mirror?node=${encodeURIComponent(state.currentNode)}&task=${encodeURIComponent(state.current)}`);
+        await loadFleet();
+        renderStack(s);
+      });
+      entry.appendChild(stop);
+    } else {
+      const open = el('button', 'primary mini', 'Open here');
+      open.title = `Serve this stack's ports on this computer's localhost, so ${s.entryUrl} works here as it does on ${state.currentNode}`;
+      open.addEventListener('click', async () => {
+        open.disabled = true;
+        try {
+          const r = await api.post('/api/fleet/mirror', { node: state.currentNode, task: state.current });
+          if (r.problems && r.problems.length) alert('Some ports could not be opened here:\n' + r.problems.join('\n'));
+          await loadFleet();
+          renderStack(s);
+          if (r.entryUrl) window.open(r.entryUrl, '_blank');
+        } catch (e) { alert(e.message); open.disabled = false; }
+      });
+      entry.appendChild(open);
+      entry.appendChild(el('span', 'hint', ` running on ${state.currentNode}`));
+    }
   } else if (s.entryUrl) {
     const a = el('a', null, s.entryUrl + '  (open the app)');
     a.href = s.entryUrl; a.target = '_blank';
@@ -351,12 +428,78 @@ function renderStack(s) {
   for (const w of (s && s.warnings) || []) warns.appendChild(el('div', 'warn', w));
 }
 
+function renderNodeBadge(t) {
+  const badge = $('#task-node-badge');
+  const mv = $('#btn-move');
+  const on = state.fleet.enabled;
+  badge.classList.toggle('hidden', !on);
+  badge.textContent = 'on ' + (isLocal(state.currentNode) ? (state.fleet.self || 'this computer') : state.currentNode);
+  badge.classList.toggle('remote', !isLocal(state.currentNode));
+  mv.classList.toggle('hidden', !on || moveTargets().length === 0);
+}
+
+// Where the open task can go: every online computer but the one it is on.
+function moveTargets() {
+  const out = onlinePeers().map(p => p.name).filter(n => n !== state.currentNode);
+  if (!isLocal(state.currentNode)) out.unshift(state.fleet.self);
+  return out;
+}
+
+$('#btn-move').addEventListener('click', async () => {
+  await loadFleet();
+  const host = $('#move-targets');
+  host.innerHTML = '';
+  const targets = moveTargets();
+  targets.forEach((name, i) => {
+    const row = el('label', 'agent-pick');
+    const rb = el('input');
+    rb.type = 'radio';
+    rb.name = 'moveto';
+    rb.value = name;
+    rb.checked = i === 0;
+    row.appendChild(rb);
+    row.appendChild(el('div', null, name === state.fleet.self ? name + ' (this computer)' : name));
+    host.appendChild(row);
+  });
+  const t = findTask(state.current, state.currentNode);
+  $('#move-stack').checked = !!(t && t.stack && t.stack.up);
+  $('#move-agent').checked = true;
+  $('#move-status').textContent = '';
+  $('#move-go').disabled = targets.length === 0;
+  $('#movepop').classList.remove('hidden');
+});
+$('#move-cancel').addEventListener('click', () => $('#movepop').classList.add('hidden'));
+$('#move-go').addEventListener('click', async () => {
+  const to = (document.querySelector('input[name=moveto]:checked') || {}).value;
+  if (!to) return;
+  const b = $('#move-go');
+  b.disabled = true;
+  $('#move-status').textContent = `Stopping the agent and the stack, then sending the task to ${to}…`;
+  try {
+    const r = await api.post(`${tb()}/tasks/${state.current}/move`, {
+      to, startAgent: $('#move-agent').checked, startStack: $('#move-stack').checked,
+    });
+    $('#movepop').classList.add('hidden');
+    const slug = state.current;
+    await loadBoard();
+    await openTask(slug, to === state.fleet.self ? '' : to);
+    if (r.notes && r.notes.length) console.log('moved:', r.notes.join('\n'));
+  } catch (e) {
+    $('#move-status').textContent = e.message;
+  }
+  b.disabled = false;
+});
+
+function mirroredHere(node, task) {
+  return (state.fleet.mirrors || []).some(m => m.node === node && m.task === task);
+}
+
 async function showStackLog(name) {
   const box = $('#stack-log');
   $('#stack-log-name').textContent = name;
   box.classList.remove('hidden');
   try {
-    const r = await api.get(`/api/tasks/${state.current}/stack/log?service=${encodeURIComponent(name)}&lines=200`);
+    const r = await api.get(`${tb()}/tasks/${state.current}/stack/log?service=${encodeURIComponent(name)}&lines=200`);
     const pre = $('#stack-log-body');
     pre.textContent = r.log || '(empty)';
     pre.scrollTop = pre.scrollHeight;
@@ -400,7 +543,7 @@ function statusClass(code) {
 async function loadGit() {
   const host = $('#git-body');
   let stats;
-  try { stats = await api.get(`/api/tasks/${state.current}/git`); }
+  try { stats = await api.get(`${tb()}/tasks/${state.current}/git`); }
   catch (e) { host.textContent = e.message; return null; }
   host.innerHTML = '';
   let any = false;
@@ -428,7 +571,7 @@ async function loadGit() {
 
 $('#git-refresh').addEventListener('click', async () => {
   const stats = await loadGit();
-  const t = await api.get('/api/tasks/' + state.current);
+  const t = await api.get(tb() + '/tasks/' + state.current);
   renderRepos(t, stats);
 });
 
@@ -438,7 +581,7 @@ async function loadUsage() {
   const host = $('#usage-body');
   host.textContent = 'loading…';
   let u;
-  try { u = await api.get(`/api/tasks/${state.current}/usage`); }
+  try { u = await api.get(`${tb()}/tasks/${state.current}/usage`); }
   catch (e) { host.textContent = e.message; return; }
   updateResumeButton(u);
   if (!u || !u.messages) {
@@ -488,7 +631,7 @@ function startPolling() {
   state.poll = setInterval(async () => {
     if (!state.current) return;
     try {
-      const s = await api.get(`/api/tasks/${state.current}/stack`);
+      const s = await api.get(`${tb()}/tasks/${state.current}/stack`);
       renderStack(s);
       // While a setup is in flight the task view carries the phase, so keep
       // the detail panel honest without a full re-render.
@@ -539,7 +682,7 @@ function disposeTerms() {
 }
 
 async function syncTerminals() {
-  const sessions = (await api.get(`/api/tasks/${state.current}/terminals`)) || [];
+  const sessions = (await api.get(`${tb()}/tasks/${state.current}/terminals`)) || [];
   for (const s of sessions) {
     const e = state.terms.get(s.id);
     if (e) { e.attention = s.attention; e.sess = s; }
@@ -564,7 +707,8 @@ function attachTerm(sess) {
   term.open(pane);
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws/term?id=${encodeURIComponent(sess.id)}`);
+  const nodeQ = isLocal(state.currentNode) ? '' : `&node=${encodeURIComponent(state.currentNode)}`;
+  const ws = new WebSocket(`${proto}://${location.host}/ws/term?id=${encodeURIComponent(sess.id)}${nodeQ}`);
   ws.binaryType = 'arraybuffer';
 
   ws.onopen = () => { doFit(); };
@@ -595,7 +739,7 @@ function attachTerm(sess) {
   const x = el('span', 'x', '×');
   x.addEventListener('click', async ev => {
     ev.stopPropagation();
-    await api.del(`/api/tasks/${state.current}/terminals/${sess.id}`);
+    await api.del(`${tb()}/tasks/${state.current}/terminals/${sess.id}`);
     const e = state.terms.get(sess.id);
     if (e) { try { e.ws.close(); } catch {} e.term.dispose(); e.pane.remove(); }
     state.terms.delete(sess.id);
@@ -637,7 +781,7 @@ function startRename(tab, sess) {
     tab.replaceChild(span, input);
     if (!commit || !next || next === current) return;
     try {
-      await api.put(`/api/tasks/${state.current}/terminals/${sess.id}`, { title: next });
+      await api.put(`${tb()}/tasks/${state.current}/terminals/${sess.id}`, { title: next });
       sess.title = next;
     } catch (e) {
       span.textContent = current;   // server rejected it — do not lie in the UI
@@ -676,7 +820,7 @@ $('#btn-newagent').addEventListener('click', async () => {
   const b = $('#btn-newagent');
   b.disabled = true;
   try {
-    const s = await api.post(`/api/tasks/${state.current}/terminals`, { kind: 'agent' });
+    const s = await api.post(`${tb()}/tasks/${state.current}/terminals`, { kind: 'agent' });
     attachTerm(s);
     selectTerm(s.id);
   } catch (e) { alert(e.message); }
@@ -705,7 +849,7 @@ async function renderResumable() {
   host.innerHTML = '';
   if (!agentInfo(state.taskAgent).resumable) return;
   let list = [];
-  try { list = await api.get(`/api/tasks/${slug}/resumable`); } catch { return; }
+  try { list = await api.get(`${tb()}/tasks/${slug}/resumable`); } catch { return; }
   if (state.current !== slug) return; // switched away mid-flight: not ours to draw
   for (const c of list) {
     const b = el('button', 'mini resume' + (c.inUse ? ' inuse' : ''));
@@ -744,7 +888,7 @@ async function renderResumable() {
       if (state.current !== slug) return;
       b.disabled = true; b.textContent = 'resuming…';
       try {
-        const sess = await api.post(`/api/tasks/${slug}/terminals`,
+        const sess = await api.post(`${tb()}/tasks/${slug}/terminals`,
                                     { kind: 'agent', resumeId: c.id });
         attachTerm(sess); selectTerm(sess.id);
       } catch (e) { alert(e.message); }
@@ -754,7 +898,7 @@ async function renderResumable() {
   }
 }
 $('#btn-newterm').addEventListener('click', async () => {
-  const s = await api.post(`/api/tasks/${state.current}/terminals`, { kind: 'shell', dir: state.filePath });
+  const s = await api.post(`${tb()}/tasks/${state.current}/terminals`, { kind: 'shell', dir: state.filePath });
   attachTerm(s);
   selectTerm(s.id);
 });
@@ -767,7 +911,7 @@ async function loadFiles(path) {
   const list = $('#files-list');
   list.innerHTML = '';
   let entries;
-  try { entries = await api.get(`/api/tasks/${state.current}/files?path=${encodeURIComponent(path)}`); }
+  try { entries = await api.get(`${tb()}/tasks/${state.current}/files?path=${encodeURIComponent(path)}`); }
   catch (e) { list.appendChild(el('div', 'warn', e.message)); return; }
   for (const en of entries || []) {
     const row = el('div', 'file-row' + (en.isDir ? ' dir' : ''));
@@ -781,7 +925,7 @@ async function loadFiles(path) {
 $('#files-reveal').addEventListener('click', async () => {
   const b = $('#files-reveal');
   b.disabled = true;
-  try { await api.post(`/api/tasks/${state.current}/reveal?path=${encodeURIComponent(state.filePath || '')}`); }
+  try { await api.post(`${tb()}/tasks/${state.current}/reveal?path=${encodeURIComponent(state.filePath || '')}`); }
   catch (e) { alert(e.message); }
   b.disabled = false;
 });
@@ -796,7 +940,7 @@ $('#files-up').addEventListener('click', () => {
 
 async function openFile(path) {
   let fc;
-  try { fc = await api.get(`/api/tasks/${state.current}/file?path=${encodeURIComponent(path)}`); }
+  try { fc = await api.get(`${tb()}/tasks/${state.current}/file?path=${encodeURIComponent(path)}`); }
   catch (e) { alert(e.message); return; }
   $('#file-view-name').textContent = path + (fc.truncated ? '  (truncated)' : '');
   $('#file-view-body').textContent = fc.withheld
@@ -852,7 +996,7 @@ function renderIdeChoices(t) {
 $('#btn-up').addEventListener('click', async () => {
   const b = $('#btn-up'); b.disabled = true; b.textContent = 'Starting...';
   try {
-    const s = await api.post(`/api/tasks/${state.current}/stack/up`, { viaIde: [...state.viaIde] });
+    const s = await api.post(`${tb()}/tasks/${state.current}/stack/up`, { viaIde: [...state.viaIde] });
     renderStack(s);
     await refreshTask();
   } catch (e) { alert(e.message); }
@@ -861,14 +1005,14 @@ $('#btn-up').addEventListener('click', async () => {
 
 $('#btn-down').addEventListener('click', async () => {
   const b = $('#btn-down'); b.disabled = true; b.textContent = 'Stopping...';
-  try { renderStack(await api.post(`/api/tasks/${state.current}/stack/down`)); }
+  try { renderStack(await api.post(`${tb()}/tasks/${state.current}/stack/down`)); }
   catch (e) { alert(e.message); }
   b.disabled = false; b.textContent = 'Stop';
 });
 
 for (const b of document.querySelectorAll('[data-set-status]')) {
   b.addEventListener('click', async () => {
-    await setStatus(state.current, b.dataset.setStatus);
+    await setStatus(state.current, b.dataset.setStatus, state.currentNode);
     await refreshTask();
   });
 }
@@ -881,7 +1025,7 @@ async function deleteTask(t, done) {
   // repo and would run on every refresh. Fetch it for this one task instead, so
   // the confirmation can name what is about to be lost.
   let detail = t;
-  try { detail = await api.get('/api/tasks/' + t.slug); } catch { /* fall back to what we have */ }
+  try { detail = await api.get(nodeBase(t.node) + '/tasks/' + t.slug); } catch { /* fall back to what we have */ }
   const dirty = Object.entries(detail.dirty || {}).filter(([, n]) => n > 0);
   let warn = `Delete "${detail.name || t.name}"?\n\nThis removes the whole workspace folder:\n  ${detail.workspace}\n` +
              `including every worktree in it. Commits already pushed are safe; anything else is not.`;
@@ -890,13 +1034,13 @@ async function deleteTask(t, done) {
   }
   if (!confirm(warn)) return;
   try {
-    await api.del(`/api/tasks/${t.slug}?purge=1`);
+    await api.del(`${nodeBase(t.node)}/tasks/${t.slug}?purge=1`);
   } catch (e) { alert(e.message); return; }
   if (done) await done();
 }
 
 $('#btn-delete').addEventListener('click', async () => {
-  const t = state.tasks.find(x => x.slug === state.current) || { slug: state.current, name: state.current };
+  const t = findTask(state.current, state.currentNode) || { slug: state.current, name: state.current, node: state.currentNode };
   await deleteTask(t, async () => {
     disposeTerms(); stopPolling();
     state.current = null;
@@ -934,6 +1078,71 @@ $('#toggle-hidden').addEventListener('click', async () => {
 
 $('#nav-board').addEventListener('click', async () => { stopPolling(); stopOrch(); await loadBoard(); showView('board'); });
 $('#nav-instances').addEventListener('click', async () => { stopPolling(); stopOrch(); await loadInstances(); showView('instances'); });
+$('#nav-computers').addEventListener('click', async () => { stopPolling(); stopOrch(); await loadComputers(); showView('computers'); });
+
+async function loadComputers() {
+  await loadFleet();
+  const f = state.fleet;
+  const me = $('#computer-self');
+  me.innerHTML = '';
+  const st = f.state || {};
+  const head = el('div', 'comp-head');
+  head.appendChild(el('span', 'dot ' + (st.phase === 'running' ? 'good' : 'fail')));
+  head.appendChild(el('b', null, f.self || 'this computer'));
+  head.appendChild(el('span', 'hint', ' — this computer · ' + (st.phase || '?') + (st.kind ? ' (' + st.kind + ')' : '')));
+  me.appendChild(head);
+  if (st.self && st.self.loginName) me.appendChild(el('div', 'hint', 'signed in as ' + st.self.loginName));
+  if (st.phase === 'needs-login') {
+    const p = el('div', 'signin');
+    p.appendChild(document.createTextNode('Sign this computer in to your tailnet: '));
+    if (st.authUrl) {
+      const a = el('a', null, st.authUrl);
+      a.href = st.authUrl; a.target = '_blank';
+      p.appendChild(a);
+    } else p.appendChild(el('span', 'hint', 'waiting for the sign-in link…'));
+    me.appendChild(p);
+  }
+  if (st.error) me.appendChild(el('div', 'warn', st.error));
+
+  const rows = $('#computers-table').querySelector('tbody');
+  rows.innerHTML = '';
+  const tasks = state.tasks || [];
+  for (const p of f.peers || []) {
+    const tr = el('tr');
+    tr.appendChild(el('td', null, p.name));
+    const s = el('td');
+    s.appendChild(el('span', 'dot ' + (p.online ? 'good' : 'fail')));
+    s.appendChild(document.createTextNode(p.online ? ' online' : ' offline' + (p.lastSeen && !p.lastSeen.startsWith('0001') ? ' since ' + new Date(p.lastSeen).toLocaleString() : '')));
+    tr.appendChild(s);
+    tr.appendChild(el('td', null, p.os || ''));
+    tr.appendChild(el('td', null, String(tasks.filter(t => t.node === p.name).length)));
+    rows.appendChild(tr);
+  }
+  if (!(f.peers || []).length) {
+    const tr = el('tr');
+    const td = el('td', 'hint', 'No other computers yet. Run `fride serve --fleet` on another one, signed in to the same account.');
+    td.colSpan = 4;
+    tr.appendChild(td);
+    rows.appendChild(tr);
+  }
+  const mh = $('#mirror-list');
+  mh.innerHTML = '';
+  for (const m of f.mirrors || []) {
+    const row = el('div', 'baserow');
+    row.appendChild(el('span', null, `localhost:${m.port}`));
+    row.appendChild(el('span', 'n', `${m.task} on ${m.node}` + (m.connections ? ` · ${m.connections} open` : '')));
+    row.appendChild(el('span', 'sp'));
+    const x = el('button', 'mini', 'stop');
+    x.addEventListener('click', async () => {
+      await api.del(`/api/fleet/mirror?node=${encodeURIComponent(m.node)}&task=${encodeURIComponent(m.task)}`);
+      await loadComputers();
+    });
+    row.appendChild(x);
+    mh.appendChild(row);
+  }
+  if (!(f.mirrors || []).length) mh.appendChild(el('div', 'hint', 'Nothing from another computer is open here.'));
+}
+
 $('#nav-orch').addEventListener('click', async () => { stopPolling(); showView('orch'); startOrch(); });
 
 /* ------------------------------------------------ environment prerequisites */
@@ -1064,7 +1273,8 @@ function renderModePicker() {
   const host = $('#mode-picker');
   if (!host) return;
   host.innerHTML = '';
-  const profiles = (state.config && state.config.profiles) || [];
+  const cfg = state.newConfig || state.config || {};
+  const profiles = cfg.profiles || [];
   for (const p of profiles) {
     const row = el('label', 'agent-pick');
     const rb = el('input');
@@ -1075,7 +1285,7 @@ function renderModePicker() {
     rb.addEventListener('change', () => { state.newProfile = p.name; renderModeHints(); });
     row.appendChild(rb);
     const nm = el('div');
-    nm.appendChild(document.createTextNode(p.name + (p.name === state.config.defaultProfile ? ' (default)' : '')));
+    nm.appendChild(document.createTextNode(p.name + (p.name === cfg.defaultProfile ? ' (default)' : '')));
     nm.appendChild(el('small', null, p.description || p.services.join(', ')));
     row.appendChild(nm);
     host.appendChild(row);
@@ -1098,15 +1308,49 @@ $('#btn-new').addEventListener('click', async () => {
   $('#new-branch').value = '';
   state.branchEdited = false;
   setBranchHint('');
-  await loadConfig();
-  if (!state.newProfile || !(state.config.profiles || []).some(p => p.name === state.newProfile)) {
-    state.newProfile = (state.config && state.config.defaultProfile) || '';
+  await loadFleet();
+  if (!isLocal(state.newNode) && !onlinePeers().some(p => p.name === state.newNode)) state.newNode = '';
+  renderNodePicker();
+  await fillNewTask();
+  $('#modal').classList.remove('hidden');
+  $('#new-name').focus();
+});
+
+// The computer the new task runs on. Only offered when there is a choice.
+function renderNodePicker() {
+  const host = $('#node-picker');
+  const peers = onlinePeers();
+  $('#node-line').classList.toggle('hidden', !state.fleet.enabled || peers.length === 0);
+  host.innerHTML = '';
+  const options = [{ name: '', label: (state.fleet.self || 'this computer') + ' (this computer)' }]
+    .concat(peers.map(p => ({ name: p.name, label: p.name + (p.os ? ' · ' + p.os : '') })));
+  for (const o of options) {
+    const row = el('label', 'agent-pick');
+    const rb = el('input');
+    rb.type = 'radio';
+    rb.name = 'node';
+    rb.checked = isLocal(o.name) ? isLocal(state.newNode) : o.name === state.newNode;
+    rb.addEventListener('change', async () => { state.newNode = o.name; await fillNewTask(); });
+    row.appendChild(rb);
+    row.appendChild(el('div', null, o.label));
+    host.appendChild(row);
+  }
+}
+
+// fillNewTask loads what the chosen computer offers: its repositories (with
+// their branches), its profiles and its agent CLIs.
+async function fillNewTask() {
+  const base = nodeBase(state.newNode);
+  try { state.newConfig = await api.get(base + '/config'); }
+  catch (e) { $('#modal-error').textContent = e.message; state.newConfig = { profiles: [] }; }
+  if (!state.newProfile || !(state.newConfig.profiles || []).some(p => p.name === state.newProfile)) {
+    state.newProfile = state.newConfig.defaultProfile || '';
   }
   renderModePicker();
-  const core = new Set((state.config && state.config.coreRepos) || []);
+  const core = new Set(state.newConfig.coreRepos || []);
   const picker = $('#repo-picker');
   picker.innerHTML = '';
-  state.repos = await api.get('/api/repos');
+  try { state.repos = await api.get(base + '/repos'); } catch { state.repos = []; }
   for (const r of state.repos) {
     // Core repositories make up the app, so they start out selected.
     const on = r.exists && core.has(r.name);
@@ -1142,7 +1386,7 @@ $('#btn-new').addEventListener('click', async () => {
     });
     picker.appendChild(row);
   }
-  try { await loadAgents(); } catch (e) { console.error('agents:', e); }
+  try { await loadAgents(base); } catch (e) { console.error('agents:', e); }
   // Default to the last choice, unless that CLI is gone from this machine.
   state.newAgent = state.agentDefault;
   if (!agentInfo(state.newAgent).installed) {
@@ -1150,9 +1394,7 @@ $('#btn-new').addEventListener('click', async () => {
     if (first) state.newAgent = first.kind;
   }
   renderAgentPicker();
-  $('#modal').classList.remove('hidden');
-  $('#new-name').focus();
-});
+}
 
 // Agents that are not installed stay visible but disabled, with the reason:
 // "why can I not pick Antigravity" then answers itself.
@@ -1259,7 +1501,7 @@ $('#modal-create').addEventListener('click', async () => {
 
   btn.disabled = true; btn.textContent = 'Creating...';
   try {
-    const t = await api.post('/api/tasks', {
+    const t = await api.post(nodeBase(state.newNode) + '/tasks', {
       name, repos,
       agent: state.newAgent,
       branch: $('#new-branch').value.trim(),
@@ -1269,7 +1511,7 @@ $('#modal-create').addEventListener('click', async () => {
     });
     $('#modal').classList.add('hidden');
     await loadBoard();
-    await openTask(t.slug);
+    await openTask(t.slug, state.newNode);
   } catch (e) {
     err.textContent = e.message;
   }
@@ -1700,7 +1942,7 @@ async function loadJournal() {
   const host = $('#jr-list'), sel = $('#jr-filter');
   if (!host) return;
   let entries = [];
-  try { entries = await api.get(`/api/tasks/${state.current}/journal`); }
+  try { entries = await api.get(`${tb()}/tasks/${state.current}/journal`); }
   catch (e) { host.innerHTML = ''; host.appendChild(el('div', 'warn', e.message)); return; }
   state.journal = entries;
 
@@ -1769,7 +2011,7 @@ async function showDoc() {
   body.textContent = 'composing...';
   $('#docpop-path').textContent = '';
   try {
-    const r = await api.get(`/api/tasks/${state.current}/rationale`);
+    const r = await api.get(`${tb()}/tasks/${state.current}/rationale`);
     body.textContent = r.markdown;
     $('#docpop-path').textContent = r.path
       ? 'Writes to ' + r.path
@@ -1786,7 +2028,7 @@ $('#docpop-write').addEventListener('click', async () => {
   b.disabled = true;
   b.textContent = narrate ? 'writing (the narrative takes a moment)...' : 'writing...';
   try {
-    const r = await api.post(`/api/tasks/${state.current}/rationale`, { narrate });
+    const r = await api.post(`${tb()}/tasks/${state.current}/rationale`, { narrate });
     $('#docpop-path').textContent = 'wrote ' + r.path;
     if (narrate) await showDoc();
   } catch (e) { $('#docpop-path').textContent = e.message; }
