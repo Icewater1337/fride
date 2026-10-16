@@ -36,6 +36,7 @@ import (
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/ide"
 	"github.com/Icewater1337/fride/internal/infra"
+	"github.com/Icewater1337/fride/internal/mem"
 	"github.com/Icewater1337/fride/internal/settings"
 )
 
@@ -110,12 +111,51 @@ type UpOptions struct {
 	// ViaIDE names services handed to their JetBrains IDE instead of being
 	// started headlessly; starting both would only fight over the port.
 	ViaIDE []string
+	// Force starts the stack even when the memory check says there is no
+	// room. Only ever set by a person who has seen the refusal: an
+	// orchestrated boot happens while nobody is watching, which is exactly
+	// when a machine-wide OOM kill goes unnoticed.
+	Force bool
+}
+
+// ErrNoMemory is the memory check's refusal. It carries the reading so the
+// caller can show what was full, and it is distinguishable from every other
+// failure so the UI can offer to start anyway.
+type ErrNoMemory struct {
+	Reason string
+	State  mem.State
+}
+
+func (e ErrNoMemory) Error() string { return "not enough memory to start a stack: " + e.Reason }
+
+// MemoryBudget is what one more stack needs, from config.json.
+func MemoryBudget(cfg *config.Config) mem.Budget {
+	if cfg.Settings == nil {
+		return mem.Budget{}
+	}
+	host, docker := cfg.Settings.MemoryGB()
+	return mem.Budget{Host: uint64(host * (1 << 30)), Docker: uint64(docker * (1 << 30))}
 }
 
 // Up starts the task's stack and returns at once; `Wait` follows it to ready.
 func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 	if _, err := Resolve(cfg, slug, 0); err != nil {
 		return nil, err
+	}
+	// Before anything is allocated or written: is there room? A stack that is
+	// already up costs nothing more, so re-running up on it is never refused.
+	var memWarn string
+	if k := LookupK(cfg, slug); k == 0 || !instanceBusy(cfg, slug, k) {
+		budget := MemoryBudget(cfg)
+		state := mem.Get(budget)
+		if ok, why := mem.Room(state, budget); !ok {
+			if !opt.Force {
+				return nil, ErrNoMemory{Reason: why, State: state}
+			}
+			memWarn = "started anyway: " + why
+		} else {
+			memWarn = mem.Warn(state, budget)
+		}
 	}
 	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
@@ -126,6 +166,9 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 		return nil, err
 	}
 	var warnings []string
+	if memWarn != "" {
+		warnings = append(warnings, memWarn)
+	}
 
 	ip, usesContainers, err := plan.containers()
 	if err != nil {

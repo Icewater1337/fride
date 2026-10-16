@@ -106,7 +106,7 @@ fride task profile <task> <profile>       # applies at the next stack up
 fride task service <task> <svc> <shared|task|off|default>
 fride task rm <task> [--force]
 
-fride stack up [task] [--wait]            # --wait: block until ready, exit 1 with logs if not
+fride stack up [task] [--wait] [--force]  # --wait: block until ready, exit 1 with logs if not
 fride stack status [task]
 fride stack logs [task] <service>
 fride stack down [task]
@@ -152,6 +152,10 @@ A few things worth knowing:
   server from a daemon and dev servers fork children of their own. Killing the
   launcher would leave the old build listening, and the next start would
   silently keep serving it.
+- **A stack does not start into a full machine.** When the computer, or
+  Docker, has less memory left than a stack needs (`memory` in config.json),
+  `stack up` refuses and says what is full; `--force`, or *Start anyway* in
+  the UI, overrides it.
 - **A busy port is never adopted as a fresh start.** `stack up` on a port
   that something else holds refuses, rather than reporting success against the
   old process.

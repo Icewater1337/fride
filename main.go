@@ -11,6 +11,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -77,9 +78,10 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
                                         uncommitted work, decision log and conversation
   task rm <task> [--force]              remove the workspace
 
-  stack up [task] [--wait] [--timeout 10m] [--ide <svc,...>]
+  stack up [task] [--wait] [--timeout 10m] [--ide <svc,...>] [--force]
                                         start the stack; --wait blocks until ready
-                                        (exit 1 with the failing logs otherwise)
+                                        (exit 1 with the failing logs otherwise);
+                                        --force starts it even without memory to spare
   stack wait [task] [--timeout 10m]     wait for a started stack to be ready
   stack down [task]                     stop it
   stack status [task] [--json]          what runs, how, on which port
@@ -859,6 +861,7 @@ func cmdStack(cfg *config.Config, st *store.Store, args []string) {
 	}
 
 	waitFlag, rest := flagBool(rest, "--wait")
+	force, rest := flagBool(rest, "--force")
 	asJSON, rest := flagBool(rest, "--json")
 	timeoutS, rest := flagValue(rest, "--timeout")
 	ideList, rest := flagValue(rest, "--ide")
@@ -904,7 +907,11 @@ func cmdStack(cfg *config.Config, st *store.Store, args []string) {
 		if ideList != "" {
 			viaIDE = strings.Split(ideList, ",")
 		}
-		s, err := stack.Up(cfg, t.Slug, stack.UpOptions{ViaIDE: viaIDE})
+		s, err := stack.Up(cfg, t.Slug, stack.UpOptions{ViaIDE: viaIDE, Force: force})
+		var noMem stack.ErrNoMemory
+		if errors.As(err, &noMem) {
+			check(fmt.Errorf("%w\nstart it anyway with --force", err))
+		}
 		check(err)
 		if t.Status == store.StatusOpen {
 			_, _ = st.Update(t.Slug, func(t *store.Task) error { t.Status = store.StatusInProgress; return nil })

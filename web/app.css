@@ -650,3 +650,12 @@ body.unconfigured #btn-new, body.unconfigured nav, body.unconfigured #switcher {
 #computer-self { max-width: 760px; }
 #fleetbar a { margin-left: 6px; word-break: break-all; }
 .task-head button, .task-head .badge { white-space: nowrap; }
+
+/* memory headroom under the Start button. Three states, because "you cannot
+   start another" and "this is the last one that fits" are different news. */
+.memhead { margin: 6px 0 2px; font-size: 11px; line-height: 1.4; }
+.memhead .memline { opacity: .75; font-variant-numeric: tabular-nums; }
+.memhead .memwhy { margin-top: 2px; }
+.memhead.tight .memwhy { color: var(--amber); }
+.memhead.bad .memline,
+.memhead.bad .memwhy { color: var(--red); }

@@ -100,6 +100,17 @@ func (s *Settings) Check() []Problem {
 	}
 	out = append(out, s.checkPorts()...)
 
+	if m := s.Memory; m != nil {
+		for _, f := range []struct {
+			where string
+			v     *float64
+		}{{"memory.perStackGB", m.PerStackGB}, {"memory.dockerPerStackGB", m.DockerPerStackGB}} {
+			if f.v != nil && (*f.v < 0 || *f.v > 256) {
+				add(true, f.where, "GB, between 0 (no check) and 256")
+			}
+		}
+	}
+
 	if l := s.Ledger; l != nil {
 		if strings.TrimSpace(l.Remote) == "" {
 			add(true, "ledger.remote", "name the ledger repository's git URL")

@@ -33,6 +33,7 @@ internal/settings        config.json: schema, templates, validation (`config che
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
 internal/infra           docker compose: shared and per-task containers
+internal/mem             the memory check before a stack starts
 internal/fleet           fleet mode: tailnet (tsnet) / loopback network, identity, tunnels
 internal/move            continue a task on another computer: snapshot, bundles, restore
 internal/scan            `fride scan`: evidence about repositories for setup

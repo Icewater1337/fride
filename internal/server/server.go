@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -24,6 +25,7 @@ import (
 	"github.com/Icewater1337/fride/internal/fleet"
 	"github.com/Icewater1337/fride/internal/ide"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/mem"
 	"github.com/Icewater1337/fride/internal/orchestrator"
 	"github.com/Icewater1337/fride/internal/settings"
 	"github.com/Icewater1337/fride/internal/stack"
@@ -129,6 +131,7 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/instances", s.handleInstances) // every slot holder
 	mux.HandleFunc("/api/suggest-branch", s.handleSuggestBranch)
 	mux.HandleFunc("/api/env", s.handleEnv)
+	mux.HandleFunc("/api/mem", s.handleMem)
 	mux.HandleFunc("/ws/term", s.handleTermWS) // terminal stream
 }
 
@@ -140,6 +143,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+// handleMem serves the reading behind the memory check, so the task view can
+// show the headroom before Start is pressed rather than only explain a refusal
+// afterwards.
+func (s *Server) handleMem(w http.ResponseWriter, r *http.Request) {
+	b := stack.MemoryBudget(s.cfg)
+	st := mem.Get(b)
+	ok, why := mem.Room(st, b)
+	writeJSON(w, 200, map[string]any{
+		"mem": st, "budget": b, "roomForAnother": ok, "reason": why, "warn": mem.Warn(st, b),
+	})
 }
 
 // ---------------------------------------------------------------- repos
@@ -780,9 +795,17 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	case action == "stack/up" && r.Method == http.MethodPost:
 		var req struct {
 			ViaIDE []string `json:"viaIde"`
+			Force  bool     `json:"force"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req) // body is optional
-		st, err := stack.Up(s.cfg, slug, stack.UpOptions{ViaIDE: req.ViaIDE})
+		st, err := stack.Up(s.cfg, slug, stack.UpOptions{ViaIDE: req.ViaIDE, Force: req.Force})
+		var noMem stack.ErrNoMemory
+		if errors.As(err, &noMem) {
+			// Flagged rather than just worded, so the UI can offer to start
+			// anyway instead of asking the user to go and free memory blind.
+			writeJSON(w, 409, map[string]any{"error": noMem.Error(), "memoryBlock": true, "mem": noMem.State})
+			return
+		}
 		if err != nil {
 			writeErr(w, 400, err)
 			return

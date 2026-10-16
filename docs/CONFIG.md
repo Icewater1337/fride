@@ -124,6 +124,7 @@ backend's compose file.
 | `profiles` | The ways the stack can boot. |
 | `requirements` | Things the machine must have, checked by `fride doctor`. |
 | `ledger` | Publish every task's rationale document to a shared git repository. See [ledger](#ledger). |
+| `memory` | What one more stack needs, checked before a stack starts. See [memory](#memory). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 
 ## repos.&lt;name&gt;
@@ -270,6 +271,30 @@ Publishing by hand: `fride rationale <task> --publish`, or **Publish to the
 ledger** in the rationale dialog. A document that has not changed since the
 last publish is not pushed again. `fride doctor` checks that the ledger can be
 reached.
+
+## memory
+
+A stack that boots into a full machine does not fail cleanly: the OS kills
+something, and on macOS that can be FrIDE itself and the agent sessions it
+holds. So before a stack starts, FrIDE checks that there is room for it, and
+refuses with the reason when there is not. The task view shows the headroom
+under **Start**, and offers to start anyway; from the shell it is
+`fride stack up --force`. A stack that is already running is never refused,
+and the orchestrator never forces.
+
+```json
+"memory": { "perStackGB": 3, "dockerPerStackGB": 2 }
+```
+
+| field | meaning |
+|---|---|
+| `perStackGB` | The computer's RAM one stack needs. Default 2. Measure yours: the sum of the services' resident memory once the stack is up. |
+| `dockerPerStackGB` | Docker's memory one stack needs: the containers its services start, Testcontainers included. Default 0, not checked. On macOS Docker has a fixed allotment of its own, which fills while the computer still looks idle, and a full one shows up as a service that cannot reach its database. |
+
+`0` turns a check off. The computer's side counts what can be handed out without
+swapping (`vm_stat` on macOS, `MemAvailable` on Linux). On macOS the kernel's
+memory pressure counts too: critical always refuses, and a raised level refuses
+when only about one stack fits. Docker's side sums `docker stats`.
 
 ## requirements
 

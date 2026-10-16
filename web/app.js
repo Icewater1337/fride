@@ -271,6 +271,7 @@ async function openTask(slug, node) {
   const t = state.tasks.find(x => x.slug === slug);
   // each of these is independent — one failing must not abandon the others
   try { await syncTerminals(); } catch (e) { console.error('terminals:', e); }
+  loadMem().catch(e => console.error('mem:', e));
   loadUsage().catch(e => console.error('usage:', e));
   loadJournal().catch(e => console.error('journal:', e));
   startPolling();
@@ -658,6 +659,10 @@ setInterval(() => {
   if ($('#board').classList.contains('active')) loadEnv(false);
 }, 120000);
 
+setInterval(() => {
+  if ($('#task').classList.contains('active')) loadMem();
+}, 20000);
+
 // per-tab dot, so you can tell WHICH agent needs you inside a task
 function markTabAttention(entry) {
   const tab = [...document.querySelectorAll('.tab')].find(t => t.dataset.id === entry.sess.id);
@@ -996,12 +1001,54 @@ function renderIdeChoices(t) {
 $('#btn-up').addEventListener('click', async () => {
   const b = $('#btn-up'); b.disabled = true; b.textContent = 'Starting...';
   try {
-    const s = await api.post(`${tb()}/tasks/${state.current}/stack/up`, { viaIde: [...state.viaIde] });
-    renderStack(s);
-    await refreshTask();
-  } catch (e) { alert(e.message); }
+    await startStack(false);
+  } catch (e) {
+    // The memory check is the one refusal worth arguing with: it is an
+    // estimate about the near future, and the user can see things it cannot
+    // (a build that just finished, an IDE they are about to close).
+    if (e.data && e.data.memoryBlock) {
+      if (confirm(e.message + '\n\nStart it anyway?')) {
+        try { await startStack(true); } catch (e2) { alert(e2.message); }
+      }
+    } else {
+      alert(e.message);
+    }
+  }
   b.disabled = false; b.textContent = 'Start';
+  loadMem();
 });
+
+async function startStack(force) {
+  const s = await api.post(`${tb()}/tasks/${state.current}/stack/up`, { viaIde: [...state.viaIde], force });
+  renderStack(s);
+  await refreshTask();
+}
+
+/* ------------------------------------------------------------------ memory
+
+   Two ceilings share this line: the computer's RAM and Docker's own
+   allotment, which a stack's containers can fill long before the computer
+   notices. Shown before Start rather than only explained after a refusal.
+   It is the memory of the computer the task runs on, hence tb(). */
+
+async function loadMem() {
+  const host = $('#mem-head');
+  if (!host) return;
+  let m;
+  try { m = await api.get(`${tb()}/mem`); } catch { host.textContent = ''; return; }
+  host.innerHTML = '';
+  if (!m.budget.host && !m.budget.docker) { host.className = 'memhead'; return; }
+  const gb = (b) => (b / (1 << 30)).toFixed(1) + ' GB';
+  host.className = 'memhead ' + (m.roomForAnother ? (m.warn ? 'tight' : 'ok') : 'bad');
+  const parts = [];
+  if (m.budget.host && m.mem.hostTotal) parts.push(`RAM ${gb(m.mem.hostFree)} free of ${gb(m.mem.hostTotal)}`);
+  if (m.budget.docker && m.mem.dockerKnown) {
+    parts.push(`Docker ${gb(m.mem.dockerTotal - m.mem.dockerUsed)} of ${gb(m.mem.dockerTotal)}`);
+  }
+  host.appendChild(el('div', 'memline', parts.join(' · ')));
+  if (!m.roomForAnother) host.appendChild(el('div', 'memwhy', 'No room for another stack: ' + m.reason));
+  else if (m.warn) host.appendChild(el('div', 'memwhy', m.warn));
+}
 
 $('#btn-down').addEventListener('click', async () => {
   const b = $('#btn-down'); b.disabled = true; b.textContent = 'Stopping...';

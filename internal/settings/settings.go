@@ -54,6 +54,8 @@ type Settings struct {
 	Fleet *Fleet `json:"fleet,omitempty"`
 	// Ledger publishes every task's rationale document to a shared repository.
 	Ledger *Ledger `json:"ledger,omitempty"`
+	// Memory is what one more stack needs, checked before a stack starts.
+	Memory *Memory `json:"memory,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -240,6 +242,36 @@ type Ledger struct {
 	Author string `json:"author,omitempty"`
 	// OnDone publishes automatically when a task moves to Done. Default true.
 	OnDone *bool `json:"onDone,omitempty"`
+}
+
+// Memory is what one more stack of this project needs, in GB. Before a stack
+// starts, FrIDE checks that the computer, and Docker, have that much left: a
+// boot into a full machine does not fail cleanly, the OS kills something.
+// Pointers, because 0 is meaningful: it turns that check off.
+type Memory struct {
+	// PerStackGB is the computer's RAM one stack needs. Default 2.
+	PerStackGB *float64 `json:"perStackGB,omitempty"`
+	// DockerPerStackGB is Docker's memory one stack needs: the containers its
+	// services start, Testcontainers included. Default 0 (not checked).
+	DockerPerStackGB *float64 `json:"dockerPerStackGB,omitempty"`
+}
+
+// DefaultPerStackGB is the RAM a stack is assumed to need when config.json
+// does not say.
+const DefaultPerStackGB = 2
+
+// MemoryGB returns what one stack needs of the computer and of Docker.
+func (s *Settings) MemoryGB() (host, docker float64) {
+	host = DefaultPerStackGB
+	if m := s.Memory; m != nil {
+		if m.PerStackGB != nil {
+			host = *m.PerStackGB
+		}
+		if m.DockerPerStackGB != nil {
+			docker = *m.DockerPerStackGB
+		}
+	}
+	return host, docker
 }
 
 // Requirement is a machine prerequisite. Exactly one of Env and Command.
