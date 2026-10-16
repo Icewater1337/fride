@@ -110,6 +110,14 @@ func main() {
 		fmt.Print(helpText)
 		os.Exit(1)
 	}
+	// `fride <command> --help` prints help rather than running the command:
+	// `serve --help` starting a server is not what anyone meant.
+	for _, a := range os.Args[2:] {
+		if a == "-h" || a == "--help" {
+			fmt.Print(helpText)
+			return
+		}
+	}
 	cfg := config.Default()
 
 	// Commands that work before setup, or that must not touch the task store.
