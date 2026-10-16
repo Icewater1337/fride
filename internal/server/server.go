@@ -1336,7 +1336,7 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 		if ports, _, err := stack.Ports(s.cfg, e.Name); err == nil {
 			i.Ports = ports
 			for _, port := range ports {
-				if stack.PortBusy(port) {
+				if stack.PortHeldCached(port) {
 					i.Holding = append(i.Holding, port)
 				}
 			}

@@ -835,7 +835,7 @@ func cmdStack(cfg *config.Config, st *store.Store, args []string) {
 				}
 				sort.Strings(names)
 				for _, n := range names {
-					if stack.PortBusy(ports[n]) {
+					if stack.PortHeldCached(ports[n]) {
 						live = append(live, fmt.Sprintf("%s:%d", n, ports[n]))
 					}
 				}
@@ -1055,7 +1055,7 @@ func cmdInfra(cfg *config.Config, st *store.Store, args []string) {
 	shared, args := flagBool(args, "--shared")
 	if sub == "down" && shared {
 		// The shared set belongs to no task, so none is needed to stop it.
-		n, err := stack.InfraDownShared()
+		n, err := stack.InfraDownShared(cfg)
 		check(err)
 		if n == 0 {
 			fmt.Println("no shared containers were running")

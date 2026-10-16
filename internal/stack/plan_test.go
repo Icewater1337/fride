@@ -86,7 +86,7 @@ func TestResolveModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]struct {
-		mode string
+		mode Mode
 		port int
 	}{
 		"api":    {ModeSource, 8093},

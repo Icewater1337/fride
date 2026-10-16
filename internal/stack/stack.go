@@ -7,28 +7,36 @@
 // the task's slot, and is started detached through `fride _run` (runner.go),
 // which waits for the repo's setup and the service's dependencies before it
 // execs the configured command. That wrapper is what lets `fride stack up`
-// return at once — from the CLI as well as the server — while a dependency
-// install and an ordered start still happen.
+// return without waiting for the services — from the CLI as well as the
+// server — while a dependency install and an ordered start still happen. (The
+// containers are the exception: compose waits for them, image pulls included.)
 //
-// Two traps this package exists to avoid, learned the hard way:
+// Up records what it started (record.go), and Down stops exactly that, not
+// whatever the task's profile says by then.
+//
+// Three traps this package exists to avoid, learned the hard way:
 //
 //   - Killing the launcher does not free the port. Build tools fork the real
 //     server from a daemon, and dev servers fork children of their own, so
 //     neither is in the launcher's process group. Stop therefore reaps by port
 //     as well, or a down/up cycle silently keeps serving the previous build.
 //   - A live port must never look like a fresh start: re-running up on a busy
-//     port refuses rather than reports success against the old process.
+//     port refuses rather than reports success against the old process, and
+//     the refusal is recorded so that Wait does not either.
+//   - A pid file is not a process. Pids are reused, so a launcher is known by
+//     its pid and start time (proc.go) before it is ever signalled.
 package stack
 
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -43,7 +51,7 @@ import (
 // Service is one component of the stack, as reported by status.
 type Service struct {
 	Name    string            `json:"name"`
-	Mode    string            `json:"mode"`
+	Mode    Mode              `json:"mode"`
 	Repo    string            `json:"repo,omitempty"`
 	Port    int               `json:"port,omitempty"`
 	Running bool              `json:"running"`
@@ -81,15 +89,13 @@ func LogPath(cfg *config.Config, slug, name string) string {
 	return filepath.Join(logs, name+".log")
 }
 
-func readPID(cfg *config.Config, slug, name string) int {
-	_, pids := runDirs(cfg, slug)
-	b, err := os.ReadFile(filepath.Join(pids, name+".pid"))
-	if err != nil {
-		return 0
-	}
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-	return pid
-}
+// The docker side of a stack, behind variables so the tests run without
+// docker.
+var (
+	dockerAvailable = infra.Available
+	composeUp       = infra.Up
+	composeDown     = infra.Down
+)
 
 // FleetBusy, when set, reports slots held by the user's other computers. Ports
 // are base+slot on every computer, so a slot in use elsewhere is avoided here:
@@ -137,48 +143,68 @@ func MemoryBudget(cfg *config.Config) mem.Budget {
 	return mem.Budget{Host: uint64(host * (1 << 30)), Docker: uint64(docker * (1 << 30))}
 }
 
-// Up starts the task's stack and returns at once; `Wait` follows it to ready.
+// Up starts the task's stack. It returns once the containers are up and the
+// services are launched; `Wait` follows them to ready.
 func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
-	if _, err := Resolve(cfg, slug, 0); err != nil {
+	var warnings []string
+	// A stack that is running keeps the profile and scopes it was started
+	// with: switching under a running stack would start the new profile's
+	// services next to the old one's, on whatever ports each happens to hold.
+	opts, running, note := startOpts(cfg, slug)
+	if note != "" {
+		warnings = append(warnings, note)
+	}
+	if _, err := resolveWith(cfg, slug, 0, opts); err != nil {
 		return nil, err
 	}
 	// Before anything is allocated or written: is there room? A stack that is
 	// already up costs nothing more, so re-running up on it is never refused.
-	var memWarn string
-	if k := LookupK(cfg, slug); k == 0 || !instanceBusy(cfg, slug, k) {
+	if !running {
 		budget := MemoryBudget(cfg)
 		state := mem.Get(budget)
 		if ok, why := mem.Room(state, budget); !ok {
 			if !opt.Force {
 				return nil, ErrNoMemory{Reason: why, State: state}
 			}
-			memWarn = "started anyway: " + why
-		} else {
-			memWarn = mem.Warn(state, budget)
+			warnings = append(warnings, "started anyway: "+why)
+		} else if w := mem.Warn(state, budget); w != "" {
+			warnings = append(warnings, w)
 		}
 	}
 	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
 		return nil, err
 	}
-	plan, err := Resolve(cfg, slug, k)
+	plan, err := resolveWith(cfg, slug, k, opts)
 	if err != nil {
 		return nil, err
 	}
-	var warnings []string
-	if memWarn != "" {
-		warnings = append(warnings, memWarn)
-	}
-
 	ip, usesContainers, err := plan.containers()
 	if err != nil {
 		return nil, err
 	}
+
 	if usesContainers {
-		if err := infra.Available(); err != nil {
+		if err := dockerAvailable(); err != nil {
 			return nil, err
 		}
-		res, w, err := infra.Up(ip)
+	}
+
+	// Recorded before anything starts, so that a start cut short — a crash, a
+	// compose failure halfway — still leaves Down knowing what to stop.
+	rec := recordOf(plan)
+	if old := readRecord(cfg, slug); old != nil {
+		rec.Projects = old.Projects // what an earlier start left is still Down's to stop
+	}
+	if ip.Owns() {
+		rec.addProject(ip.Project())
+	}
+	if err := writeRecord(cfg, slug, rec); err != nil {
+		return nil, err
+	}
+
+	if usesContainers {
+		res, w, err := composeUp(ip)
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +217,7 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 	}
 
 	for _, r := range plan.Ordered() {
-		if r.Mode != ModeSource && r.Mode != ModeExternal {
+		if !r.Mode.Local() {
 			continue
 		}
 		w, err := plan.applyFiles(r)
@@ -210,6 +236,7 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 			continue
 		}
 		if viaIDE[r.Name] {
+			clearLaunch(cfg, slug, r.Name)
 			notes, err := openInIDE(cfg, plan, r)
 			warnings = append(warnings, notes...)
 			if err != nil {
@@ -229,6 +256,19 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 	st := Get(cfg, slug)
 	st.Warnings = append(st.Warnings, warnings...)
 	return st, nil
+}
+
+// startOpts decides what a start of the task starts: the options of the stack
+// that is already running, if one is, else the task's own. note says when the
+// two differ.
+func startOpts(cfg *config.Config, slug string) (o TaskOpts, running bool, note string) {
+	o = Opts(cfg, slug)
+	rec := readRecord(cfg, slug)
+	running, _ = stackRunning(cfg, slug, LookupK(cfg, slug), rec)
+	if running && rec != nil && !rec.matches(cfg, o) {
+		return rec.opts(), true, rec.differs(cfg, o)
+	}
+	return o, running, ""
 }
 
 // applyFiles writes the service's per-task keys into its KEY=VALUE files. A
@@ -279,6 +319,11 @@ func (p *Plan) applyFiles(r *Resolved) ([]string, error) {
 	return warnings, nil
 }
 
+// launcherExe is the binary spawn starts as `<it> _run <task> <service>`:
+// FrIDE itself. A variable so the tests can launch something that is not a
+// test binary.
+var launcherExe = os.Executable
+
 // spawn starts one service detached, through `fride _run`.
 func spawn(cfg *config.Config, p *Plan, r *Resolved) (string, error) {
 	// Validate the templates now, so a config error is reported to whoever
@@ -293,21 +338,28 @@ func spawn(cfg *config.Config, p *Plan, r *Resolved) (string, error) {
 	if err := os.MkdirAll(pids, 0o755); err != nil {
 		return "", err
 	}
-	if pid := readPID(cfg, p.Slug, r.Name); alive(pid) {
-		if r.Port > 0 && portBusy(r.Port) {
-			return fmt.Sprintf("%s: already running (pid %d) on :%d", r.Name, pid, r.Port), nil
+	if ln := launchOf(cfg, p.Slug, r.Name); ln.state == launchRunning {
+		if r.Port > 0 && infra.Held(r.Port) {
+			return fmt.Sprintf("%s: already running (pid %d) on :%d", r.Name, ln.l.pid, r.Port), nil
 		}
-		return fmt.Sprintf("%s: still starting (pid %d)", r.Name, pid), nil
+		return fmt.Sprintf("%s: still starting (pid %d)", r.Name, ln.l.pid), nil
 	}
-	if r.Port > 0 && portBusy(r.Port) {
+	clearLaunch(cfg, p.Slug, r.Name)
+	if r.Port > 0 && infra.Held(r.Port) {
+		holders := infra.Holders(r.Port)
+		// Recorded, because the refusal alone is not enough: Wait, seeing the
+		// port answer, would report this service ready against the process
+		// that holds it.
+		_, _, refused := launchPaths(cfg, p.Slug, r.Name)
+		_ = os.WriteFile(refused, []byte(fmt.Sprintf(":%d was held by pid(s) %v\n", r.Port, holders)), 0o644)
 		return "", fmt.Errorf("%s NOT started — :%d is already held by pid(s) %v (stop it first if you want the current build)",
-			r.Name, r.Port, portPIDs(r.Port))
+			r.Name, r.Port, holders)
 	}
-	self, err := os.Executable()
+	self, err := launcherExe()
 	if err != nil {
 		return "", err
 	}
-	lf, err := os.OpenFile(filepath.Join(logs, r.Name+".log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	lf, err := os.OpenFile(LogPath(cfg, p.Slug, r.Name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return "", err
 	}
@@ -320,10 +372,17 @@ func spawn(cfg *config.Config, p *Plan, r *Resolved) (string, error) {
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
-	pid := cmd.Process.Pid
-	_ = os.WriteFile(filepath.Join(pids, r.Name+".pid"), []byte(strconv.Itoa(pid)), 0o644)
+	pidPath, _, _ := launchPaths(cfg, p.Slug, r.Name)
+	_ = os.WriteFile(pidPath, []byte(launcherOf(cmd.Process.Pid).String()+"\n"), 0o644)
 	go func() { _ = cmd.Wait() }() // reap; the process is detached from our lifetime
 	return "", nil
+}
+
+// clearLaunch forgets how the service's last launch ended, before a new one.
+func clearLaunch(cfg *config.Config, slug, name string) {
+	_, exited, refused := launchPaths(cfg, slug, name)
+	_ = os.Remove(exited)
+	_ = os.Remove(refused)
 }
 
 // openInIDE writes the run configuration into the worktree and opens the IDE.
@@ -378,64 +437,167 @@ func openInIDE(cfg *config.Config, p *Plan, r *Resolved) ([]string, error) {
 	return notes, nil
 }
 
+// launcherGrace is how long a launcher's process group gets to exit after
+// SIGTERM before it is killed. Reaping the ports usually took that long
+// already.
+const launcherGrace = 10 * time.Second
+
 // Down stops the task: signal the recorded process groups, reap by port, stop
-// its own containers, and hand the slot back.
+// its own containers, and hand the slot back. It stops what Up recorded, not
+// what the task's profile says now.
 func Down(cfg *config.Config, slug string) (*Status, error) {
-	_, pidDir := runDirs(cfg, slug)
-	if entries, err := os.ReadDir(pidDir); err == nil {
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".pid") {
-				continue
-			}
-			path := filepath.Join(pidDir, e.Name())
-			if b, err := os.ReadFile(path); err == nil {
-				if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
-					_ = syscall.Kill(-pid, syscall.SIGTERM) // whole group: build tools spawn children
-					_ = syscall.Kill(pid, syscall.SIGTERM)
-				}
-			}
-			_ = os.Remove(path)
-		}
-	}
 	var warnings []string
 	k := LookupK(cfg, slug)
+	rec := readRecord(cfg, slug)
+	services := []recordedService(nil)
+	if rec != nil {
+		services = rec.Services
+	} else if plan, err := Resolve(cfg, slug, k); err == nil {
+		// Started by a FrIDE that kept no record: the profile as it is now is
+		// the best guess there is.
+		services = recordOf(plan).Services
+	} else {
+		warnings = append(warnings, "could not resolve the profile, so only recorded processes were stopped: "+err.Error())
+	}
+
+	launchers := runningLaunchers(cfg, slug)
+	for _, l := range launchers {
+		l.signal(syscall.SIGTERM)
+	}
+	for _, s := range services {
+		if s.Mode != ModeSource || s.Port <= 0 {
+			continue
+		}
+		if err := killPort(s.Port); err != nil {
+			warnings = append(warnings, s.Name+": "+err.Error())
+		}
+	}
+	deadline := time.Now().Add(launcherGrace)
+	for _, l := range launchers {
+		for l.alive() && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		l.signal(syscall.SIGKILL)
+	}
+
+	// Only this task's own containers. The shared ones are left on purpose:
+	// another task is very likely using them.
+	var left []string
+	for _, project := range taskProjects(cfg, slug, rec) {
+		if _, err := composeDown(project); err != nil {
+			warnings = append(warnings, err.Error())
+			left = append(left, project)
+		}
+	}
+	for _, s := range services {
+		if s.Mode == ModeExternal && s.Port > 0 && infra.Held(s.Port) {
+			warnings = append(warnings, fmt.Sprintf("%s on :%d is started by something else and was left running", s.Name, s.Port))
+		}
+	}
+
+	// Hand the slot back — unless something of the stack still runs, in which
+	// case releasing it would give live ports to the next task.
+	kept := false
 	if k > 0 {
-		plan, err := Resolve(cfg, slug, k)
-		if err != nil {
-			warnings = append(warnings, "could not resolve the profile, so only recorded processes were stopped: "+err.Error())
-		} else {
-			for _, r := range plan.Ordered() {
-				if r.Mode != ModeSource || r.Port <= 0 {
-					continue
-				}
-				if err := killPort(r.Port); err != nil {
-					warnings = append(warnings, r.Name+": "+err.Error())
-				}
-			}
-			if ip, any, err := plan.containers(); any && err == nil {
-				// Only this task's own containers. The shared ones are left on
-				// purpose: another task is very likely using them.
-				if err := infra.Down(ip); err != nil {
-					warnings = append(warnings, err.Error())
-				}
-			}
-			for _, r := range plan.Ordered() {
-				if r.Mode == ModeExternal && r.Port > 0 && portBusy(r.Port) {
-					warnings = append(warnings, fmt.Sprintf("%s on :%d is started by something else and was left running", r.Name, r.Port))
-				}
-			}
+		if busy, why := stackBusy(cfg, slug, k); busy {
+			kept = true
+			warnings = append(warnings, fmt.Sprintf("slot %d kept: %s", k, why))
+		} else if err := FreeK(cfg, slug); err != nil {
+			warnings = append(warnings, "could not release the slot: "+err.Error())
 		}
-		// Hand the slot back — unless something of it still listens, in which
-		// case releasing it would give live ports to the next task.
-		if err == nil && instanceBusy(cfg, slug, k) {
-			warnings = append(warnings, fmt.Sprintf("slot %d kept: something is still listening on its ports", k))
-		} else if ferr := FreeK(cfg, slug); ferr != nil {
-			warnings = append(warnings, "could not release the slot: "+ferr.Error())
+	}
+
+	// Forget what is stopped. What is not — a kept slot's survivors,
+	// containers compose would not stop — stays recorded for the next Down.
+	runningLaunchers(cfg, slug) // retires the launchers that are gone
+	forgetLaunches(cfg, slug)
+	switch {
+	case kept && rec != nil:
+		rec.Projects = left
+		if err := writeRecord(cfg, slug, rec); err != nil {
+			warnings = append(warnings, "could not update the stack record: "+err.Error())
 		}
+	case len(left) > 0:
+		if err := writeRecord(cfg, slug, &record{K: k, Projects: left}); err != nil {
+			warnings = append(warnings, "could not update the stack record: "+err.Error())
+		}
+	default:
+		_ = os.Remove(recordPath(cfg, slug))
+		_ = os.Remove(overridePath(cfg, slug))
 	}
 	st := Get(cfg, slug)
 	st.Warnings = append(st.Warnings, warnings...)
 	return st, nil
+}
+
+// stackRunning reports whether anything the task's stack started still runs,
+// and what: a launcher — a service still compiling, or waiting for its setup,
+// listens on nothing yet — or one of the ports FrIDE started something on.
+// Asked exactly: every caller acts on the answer.
+//
+// The ports are the record's when there is one, else the profile's as it is
+// now, in slot k.
+func stackRunning(cfg *config.Config, slug string, k int, rec *record) (bool, string) {
+	launchers := runningLaunchers(cfg, slug)
+	if names := slices.Sorted(maps.Keys(launchers)); len(names) > 0 {
+		return true, fmt.Sprintf("%s is still running (pid %d)", names[0], launchers[names[0]].pid)
+	}
+	var ports []int
+	if rec != nil {
+		ports = rec.startedPorts()
+	} else if k > 0 {
+		if p, err := Resolve(cfg, slug, k); err == nil {
+			ports = p.ownPorts()
+		}
+	}
+	for _, port := range ports {
+		if infra.Held(port) {
+			return true, fmt.Sprintf("something is still listening on :%d", port)
+		}
+	}
+	return false, ""
+}
+
+// stackBusy is stackRunning, or a setup of the task's repos under way: what
+// decides whether the task's slot may be handed to another task.
+func stackBusy(cfg *config.Config, slug string, k int) (bool, string) {
+	if ok, why := stackRunning(cfg, slug, k, readRecord(cfg, slug)); ok {
+		return true, why
+	}
+	if repo := setupRunning(cfg, slug); repo != "" {
+		return true, "the setup of " + repo + " is still running"
+	}
+	return false, ""
+}
+
+// shownRunning is stackRunning for the status view: the ports from the cached
+// snapshot, since a board refresh asks about every task.
+func shownRunning(cfg *config.Config, slug string, rec *record) bool {
+	if len(runningLaunchers(cfg, slug)) > 0 {
+		return true
+	}
+	for _, port := range rec.startedPorts() {
+		if infra.HeldCached(port) {
+			return true
+		}
+	}
+	return false
+}
+
+// activePlan is the plan the task's stack runs with: the one it was started
+// with while anything of that still runs — a profile switched under a running
+// stack applies at its next start — else the task's as configured now. Status,
+// waiting and the port views all describe what actually runs. note says when
+// the two differ.
+func activePlan(cfg *config.Config, slug string, k int) (*Plan, string, error) {
+	o := Opts(cfg, slug)
+	if rec := readRecord(cfg, slug); rec != nil && !rec.matches(cfg, o) && shownRunning(cfg, slug, rec) {
+		if p, err := resolveWith(cfg, slug, k, rec.opts()); err == nil {
+			return p, rec.differs(cfg, o), nil
+		}
+	}
+	p, err := resolveWith(cfg, slug, k, o)
+	return p, "", err
 }
 
 // Get reports what is actually listening, which is the only trustworthy source:
@@ -443,27 +605,40 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 func Get(cfg *config.Config, slug string) *Status {
 	k := LookupK(cfg, slug)
 	st := &Status{Slug: slug, K: k}
-	plan, err := Resolve(cfg, slug, k)
+	plan, note, err := activePlan(cfg, slug, k)
 	if err != nil {
 		st.Error = err.Error()
 		return st
 	}
+	if note != "" {
+		st.Warnings = append(st.Warnings, note)
+	}
 	st.Profile = plan.ProfileName
 	for _, r := range plan.Ordered() {
 		s := Service{Name: r.Name, Mode: r.Mode, Repo: r.Spec.Repo, Port: r.Port, Note: r.Note}
-		s.Own = r.Mode == ModeSource || r.Mode == ModeExternal || r.Mode == ModeTask
-		if r.Port > 0 && r.Mode != ModeOff && r.Mode != ModeAbsent {
-			s.Running = portUp(r.Port)
+		s.Own = r.Mode.Owned()
+		if r.Port > 0 && r.Mode.Present() {
+			s.Running = infra.HeldCached(r.Port)
 		}
 		if s.Running {
 			s.URL = r.URL
 		}
 		if r.Mode == ModeSource {
+			ln := launchOf(cfg, slug, r.Name)
 			s.Log = LogPath(cfg, slug, r.Name)
-			s.PID = readPID(cfg, slug, r.Name)
+			if ln.state == launchRunning {
+				s.PID = ln.l.pid
+			}
 			s.Facts = facts(s.Log, r.Spec.Facts)
-			if !s.Running && k > 0 {
-				s.Note = sourceNote(cfg, slug, r, s.PID)
+			switch {
+			case ln.state == launchRefused:
+				// The port may well answer, but what answers is not this
+				// task's service: showing it UP is the "next start silently
+				// serves the previous build" failure, on the board.
+				s.Running, s.URL = false, ""
+				s.Note = "not started: " + ln.reason
+			case !s.Running && k > 0:
+				s.Note = sourceNote(cfg, slug, r, ln)
 			}
 		}
 		if s.Own {
@@ -475,7 +650,7 @@ func Get(cfg *config.Config, slug string) *Status {
 		st.Services = append(st.Services, s)
 	}
 	st.Up = st.Running > 0
-	if e := plan.Services[plan.Profile.Entry]; e != nil && e.Port > 0 && portUp(e.Port) {
+	if e := plan.Services[plan.Profile.Entry]; e != nil && e.Port > 0 && infra.HeldCached(e.Port) {
 		st.EntryURL = e.URL
 	}
 	return st
@@ -483,19 +658,19 @@ func Get(cfg *config.Config, slug string) *Status {
 
 // sourceNote explains a source service that is not listening, from the
 // filesystem, so the explanation survives a status poll and a restart.
-func sourceNote(cfg *config.Config, slug string, r *Resolved, pid int) string {
+func sourceNote(cfg *config.Config, slug string, r *Resolved, ln launch) string {
 	if r.Spec.Repo != "" {
-		if state := SetupState(cfg, slug, r.Spec.Repo); strings.HasPrefix(state, "running") {
-			return "setup " + state
-		} else if strings.HasPrefix(state, "failed") {
+		if state := SetupState(cfg, slug, r.Spec.Repo); strings.HasPrefix(state, "running") || strings.HasPrefix(state, "failed") {
 			return "setup " + state
 		}
 	}
-	if alive(pid) {
+	switch ln.state {
+	case launchRunning:
 		return "starting"
-	}
-	if _, err := os.Stat(LogPath(cfg, slug, r.Name)); err == nil && pid > 0 {
-		return "exited — see its log"
+	case launchExited:
+		if _, err := os.Stat(LogPath(cfg, slug, r.Name)); err == nil {
+			return "exited — see its log"
+		}
 	}
 	return ""
 }
@@ -540,14 +715,15 @@ type WaitResult struct {
 
 // Wait blocks until every service this task runs or uses is ready — listening,
 // and answering its health URL when it has one — or until something cannot
-// become ready: a process that exited, a failed setup, a timeout. This is the
-// loop a setup agent iterates on, so a failure carries the end of the log.
+// become ready: a process that exited, a failed setup, a refused start, a
+// timeout. This is the loop a setup agent iterates on, so a failure carries
+// the end of the log.
 func Wait(cfg *config.Config, slug string, timeout time.Duration, progress func(string)) ([]WaitResult, error) {
 	k := LookupK(cfg, slug)
 	if k == 0 {
 		return nil, fmt.Errorf("task %s has no slot — run `fride stack up %s` first", slug, slug)
 	}
-	plan, err := Resolve(cfg, slug, k)
+	plan, _, err := activePlan(cfg, slug, k)
 	if err != nil {
 		return nil, err
 	}
@@ -571,56 +747,14 @@ func Wait(cfg *config.Config, slug string, timeout time.Duration, progress func(
 		var results []WaitResult
 		pending, failed := 0, 0
 		for _, r := range plan.Ordered() {
-			if r.Mode == ModeOff || r.Mode == ModeAbsent || r.Port <= 0 {
+			if !r.Mode.Present() || r.Port <= 0 {
 				continue
 			}
-			res := WaitResult{Name: r.Name}
-			listening := infra.Listening(r.Port)
+			res, failedNow := waitOnce(cfg, plan, r, client)
 			switch {
-			case !listening:
-				res.Reason = fmt.Sprintf("not listening on :%d yet", r.Port)
-			case r.Spec.Health != "":
-				u, err := plan.Expand(r.Name, r.Spec.Health)
-				if err != nil {
-					res.Ready = true // nothing to ask; listening is all we know
-					break
-				}
-				resp, err := client.Get(u)
-				if err != nil {
-					res.Reason = "health " + u + ": " + err.Error()
-				} else {
-					resp.Body.Close()
-					if resp.StatusCode < 500 {
-						res.Ready = true
-					} else {
-						res.Reason = fmt.Sprintf("health %s answered %d", u, resp.StatusCode)
-					}
-				}
-			default:
-				res.Ready = true
-			}
-			if !res.Ready && r.Mode == ModeSource {
-				pid := readPID(cfg, slug, r.Name)
-				state := ""
-				if r.Spec.Repo != "" {
-					state = SetupState(cfg, slug, r.Spec.Repo)
-				}
-				switch {
-				case strings.HasPrefix(state, "failed"):
-					res.Reason = "setup " + state
-					res.Log = Tail(LogPath(cfg, slug, r.Name), 40)
-					failed++
-				case pid > 0 && !alive(pid) && !listening:
-					res.Reason = "the process exited"
-					res.Log = Tail(LogPath(cfg, slug, r.Name), 40)
-					failed++
-				case pid == 0:
-					res.Reason = "not started (handed to the IDE, or start refused)"
-				case strings.HasPrefix(state, "running"):
-					res.Reason = "setup " + state
-				}
-			}
-			if !res.Ready && res.Log == "" {
+			case failedNow:
+				failed++
+			case !res.Ready:
 				pending++
 			}
 			if progress != nil {
@@ -655,10 +789,72 @@ func Wait(cfg *config.Config, slug string, timeout time.Duration, progress func(
 	}
 }
 
+// waitOnce looks at one service once: is it ready, and if not, can it still
+// become ready?
+func waitOnce(cfg *config.Config, plan *Plan, r *Resolved, client *http.Client) (res WaitResult, failed bool) {
+	res = WaitResult{Name: r.Name}
+	var ln launch
+	if r.Mode == ModeSource {
+		ln = launchOf(cfg, plan.Slug, r.Name)
+	}
+	if ln.state == launchRefused {
+		// The port may well answer — that is why the start was refused — but
+		// what answers is not this task's service.
+		res.Reason = "not started: " + ln.reason
+		return res, true
+	}
+	listening := infra.Accepting(r.Port)
+	switch {
+	case !listening:
+		res.Reason = fmt.Sprintf("not listening on :%d yet", r.Port)
+	case r.Spec.Health != "":
+		u, err := plan.Expand(r.Name, r.Spec.Health)
+		if err != nil {
+			res.Ready = true // nothing to ask; listening is all we know
+			break
+		}
+		resp, err := client.Get(u)
+		if err != nil {
+			res.Reason = "health " + u + ": " + err.Error()
+		} else {
+			resp.Body.Close()
+			if resp.StatusCode < 500 {
+				res.Ready = true
+			} else {
+				res.Reason = fmt.Sprintf("health %s answered %d", u, resp.StatusCode)
+			}
+		}
+	default:
+		res.Ready = true
+	}
+	if res.Ready || r.Mode != ModeSource {
+		return res, false
+	}
+	state := ""
+	if r.Spec.Repo != "" {
+		state = SetupState(cfg, plan.Slug, r.Spec.Repo)
+	}
+	switch {
+	case strings.HasPrefix(state, "failed"):
+		res.Reason = "setup " + state
+		res.Log = Tail(LogPath(cfg, plan.Slug, r.Name), 40)
+		return res, true
+	case ln.state == launchExited && !listening:
+		res.Reason = "the process exited"
+		res.Log = Tail(LogPath(cfg, plan.Slug, r.Name), 40)
+		return res, true
+	case ln.state == notLaunched:
+		res.Reason = "not started (handed to the IDE?)"
+	case strings.HasPrefix(state, "running"):
+		res.Reason = "setup " + state
+	}
+	return res, false
+}
+
 // Ports reports each service's port for the task, allocating nothing.
 func Ports(cfg *config.Config, slug string) (map[string]int, int, error) {
 	k := LookupK(cfg, slug)
-	plan, err := Resolve(cfg, slug, k)
+	plan, _, err := activePlan(cfg, slug, k)
 	if err != nil {
 		return nil, k, err
 	}
@@ -671,9 +867,13 @@ func Ports(cfg *config.Config, slug string) (map[string]int, int, error) {
 	return out, k, nil
 }
 
+// PortHeldCached reports whether anything listens on a port, from the shared
+// snapshot: for the slot views, which only display it. See infra.HeldCached.
+func PortHeldCached(port int) bool { return infra.HeldCached(port) }
+
 // Infra reports the container picture of a task without touching anything.
 func Infra(cfg *config.Config, slug string) ([]infra.Resolution, error) {
-	plan, err := Resolve(cfg, slug, LookupK(cfg, slug))
+	plan, _, err := activePlan(cfg, slug, LookupK(cfg, slug))
 	if err != nil {
 		return nil, err
 	}
@@ -686,50 +886,80 @@ func Infra(cfg *config.Config, slug string) ([]infra.Resolution, error) {
 
 // InfraUp starts the task's containers without starting the stack.
 func InfraUp(cfg *config.Config, slug string) ([]infra.Resolution, []string, error) {
+	opts, _, note := startOpts(cfg, slug)
+	// Validated before a slot is allocated: a profile without containers must
+	// not cost the task a slot.
+	plan, err := resolveWith(cfg, slug, 0, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, any, err := plan.containers(); err != nil {
+		return nil, nil, err
+	} else if !any {
+		return nil, nil, fmt.Errorf("profile %s uses no containers", plan.ProfileName)
+	}
 	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
 		return nil, nil, err
 	}
-	plan, err := Resolve(cfg, slug, k)
+	if plan, err = resolveWith(cfg, slug, k, opts); err != nil {
+		return nil, nil, err
+	}
+	ip, _, err := plan.containers()
 	if err != nil {
 		return nil, nil, err
 	}
-	ip, any, err := plan.containers()
-	if err != nil {
+	if err := dockerAvailable(); err != nil {
 		return nil, nil, err
 	}
-	if !any {
-		return nil, nil, fmt.Errorf("profile %s uses no containers", plan.ProfileName)
+	rec := readRecord(cfg, slug)
+	if rec == nil {
+		rec = recordOf(plan)
 	}
-	if err := infra.Available(); err != nil {
+	if ip.Owns() {
+		rec.addProject(ip.Project())
+	}
+	if err := writeRecord(cfg, slug, rec); err != nil {
 		return nil, nil, err
 	}
-	return infra.Up(ip)
+	res, warnings, err := composeUp(ip)
+	if note != "" {
+		warnings = append([]string{note}, warnings...)
+	}
+	return res, warnings, err
 }
 
-// InfraDown stops the task's own containers.
+// InfraDown stops the task's own containers: the compose projects it started
+// them in, whatever its profile says now.
 func InfraDown(cfg *config.Config, slug string) error {
-	plan, err := Resolve(cfg, slug, LookupK(cfg, slug))
-	if err != nil {
-		return err
+	rec := readRecord(cfg, slug)
+	var errs []error
+	var left []string
+	for _, project := range taskProjects(cfg, slug, rec) {
+		if _, err := composeDown(project); err != nil {
+			errs = append(errs, err)
+			left = append(left, project)
+		}
 	}
-	ip, any, err := plan.containers()
-	if err != nil {
-		return err
+	if rec != nil {
+		rec.Projects = left
+		if err := writeRecord(cfg, slug, rec); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	if !any {
-		return nil
+	if len(left) == 0 {
+		_ = os.Remove(overridePath(cfg, slug))
 	}
-	return infra.Down(ip)
+	return errors.Join(errs...)
 }
 
-// InfraDownShared stops the containers every task shares, whichever profile
-// started them; it returns how many there were.
-func InfraDownShared() (int, error) {
-	if err := infra.Available(); err != nil {
+// InfraDownShared stops the containers every task of this FrIDE setup shares,
+// whichever profile started them; it returns how many there were.
+func InfraDownShared(cfg *config.Config) (int, error) {
+	if err := dockerAvailable(); err != nil {
 		return 0, err
 	}
-	return infra.DownShared()
+	return infra.DownShared(cfg.StateDir)
 }
 
 // Reserve allocates the task's slot without starting anything, so its ports

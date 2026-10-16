@@ -152,9 +152,18 @@ func Registry(cfg *config.Config) []Entry {
 	return entries
 }
 
-// slotBusyFor is how the registry asks whether a held slot is running. A
+// slotBusy reports whether a held slot is in use: its stack still runs —
+// a launcher alive, a port of its own held — or a setup of its task is under
+// way. Listening alone was not enough: a stack still compiling listens on
+// nothing yet, and `fride stack prune` handed its ports to the next task.
+func slotBusy(cfg *config.Config, e Entry) bool {
+	busy, _ := stackBusy(cfg, e.Name, e.K)
+	return busy
+}
+
+// slotBusyFor is how the registry asks whether a held slot is in use. A
 // variable so the tests do not depend on what the developer has running.
-var slotBusyFor = func(cfg *config.Config, e Entry) bool { return instanceBusy(cfg, e.Name, e.K) }
+var slotBusyFor = slotBusy
 
 // describeSlots renders the registry for an error message: who holds each slot
 // and whether anything of it is actually running.
@@ -172,7 +181,7 @@ func describeSlots(cfg *config.Config, entries []Entry) string {
 	return strings.Join(parts, ", ")
 }
 
-// PruneIdle releases rows whose stack is not running.
+// PruneIdle releases rows whose slot is not in use (see slotBusy).
 //
 // Normally `stack down` hands the slot back, so this only finds rows orphaned
 // by something that never got to: a server killed mid-run, a crash. Rows whose

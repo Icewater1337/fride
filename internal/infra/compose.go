@@ -4,10 +4,12 @@
 // Each container-backed service is provided one of two ways:
 //
 //   - shared — one container serves every task, on its canonical port, in the
-//     compose project "fride-shared". Right for anything holding no per-task
-//     state: a database seeded once, a mock, a telemetry sink.
-//   - task — a container of this task's own, in the project "fride-<task>",
-//     published on the task's port (base+slot) through a generated override.
+//     setup's shared compose project (SharedProject). Right for anything
+//     holding no per-task state: a database seeded once, a mock, a telemetry
+//     sink.
+//   - task — a container of this task's own, in the task's project
+//     (TaskProject), published on the task's port (base+slot) through a
+//     generated override.
 //
 // Containers already published on a canonical port are ADOPTED, never
 // duplicated: a plain `docker compose up` in a main checkout is a legitimate
@@ -22,8 +24,9 @@
 package infra
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +34,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Scope is how one service is provided to a task.
@@ -84,9 +86,47 @@ type Resolution struct {
 	Note    string `json:"note,omitempty"`
 }
 
-// ProjectName sanitises a slug for `docker compose -p`, which accepts only
-// [a-z0-9][a-z0-9_-]*. Task slugs may contain dots, and compose rejects those.
+// Compose project names. Each of these properties once failed:
+//
+//   - A task's project is never the shared one. A task named "shared" mapped
+//     to "fride-shared", and its Down — `compose down --remove-orphans` —
+//     stopped every task's shared containers.
+//   - Two slugs never share a project. "v1.2-fix" and "v1-2-fix" both
+//     sanitised to "v1-2-fix", so one task's Down stopped the other's.
+//   - Two FrIDE setups never share one. Every name carries a short hash of the
+//     state directory, so a throwaway setup's `infra down --shared` cannot stop
+//     the real setup's containers.
+
+// SharedProject is the compose project holding every shared container of the
+// FrIDE setup whose state directory is stateDir.
+func SharedProject(stateDir string) string { return setupPrefix(stateDir) + "-shared" }
+
+// TaskProject is the compose project holding one task's own containers. The
+// "-task-" infix keeps it out of the shared project's namespace whatever the
+// slug is.
+func TaskProject(stateDir, slug string) string {
+	return setupPrefix(stateDir) + "-task-" + ProjectName(slug)
+}
+
+func setupPrefix(stateDir string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(stateDir)))
+	return "fride-" + hex.EncodeToString(sum[:3])
+}
+
+// ProjectName turns a slug into something `docker compose -p` accepts, which
+// is only [a-z0-9][a-z0-9_-]*. Task slugs may also hold dots and capitals.
+// When anything had to change, a hash of the original slug is appended: the
+// rewriting is lossy, and two tasks must never land in one project.
 func ProjectName(slug string) string {
+	s := sanitise(slug)
+	if s != slug {
+		sum := sha256.Sum256([]byte(slug))
+		s += "-" + hex.EncodeToString(sum[:4])
+	}
+	return s
+}
+
+func sanitise(slug string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(slug) {
 		switch {
@@ -103,12 +143,28 @@ func ProjectName(slug string) string {
 	return s
 }
 
-func (p Plan) project() string { return "fride-" + ProjectName(p.Slug) }
+// LegacyTaskProject is what an older FrIDE named a task's project, before
+// names carried the setup's hash. Only for stopping containers such a version
+// started: their task has no record of the project it used.
+func LegacyTaskProject(slug string) string { return "fride-" + sanitise(slug) }
 
-// SharedProject is the compose project holding every shared container.
-const SharedProject = "fride-shared"
+// Project is the compose project of this plan's task-scoped containers.
+func (p Plan) Project() string { return TaskProject(p.StateDir, p.Slug) }
 
-func (p Plan) overridePath() string {
+func (p Plan) sharedProject() string { return SharedProject(p.StateDir) }
+
+// Owns reports whether the plan gives the task containers of its own.
+func (p Plan) Owns() bool {
+	for _, s := range p.Services {
+		if s.Scope == ScopeTask {
+			return true
+		}
+	}
+	return false
+}
+
+// OverridePath is where the task's generated compose override lives.
+func (p Plan) OverridePath() string {
 	return filepath.Join(p.StateDir, "run", p.Slug, "compose.override.yml")
 }
 
@@ -150,18 +206,6 @@ func portMap() map[int]string {
 		}
 	}
 	return m
-}
-
-// Listening reports whether anything at all holds the port. Adoption keys off
-// docker's published ports, which cannot see a service started straight from
-// a checkout; without this compose is asked to bind a port that is taken.
-func Listening(port int) bool {
-	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 300*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
 }
 
 // hostPorts pulls the host ports out of docker's Ports column, which looks like
@@ -238,7 +282,7 @@ func (p Plan) writeOverride(own []Service) (string, error) {
 			}
 		}
 	}
-	path := p.overridePath()
+	path := p.OverridePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
@@ -267,11 +311,14 @@ func Up(p Plan) ([]Resolution, []string, error) {
 			if s.Port > 0 {
 				if project, ok := published[s.Port]; ok {
 					r.Adopted, r.Running = true, true
-					r.Note = adoptNote(project)
+					r.Note = adoptNote(project, p.sharedProject())
 					res = append(res, r)
 					continue
 				}
-				if Listening(s.Port) {
+				// Docker's published ports cannot see a service started straight
+				// from a checkout; without this compose is asked to bind a port
+				// that is taken.
+				if Accepting(s.Port) {
 					r.Adopted, r.Running = true, true
 					r.Note = "already served on this port by something outside docker — reused"
 					res = append(res, r)
@@ -301,7 +348,7 @@ func Up(p Plan) ([]Resolution, []string, error) {
 	}
 	if len(shared) > 0 {
 		n := names(shared)
-		cmd := composeCmd(SharedProject, p.sharedDir(), p.Files, append([]string{"up", "-d", "--wait", "--no-deps"}, n...)...)
+		cmd := composeCmd(p.sharedProject(), p.sharedDir(), p.Files, append([]string{"up", "-d", "--wait", "--no-deps"}, n...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			warnings = append(warnings, fmt.Sprintf("shared containers (%s) failed to start: %s", strings.Join(n, ", "), trim(out)))
 		}
@@ -309,7 +356,7 @@ func Up(p Plan) ([]Resolution, []string, error) {
 	if len(sharedOneShot) > 0 {
 		n := names(sharedOneShot)
 		// No --wait: these exit on success, which --wait reports as a failure.
-		cmd := composeCmd(SharedProject, p.sharedDir(), p.Files, append([]string{"up", "-d", "--no-deps"}, n...)...)
+		cmd := composeCmd(p.sharedProject(), p.sharedDir(), p.Files, append([]string{"up", "-d", "--no-deps"}, n...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s failed: %s", strings.Join(n, ", "), trim(out)))
 		}
@@ -330,14 +377,14 @@ func Up(p Plan) ([]Resolution, []string, error) {
 		files := append(append([]string(nil), p.Files...), override)
 		if len(long) > 0 {
 			n := names(long)
-			cmd := composeCmd(p.project(), p.taskDir(), files, append([]string{"up", "-d", "--wait", "--no-deps"}, n...)...)
+			cmd := composeCmd(p.Project(), p.taskDir(), files, append([]string{"up", "-d", "--wait", "--no-deps"}, n...)...)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				warnings = append(warnings, fmt.Sprintf("task containers (%s) failed to start: %s", strings.Join(n, ", "), trim(out)))
 			}
 		}
 		if len(once) > 0 {
 			n := names(once)
-			cmd := composeCmd(p.project(), p.taskDir(), files, append([]string{"up", "-d", "--no-deps"}, n...)...)
+			cmd := composeCmd(p.Project(), p.taskDir(), files, append([]string{"up", "-d", "--no-deps"}, n...)...)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				warnings = append(warnings, fmt.Sprintf("%s failed: %s", strings.Join(n, ", "), trim(out)))
 			}
@@ -353,57 +400,46 @@ func Up(p Plan) ([]Resolution, []string, error) {
 	return res, warnings, nil
 }
 
-func adoptNote(project string) string {
+func adoptNote(project, shared string) string {
 	switch project {
-	case "", SharedProject:
+	case "", shared:
 		return "already running"
 	default:
 		return "adopted from the already-running compose project " + project
 	}
 }
 
-// Down stops the task's own containers. Shared ones are deliberately left up:
-// another task is probably using them.
-func Down(p Plan) error {
-	if _, err := os.Stat(p.overridePath()); err != nil {
-		return nil // this task never started any of its own
-	}
-	files := append(append([]string(nil), p.Files...), p.overridePath())
-	cmd := composeCmd(p.project(), p.taskDir(), files, "down", "--remove-orphans")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("stopping this task's containers: %s", trim(out))
-	}
-	// The override is the record that this task has containers to stop;
-	// removing it is what makes a second Down a no-op.
-	_ = os.Remove(p.overridePath())
-	return nil
-}
-
-// DownShared stops the shared project and reports how many containers it had.
-// Nothing calls this automatically — it is the explicit `fride infra down
-// --shared`, because pulling these out from under a running task breaks it.
+// Down stops a compose project and reports how many containers it had. It is
+// how a task's own containers are stopped as well as the shared set.
 //
-// It needs no compose file: compose finds a project's containers by label. That
-// matters because the shared set belongs to no single task — a task whose
+// It needs no compose file: compose finds a project's containers by label.
+// That matters twice. The shared set belongs to no single task — a task whose
 // profile has no containers, or one whose worktree is gone, must still be able
-// to stop it. It runs from a neutral directory so that a compose file in the
-// caller's working directory is not picked up instead.
-func DownShared() (int, error) {
-	out, err := exec.Command("docker", "ps", "-aq", "--filter", "label=com.docker.compose.project="+SharedProject).Output()
+// to stop it. And a task's own project must be stopped as it was STARTED: the
+// task's profile may have changed since, and a compose file read today would
+// not name the old containers. It runs from a neutral directory so that a
+// compose file in the caller's working directory is not picked up instead.
+func Down(project string) (int, error) {
+	out, err := exec.Command("docker", "ps", "-aq", "--filter", "label=com.docker.compose.project="+project).Output()
 	if err != nil {
-		return 0, fmt.Errorf("asking docker for the shared containers: %w", err)
+		return 0, fmt.Errorf("asking docker for the containers of %s: %w", project, err)
 	}
 	n := len(strings.Fields(string(out)))
 	if n == 0 {
 		return 0, nil
 	}
-	cmd := exec.Command("docker", "compose", "-p", SharedProject, "down", "--remove-orphans")
+	cmd := exec.Command("docker", "compose", "-p", project, "down", "--remove-orphans")
 	cmd.Dir = os.TempDir()
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return n, fmt.Errorf("stopping the shared containers: %s", trim(out))
+		return n, fmt.Errorf("stopping the containers of %s: %s", project, trim(out))
 	}
 	return n, nil
 }
+
+// DownShared stops the shared project of the setup at stateDir. Nothing calls
+// this automatically — it is the explicit `fride infra down --shared`, because
+// pulling these out from under a running task breaks it.
+func DownShared(stateDir string) (int, error) { return Down(SharedProject(stateDir)) }
 
 // Status reports what a plan uses and whether it is up, without starting or
 // touching anything. It is on the status-poll path, so it stays side-effect free.
@@ -417,12 +453,12 @@ func Status(p Plan) []Resolution {
 		}
 		if r.Port > 0 && s.Scope != ScopeOff {
 			project, up := published[r.Port]
-			if !up && Listening(r.Port) {
+			if !up && Accepting(r.Port) {
 				r.Running, r.Adopted = true, true
 				r.Note = "served on this port from outside docker — reused"
 			} else if up {
 				r.Running = true
-				if project != "" && project != p.project() && project != SharedProject {
+				if project != "" && project != p.Project() && project != p.sharedProject() {
 					r.Adopted = true
 					r.Note = "provided by the compose project " + project
 				}
