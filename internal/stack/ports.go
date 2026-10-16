@@ -2,6 +2,7 @@ package stack
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,6 +61,13 @@ func listening() map[int]bool {
 		return listenSet
 	}
 	out, err := exec.Command("lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fn").Output()
+	// lsof exits 1 when nothing matches. With no output that is an answer —
+	// "nothing is listening" — and it is cached like any other, or a quiet
+	// machine would run lsof again on every single lookup.
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && len(out) == 0 {
+		err = nil
+	}
 	if err != nil {
 		// lsof missing or refusing is not worth failing a status view over, but
 		// a stale answer beats an empty one that would report every stack down.
