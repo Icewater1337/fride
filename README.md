@@ -63,6 +63,12 @@ touches the frontend".
 service's base port + *k*. Slot 0, the base port itself, is left to your main
 checkout. That is how ten tasks can run the same app at once.
 
+**Rationale.** While a task runs, its agent records the decisions it takes and
+the user's calls (`fride note`). When the task is done, they become a document in
+the task, `docs/rationale/<task>.md`. A *ledger* repository can also collect the
+documents of every task, published through plain git, including GitLab merge
+requests that merge by themselves (see `ledger` in docs/CONFIG.md).
+
 **config.json.** Everything above, for your stack, in one declarative file,
 written during setup and readable by a person. Reference:
 [docs/CONFIG.md](docs/CONFIG.md). `fride config check` validates it.
@@ -110,7 +116,7 @@ fride infra [status|up|down] [task]       # the containers behind a task
 fride infra down --shared                # stop the containers all tasks share
 
 fride note decision "..." --why "..."     # the decision log the rationale document is built from
-fride rationale [task] [--narrate]
+fride rationale [task] [--narrate] [--publish]   # --publish: also push it to the ledger repo
 
 fride fleet                               # this computer and your others (fleet mode)
 fride task move <task> <computer>         # continue a task on another computer

@@ -52,6 +52,8 @@ type Settings struct {
 	Requirements []Requirement `json:"requirements,omitempty"`
 	// Fleet links this computer with the user's other computers (FLEET.md).
 	Fleet *Fleet `json:"fleet,omitempty"`
+	// Ledger publishes every task's rationale document to a shared repository.
+	Ledger *Ledger `json:"ledger,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -203,6 +205,41 @@ type Fleet struct {
 	// Ephemeral removes this computer from the tailnet when it goes offline —
 	// for throwaway setups.
 	Ephemeral bool `json:"ephemeral,omitempty"`
+}
+
+// Ledger is a git repository collecting the rationale documents of all tasks,
+// so the reasoning behind past work can be found in one place. Each document is
+// also kept in its task, under docs/rationale/ — the ledger is a copy.
+type Ledger struct {
+	// Remote is the ledger repository's git URL. Pushing uses git's own
+	// credentials; nothing else is needed.
+	Remote string `json:"remote"`
+	// Branch is the ledger's main branch. Default "main".
+	Branch string `json:"branch,omitempty"`
+	// Dir is the folder documents go into, by year: <dir>/<year>/<task>.md.
+	// Default "rationale".
+	Dir string `json:"dir,omitempty"`
+	// Push is "branch" (the default): each document goes to its own branch,
+	// rationale/<task>, for a merge or pull request; or "direct": straight
+	// onto Branch.
+	Push string `json:"push,omitempty"`
+	// PushOptions are passed to `git push -o` — how a GitLab server is asked
+	// to open a merge request and merge it by itself, with no API token:
+	// merge_request.create, merge_request.target={{target}},
+	// merge_request.merge_when_pipeline_succeeds, … {{task}}, {{title}},
+	// {{branch}} and {{target}} are filled in.
+	PushOptions []string `json:"pushOptions,omitempty"`
+	// WaitForMerge is how many seconds a publish waits for its branch to be
+	// merged before the next one may start. Set it when the server merges by
+	// itself (GitLab auto-merge): publishes based on a main without the
+	// previous one conflict on the shared index and never merge.
+	WaitForMerge int `json:"waitForMerge,omitempty"`
+	// Author is "Name <email>" for the ledger's commits. Default: git's own
+	// configuration — which, for a ledger outside your usual folders, may not
+	// be the identity that server expects.
+	Author string `json:"author,omitempty"`
+	// OnDone publishes automatically when a task moves to Done. Default true.
+	OnDone *bool `json:"onDone,omitempty"`
 }
 
 // Requirement is a machine prerequisite. Exactly one of Env and Command.

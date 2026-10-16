@@ -25,6 +25,7 @@ import (
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/infra"
+	"github.com/Icewater1337/fride/internal/journal"
 )
 
 // Check is one requirement and its current state.
@@ -127,6 +128,17 @@ func Run(cfg *config.Config) *Report {
 			c.Detail = err.Error()
 		} else {
 			c.OK, c.Detail = true, "daemon reachable"
+		}
+		add(c)
+	}
+
+	if cfg.Configured() && cfg.Settings.Ledger != nil && cfg.Settings.Ledger.Remote != "" {
+		c := Check{ID: "ledger", Label: "rationale ledger", Needed: "publishing rationale documents",
+			Fix: "check ledger.remote in config.json, and that git can push there (credentials)"}
+		if err := journal.CheckLedger(cfg.Settings.Ledger); err != nil {
+			c.Detail = err.Error()
+		} else {
+			c.OK, c.Detail = true, "reachable"
 		}
 		add(c)
 	}

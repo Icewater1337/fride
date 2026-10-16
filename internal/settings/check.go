@@ -3,6 +3,7 @@ package settings
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -24,6 +25,8 @@ func (p Problem) String() string {
 	}
 	return lvl + "  " + p.Where + ": " + p.Msg
 }
+
+var authorRe = regexp.MustCompile(`^[^<>]+<[^<>@\s]+@[^<>\s]+>$`)
 
 // DefaultMaxSlots is used when the config does not say.
 const DefaultMaxSlots = 10
@@ -96,6 +99,26 @@ func (s *Settings) Check() []Problem {
 		out = append(out, s.checkProfile(pn, s.Profiles[pn], repos)...)
 	}
 	out = append(out, s.checkPorts()...)
+
+	if l := s.Ledger; l != nil {
+		if strings.TrimSpace(l.Remote) == "" {
+			add(true, "ledger.remote", "name the ledger repository's git URL")
+		}
+		switch l.Push {
+		case "", "branch", "direct":
+		default:
+			add(true, "ledger.push", "must be branch or direct")
+		}
+		if l.Push == "direct" && len(l.PushOptions) > 0 {
+			add(false, "ledger.pushOptions", "push options are usually for merge requests, but push is direct")
+		}
+		if l.Author != "" && !authorRe.MatchString(l.Author) {
+			add(true, "ledger.author", "write it as \"Name <email>\"")
+		}
+		if l.WaitForMerge < 0 || l.WaitForMerge > 600 {
+			add(true, "ledger.waitForMerge", "seconds, between 0 and 600")
+		}
+	}
 
 	for i, r := range s.Requirements {
 		where := fmt.Sprintf("requirements[%d]", i)

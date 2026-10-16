@@ -2008,6 +2008,10 @@ $('#docpop-close').addEventListener('click', () => $('#docpop').classList.add('h
 async function showDoc() {
   const body = $('#docpop-body');
   $('#docpop').classList.remove('hidden');
+  // The ledger is configured per computer; a task elsewhere publishes with its
+  // own computer's ledger, so the button is offered and that computer answers.
+  const canPublish = (state.config && state.config.ledger) || !isLocal(state.currentNode);
+  $('#docpop-publish').classList.toggle('hidden', !canPublish);
   body.textContent = 'composing...';
   $('#docpop-path').textContent = '';
   try {
@@ -2033,4 +2037,30 @@ $('#docpop-write').addEventListener('click', async () => {
     if (narrate) await showDoc();
   } catch (e) { $('#docpop-path').textContent = e.message; }
   b.disabled = false; b.textContent = 'Write to the repo';
+});
+
+// Publishing writes the document into the task too, then pushes it to the
+// ledger repository configured in config.json.
+$('#docpop-publish').addEventListener('click', async () => {
+  const b = $('#docpop-publish'), narrate = $('#docpop-narrate').checked;
+  b.disabled = true;
+  b.textContent = 'publishing...';
+  try {
+    const r = await api.post(`${tb()}/tasks/${state.current}/rationale`, { narrate, publish: true });
+    const p = r.published || {};
+    const host = $('#docpop-path');
+    host.innerHTML = '';
+    host.appendChild(document.createTextNode('wrote ' + r.path + ' · '));
+    if (p.skipped) host.appendChild(document.createTextNode('ledger: ' + p.skipped));
+    else {
+      host.appendChild(document.createTextNode(`ledger: pushed ${p.path} on ${p.branch}`));
+      if (p.link) {
+        const a = el('a', null, ' → ' + p.link);
+        a.href = p.link; a.target = '_blank'; a.rel = 'noreferrer';
+        host.appendChild(a);
+      }
+      if (p.waiting) host.appendChild(document.createTextNode(' (' + p.waiting + ')'));
+    }
+  } catch (e) { $('#docpop-path').textContent = e.message; }
+  b.disabled = false; b.textContent = 'Publish to the ledger';
 });

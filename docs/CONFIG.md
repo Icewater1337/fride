@@ -123,6 +123,7 @@ backend's compose file.
 | `defaultProfile` | The profile a new task boots with. |
 | `profiles` | The ways the stack can boot. |
 | `requirements` | Things the machine must have, checked by `fride doctor`. |
+| `ledger` | Publish every task's rationale document to a shared git repository. See [ledger](#ledger). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 
 ## repos.&lt;name&gt;
@@ -223,6 +224,52 @@ Every per-task port is **base + slot**. Slot 0, the base port itself, is never u
 Tasks can run different profiles at the same time, so the ranges `base+1 … base+maxSlots` of two different bases must not overlap anywhere in the file. With `maxSlots: 10`, keep bases at least 10 apart. Use bases that end in 0 (3100, 8090, 8140), and don't put a base just below a port something else uses. A shared container's port must not fall inside any range either. `fride config check` reports both problems.
 
 When a service's usual port is, say, 8080, a good base is 8090. The main checkout keeps 8080, and tasks get 8091, 8092 and so on.
+
+## ledger
+
+Every task's design-rationale document lives in the task itself, at
+`docs/rationale/<task>.md` in its first core repository. It is written when the
+task moves to Done, or from the Rationale panel. A **ledger** additionally
+collects the documents of all tasks in one git repository, so the reasoning
+behind past work can be found in one place. FrIDE uses nothing but git for this:
+the credentials that push your code are enough.
+
+```json
+"ledger": {
+  "remote": "https://gitlab.example.com/team/rationale-ledger.git",
+  "branch": "main",
+  "pushOptions": [
+    "merge_request.create",
+    "merge_request.target={{target}}",
+    "merge_request.title=Design rationale: {{title}}",
+    "merge_request.remove_source_branch",
+    "merge_request.merge_when_pipeline_succeeds"
+  ],
+  "waitForMerge": 90,
+  "author": "Jane Doe <jane@example.com>"
+}
+```
+
+That is a GitLab setup. Each document is pushed to its own branch,
+`rationale/<task>`, and GitLab opens a merge request and merges it by itself, so
+no API token is needed. On GitHub, leave out `pushOptions`; git prints the link
+for opening a pull request, and FrIDE shows it.
+
+| field | meaning |
+|---|---|
+| `remote` | The ledger repository's git URL. |
+| `branch` | Its main branch. Default `main`. |
+| `dir` | The folder for documents, which go in by year: `<dir>/<year>/<task>.md`. Default `rationale`. `index.md` and `log.md` at the root are rebuilt on every publish. |
+| `push` | `branch` (the default) pushes each document to its own branch for a merge or pull request. `direct` commits straight onto `branch`. |
+| `pushOptions` | Passed as `git push -o …`. `{{task}}`, `{{title}}`, `{{branch}}` and `{{target}}` are filled in. |
+| `waitForMerge` | Seconds a publish waits for its branch to be merged before the next publish may start. Set it when the server merges by itself: publishes based on a `main` without the previous one conflict on the shared index and never merge. |
+| `author` | `"Name <email>"` for the ledger's commits. Without it, git's own configuration applies, and for a ledger outside your usual folders that may not be the identity the server expects. |
+| `onDone` | Publish automatically when a task moves to Done. Default `true`. |
+
+Publishing by hand: `fride rationale <task> --publish`, or **Publish to the
+ledger** in the rationale dialog. A document that has not changed since the
+last publish is not pushed again. `fride doctor` checks that the ledger can be
+reached.
 
 ## requirements
 

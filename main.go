@@ -97,8 +97,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   note <kind> "<text>" [--why "..."]    record plan|decision|assumption|issue|note
                         [--source user]  mark an entry as the user's call, not the agent's
   note ls [task]                        show what has been recorded
-  rationale [task] [--narrate] [--commit]
-                                        compose docs/rationale/<task>.md
+  rationale [task] [--narrate] [--commit] [--publish]
+                                        compose docs/rationale/<task>.md; --publish
+                                        also pushes it to the ledger (config: ledger)
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
@@ -1186,6 +1187,7 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 func cmdRationale(cfg *config.Config, st *store.Store, args []string) {
 	narrate, args := flagBool(args, "--narrate")
 	commit, args := flagBool(args, "--commit")
+	publish, args := flagBool(args, "--publish")
 	t := resolveTask(cfg, st, args)
 	repos := make([]string, 0, len(t.Repos))
 	for _, r := range t.Repos {
@@ -1208,6 +1210,24 @@ func cmdRationale(cfg *config.Config, st *store.Store, args []string) {
 	path, err := journal.Write(cfg, t.Slug, opt)
 	check(err)
 	fmt.Printf("wrote %s\n", path)
+
+	if publish {
+		fmt.Println("publishing to the ledger…")
+		pub, err := journal.Publish(cfg, t.Slug, opt)
+		check(err)
+		switch {
+		case pub.Skipped != "":
+			fmt.Printf("  skipped: %s\n", pub.Skipped)
+		default:
+			fmt.Printf("  pushed %s on %s\n", pub.Path, pub.Branch)
+			if pub.Link != "" {
+				fmt.Printf("  %s\n", pub.Link)
+			}
+			if pub.Waiting != "" {
+				fmt.Printf("  ! %s\n", pub.Waiting)
+			}
+		}
+	}
 
 	if commit {
 		host, _ := journal.DocPath(cfg, t.Slug, repos)

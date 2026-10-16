@@ -219,7 +219,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		Problems   []settings.Problem `json:"problems"`
 		Workspaces string             `json:"workspaceRoot"`
 		StateDir   string             `json:"stateDir"`
-	}{Configured: s.cfg.Configured(), Path: filepath.Join(s.cfg.StateDir, "config.json"),
+		Ledger     bool               `json:"ledger"`
+	}{Ledger: journal.LedgerEnabled(s.cfg), Configured: s.cfg.Configured(), Path: filepath.Join(s.cfg.StateDir, "config.json"),
 		Profiles: []profileView{}, Problems: []settings.Problem{}, Core: []string{},
 		Workspaces: s.cfg.WorkspaceRoot, StateDir: s.cfg.StateDir}
 	if s.cfg.LoadErr != nil {
@@ -904,6 +905,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 	case action == "rationale" && r.Method == http.MethodPost:
 		var req struct {
 			Narrate bool `json:"narrate"`
+			Publish bool `json:"publish"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		path, err := s.writeRationale(t, req.Narrate)
@@ -911,7 +913,16 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err)
 			return
 		}
-		writeJSON(w, 200, map[string]string{"path": path})
+		out := map[string]any{"path": path}
+		if req.Publish {
+			pub, err := journal.Publish(s.cfg, t.Slug, rationaleOptions(t))
+			if err != nil {
+				writeErr(w, 400, fmt.Errorf("written to %s, but publishing failed: %w", path, err))
+				return
+			}
+			out["published"] = pub
+		}
+		writeJSON(w, 200, out)
 
 	case action == "usage" && r.Method == http.MethodGet:
 		u, err := usage.ForWorkspace(filepath.Join(s.cfg.Home, ".claude"), s.cfg.WorkspaceDir(slug))
@@ -1177,6 +1188,21 @@ func (s *Server) setStatus(slug string, status store.Status) (*store.Task, error
 	} else {
 		log.Printf("task %s: rationale written to %s", slug, path)
 	}
+	// Publishing talks to the ledger's server, so it runs in the background:
+	// closing a task must not wait on a network round trip.
+	if journal.PublishOnDone(s.cfg) {
+		go func(t *store.Task) {
+			pub, err := journal.Publish(s.cfg, t.Slug, rationaleOptions(t))
+			switch {
+			case err != nil:
+				log.Printf("task %s: could not publish to the ledger: %v", t.Slug, err)
+			case pub.Skipped != "":
+				log.Printf("task %s: ledger publish skipped — %s", t.Slug, pub.Skipped)
+			default:
+				log.Printf("task %s: published %s to the ledger on %s %s", t.Slug, pub.Path, pub.Branch, pub.Link)
+			}
+		}(updated)
+	}
 	// Done also closes every terminal and agent session of the task — after the
 	// rationale, which may still read their transcripts, and for the same reason
 	// delete does: a finished task must leave nothing running in the background.
@@ -1191,6 +1217,14 @@ func (s *Server) setStatus(slug string, status store.Status) (*store.Task, error
 		}
 	}
 	return updated, nil
+}
+
+func rationaleOptions(t *store.Task) journal.Options {
+	repos := make([]string, 0, len(t.Repos))
+	for _, r := range t.Repos {
+		repos = append(repos, r.Name)
+	}
+	return journal.Options{Name: t.Name, Repos: repos}
 }
 
 // writeRationale composes the workspace's design-rationale document.
