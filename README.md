@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="web/mascot.jpg" alt="FrIDE's mascot: a fox in a headset at a desk full of worktrees, task boards and stacks" width="360">
+</p>
+
 # FrIDE
 
 A small agentic IDE for work that spans several repositories.

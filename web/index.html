@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FrIDE</title>
+<link rel="icon" type="image/png" href="/fox.png">
 <script>try{var t=localStorage.getItem('fride-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <header>
-  <div class="brand">Fr<span>IDE</span><small id="stack-name"></small></div>
+  <div class="brand"><img class="logo" src="/fox.png" alt="">Fr<span>IDE</span><small id="stack-name"></small></div>
   <nav>
     <button id="nav-board" class="navbtn active">Board</button>
     <button id="nav-orch" class="navbtn">Orchestrator</button>
@@ -28,6 +29,7 @@
   <!-- ---------------------------------------------------------- setup -->
   <section id="setup" class="view">
     <div class="setup-card">
+      <img class="mascot" src="/mascot.jpg" alt="FrIDE's mascot: a fox in a headset at a desk full of worktrees, task boards and stacks">
       <h2>Welcome to FrIDE</h2>
       <p>FrIDE has no configuration yet, so it does not know where your repositories are or how
         your app starts. A coding agent sets that up with you: it asks which folders to scan and
