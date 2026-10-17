@@ -178,7 +178,7 @@ A few things worth knowing:
   the logs.
 - **Restarting `fride serve` ends the terminal tabs** (the PTYs belong to that
   process), but not the stack, which is detached. The agent's conversation
-  survives as well: *⟲ resume* reopens it.
+  survives as well: the task's *Resume* menu reopens it.
 
 ## Agents
 

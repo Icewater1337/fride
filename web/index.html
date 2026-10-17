@@ -10,19 +10,69 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header>
-  <div class="brand"><img class="logo" src="/fox.png" alt="">Fr<span>IDE</span><small id="stack-name"></small></div>
-  <nav>
-    <button id="nav-board" class="navbtn active">Board</button>
-    <button id="nav-orch" class="navbtn">Orchestrator</button>
-    <button id="nav-computers" class="navbtn hidden">Computers</button>
-    <button id="nav-instances" class="navbtn">Slots</button>
-    <button id="nav-settings" class="navbtn">Settings</button>
+<!-- Icons, drawn once and referenced with <use href="#i-…">, from HTML and
+     from app.js alike. Stroke icons on a 24px grid; they take currentColor. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L7.5 3.64A1 1 0 0 0 6 4.5Z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect width="14" height="14" x="5" y="5" rx="2"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+  <symbol id="i-folder-open" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+  <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M14 9 9 4 4 9"/><path d="M20 20h-7a4 4 0 0 1-4-4V4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M10.73 5.08a10.74 10.74 0 0 1 11.2 6.57 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-1.44 2.49"/><path d="M14.08 14.16a3 3 0 0 1-4.24-4.24"/><path d="M17.48 17.5a10.75 10.75 0 0 1-15.42-5.15 1 1 0 0 1 0-.7 10.75 10.75 0 0 1 4.45-5.14"/><path d="m2 2 20 20"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-shield-alert" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></symbol>
+  <symbol id="i-move" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></symbol>
+  <symbol id="i-diff" viewBox="0 0 24 24"><path d="M12 3v14"/><path d="M5 10h14"/><path d="M5 21h14"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M14.54 21.69a.5.5 0 0 0 .94-.03l6.5-19a.5.5 0 0 0-.64-.63l-19 6.5a.5.5 0 0 0-.02.93l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+</svg>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="logo" src="/fox.png" alt="">
+    <span class="wordmark">Fr<span>IDE</span></span>
+    <small id="stack-name"></small>
+  </div>
+  <nav class="nav">
+    <button id="nav-board" class="navbtn active" title="Board"><svg class="i"><use href="#i-board"/></svg><span class="lbl">Board</span></button>
+    <button id="nav-orch" class="navbtn" title="Orchestrator"><svg class="i"><use href="#i-bot"/></svg><span class="lbl">Orchestrator</span></button>
+    <button id="nav-computers" class="navbtn hidden" title="Computers"><svg class="i"><use href="#i-monitor"/></svg><span class="lbl">Computers</span></button>
+    <button id="nav-instances" class="navbtn" title="Port slots"><svg class="i"><use href="#i-server"/></svg><span class="lbl">Slots</span></button>
+    <button id="nav-settings" class="navbtn" title="Settings"><svg class="i"><use href="#i-sliders"/></svg><span class="lbl">Settings</span></button>
   </nav>
-  <div id="switcher" class="switcher"></div>
+  <div id="switcher" class="switcher" aria-label="Open tasks"></div>
   <div class="spacer"></div>
   <button id="theme-toggle" class="iconbtn" title="Switch between light and dark" aria-label="Switch theme"></button>
-  <button id="btn-new" class="primary">New task</button>
+  <button id="btn-new" class="primary"><svg class="i"><use href="#i-plus"/></svg>New task</button>
 </header>
 
 <main>
@@ -35,7 +85,7 @@
         your app starts. A coding agent sets that up with you: it asks which folders to scan and
         which repositories are the core of your app, then works out how to install and run each
         one and keeps trying until the stack starts.</p>
-      <ol>
+      <ol class="steps">
         <li>Open a terminal in the FrIDE repository (where you built <code>fride</code>).</li>
         <li>Start your coding agent there — <code>claude</code>, <code>codex</code> or another.</li>
         <li>Ask it: <em>&ldquo;Set up FrIDE for me.&rdquo;</em> It follows <code>SETUP.md</code>.</li>
@@ -44,9 +94,9 @@
         <code>docs/CONFIG.md</code> describes every field.</p>
       <div id="setup-problems"></div>
       <div class="setup-actions">
-        <button id="setup-reload" class="primary">I&rsquo;m done — reload</button>
+        <button id="setup-reload" class="primary"><svg class="i"><use href="#i-refresh"/></svg>I&rsquo;m done — reload</button>
       </div>
-      <div id="setup-env"></div>
+      <div id="setup-env" class="setup-env"></div>
     </div>
   </section>
 
@@ -54,27 +104,31 @@
   <section id="board" class="view active">
     <div id="fleetbar" class="envbar hidden"></div>
     <div id="envbar" class="envbar hidden"></div>
+    <div id="hidden-banner" class="banner hidden">
+      <svg class="i"><use href="#i-eye-off"/></svg>
+      <span>Showing only hidden tasks. Unhide one to put it back on the board.</span>
+    </div>
     <div class="columns">
       <div class="column" data-status="open">
-        <h2>Open <span class="count" id="count-open">0</span></h2>
+        <div class="column-h"><span class="sdot open"></span>Open <span class="count" id="count-open">0</span></div>
         <div class="cards" id="col-open"></div>
       </div>
       <div class="column" data-status="in_progress">
-        <h2>In Progress <span class="count" id="count-in_progress">0</span></h2>
+        <div class="column-h"><span class="sdot in_progress"></span>In progress <span class="count" id="count-in_progress">0</span></div>
         <div class="cards" id="col-in_progress"></div>
       </div>
       <div class="column" data-status="done">
-        <h2>Done <span class="count" id="count-done">0</span></h2>
+        <div class="column-h"><span class="sdot done"></span>Done <span class="count" id="count-done">0</span></div>
         <div class="cards" id="col-done"></div>
       </div>
     </div>
     <div class="boardfoot">
-      <button id="toggle-hidden" class="ghost">Show hidden</button>
+      <button id="toggle-hidden" class="ghost sm"><svg class="i"><use href="#i-eye"/></svg><span>Show hidden</span></button>
       <span id="hidden-count" class="hint"></span>
+      <span class="spacer"></span>
+      <span class="hint">Drag a card between columns to change its status. Moving a task to
+        <strong>Done</strong> stops its stack; hiding one only takes it off the board.</span>
     </div>
-    <p class="hint">Drag a card between columns, or open a task and use the status buttons.
-      Moving a task to <strong>Done</strong> stops its stack. Hiding one only takes it off the
-      board — its worktrees, branches and any running stack stay exactly as they are.</p>
   </section>
 
   <!-- ---------------------------------------------------------- orchestrator -->
@@ -82,175 +136,245 @@
     <div class="task-body">
       <aside class="sidebar">
         <div class="panel">
-          <h3>Mode</h3>
+          <div class="panel-h"><h3><svg class="i"><use href="#i-bot"/></svg>Mode</h3></div>
           <div id="orch-mode" class="agent-picker"></div>
         </div>
         <div class="panel grow">
-          <h3>Workspaces it orchestrates</h3>
+          <div class="panel-h"><h3><svg class="i"><use href="#i-board"/></svg>Workspaces it orchestrates</h3></div>
           <div id="orch-tasks" class="orch-tasks"></div>
           <p class="hint">Read from each agent's own transcript, so what it
             reacts to is what the agent actually said.</p>
         </div>
         <div class="panel">
-          <h3>When it wants to act</h3>
+          <div class="panel-h"><h3><svg class="i"><use href="#i-shield"/></svg>When it wants to act</h3></div>
           <div id="orch-autonomy" class="agent-picker"></div>
         </div>
         <div class="orchbtns">
           <button id="orch-apply" class="primary">Apply</button>
           <button id="orch-reset" class="ghost"
-                  title="Forget the conversation and start a new one. What it is supervising stays.">Clear</button>
+                  title="Forget the conversation and start a new one. What it is supervising stays.">Clear chat</button>
         </div>
         <div id="orch-error" class="error"></div>
       </aside>
 
-      <div class="workarea">
+      <div class="workarea orch-main">
         <div id="orch-status" class="orch-status"></div>
         <div id="orch-log" class="orch-log"></div>
         <div class="orch-compose">
-          <textarea id="orch-input" rows="3" spellcheck="false"
+          <textarea id="orch-input" rows="2" spellcheck="false"
             placeholder="Start a task with backend and frontend from main on feat/PROJ-42-search"></textarea>
-          <button id="orch-send" class="primary">Send</button>
+          <div class="orch-compose-f">
+            <span class="hint"><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
+            <button id="orch-send" class="primary sm"><svg class="i"><use href="#i-send"/></svg>Send</button>
+          </div>
         </div>
-        <p class="hint">Enter sends, Shift+Enter makes a new line.</p>
       </div>
     </div>
   </section>
 
   <!-- ---------------------------------------------------------- computers -->
   <section id="computers" class="view">
-    <h2>Computers</h2>
-    <p class="hint">Your computers running FrIDE, linked through your tailnet. Each one owns its
-      tasks; this page, the board and every task view work the same from any of them. Only
-      devices signed in to your own account are answered.</p>
-    <div id="computer-self" class="panel"></div>
-    <h3 class="sh">Your other computers</h3>
-    <table id="computers-table"><thead>
-      <tr><th>computer</th><th>state</th><th>os</th><th>tasks</th></tr>
-    </thead><tbody></tbody></table>
-    <h3 class="sh">Open on this computer</h3>
-    <p class="hint">Stacks of other computers served on this one's localhost, port for port.</p>
-    <div id="mirror-list" class="baselist"></div>
+    <div class="page">
+      <div class="page-h">
+        <h2>Computers</h2>
+        <p class="lede">Your computers running FrIDE, linked through your tailnet. Each one owns its
+          tasks; this page, the board and every task view work the same from any of them. Only
+          devices signed in to your own account are answered.</p>
+      </div>
+      <div id="computer-self" class="panel"></div>
+      <h3 class="sh">Your other computers</h3>
+      <div class="tablewrap">
+        <table id="computers-table" class="table"><thead>
+          <tr><th>Computer</th><th>State</th><th>OS</th><th>Tasks</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+      <h3 class="sh">Open on this computer</h3>
+      <p class="hint">Stacks of other computers served on this one's localhost, port for port.</p>
+      <div id="mirror-list" class="baselist"></div>
+    </div>
   </section>
 
   <!-- ---------------------------------------------------------- instances -->
   <section id="instances" class="view">
-    <h2>Port slots</h2>
-    <p class="hint">Each running task holds a slot <em>k</em>, and every per-task port is the
-      service&rsquo;s base port + <em>k</em> — so tasks never collide with each other, and slot 0
-      (the base ports themselves) is left to your main checkouts.</p>
-    <table id="instances-table"><thead>
-      <tr><th>slot</th><th>task</th><th>ports</th><th>listening</th></tr>
-    </thead><tbody></tbody></table>
+    <div class="page">
+      <div class="page-h">
+        <h2>Port slots</h2>
+        <p class="lede">Each running task holds a slot <em>k</em>, and every per-task port is the
+          service&rsquo;s base port + <em>k</em> — so tasks never collide with each other, and slot 0
+          (the base ports themselves) is left to your main checkouts.</p>
+      </div>
+      <div class="tablewrap">
+        <table id="instances-table" class="table"><thead>
+          <tr><th>Slot</th><th>Task</th><th>Ports</th><th>Listening</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+    </div>
   </section>
 
   <!-- ---------------------------------------------------------- project settings -->
   <section id="settings" class="view">
-    <h2>Settings</h2>
-    <p class="hint">Stored in <code id="cfg-path"></code>. Base folders are scanned for git
-      repositories; each repository can carry local, git-ignored config into its worktree in a new
-      workspace. Profiles — how the stack boots — are edited in the file itself (usually by your
-      agent); <button id="cfg-reload" class="mini">reload config.json</button> after a change.</p>
+    <div class="page">
+      <div class="page-h">
+        <h2>Settings</h2>
+        <p class="lede">Stored in <code id="cfg-path"></code>. Base folders are scanned for git
+          repositories; each repository can carry local, git-ignored config into its worktree in a new
+          workspace. Profiles — how the stack boots — are edited in the file itself (usually by your
+          agent); reload it after a change.</p>
+        <div class="page-actions">
+          <button id="cfg-reload" class="ghost sm"><svg class="i"><use href="#i-refresh"/></svg>Reload config.json</button>
+        </div>
+      </div>
 
-    <h3 class="sh">Profiles</h3>
-    <div id="profile-list" class="profiles"></div>
-    <div id="cfg-problems"></div>
+      <h3 class="sh">Profiles</h3>
+      <div id="profile-list" class="profiles"></div>
+      <div id="cfg-problems"></div>
 
-    <h3 class="sh">Base folders</h3>
-    <div id="base-list" class="baselist"></div>
-    <div class="baseadd">
-      <input id="base-input" type="text" placeholder="/Users/you/work/another-folder" autocomplete="off">
-      <button id="base-add" class="ghost">Add folder</button>
+      <h3 class="sh">Base folders</h3>
+      <div id="base-list" class="baselist"></div>
+      <div class="baseadd">
+        <input id="base-input" type="text" placeholder="/Users/you/work/another-folder" autocomplete="off" spellcheck="false">
+        <button id="base-add" class="ghost"><svg class="i"><use href="#i-plus"/></svg>Add folder</button>
+      </div>
+
+      <h3 class="sh">Repositories</h3>
+      <div class="tablewrap">
+        <table id="proj-table" class="table"><thead>
+          <tr><th>Repository</th><th>Core</th><th>Copies into new worktrees</th><th>IDE</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
     </div>
-
-    <h3 class="sh">Repositories</h3>
-    <table id="proj-table"><thead>
-      <tr><th>Repository</th><th>Core</th><th>Copies into new worktrees</th><th>IDE</th></tr>
-    </thead><tbody></tbody></table>
   </section>
 
   <!-- ---------------------------------------------------------- task detail -->
   <section id="task" class="view">
     <div class="task-head">
-      <button id="back" class="ghost">&larr; Board</button>
-      <h2 id="task-title"></h2>
-      <span id="task-status-badge" class="badge"></span>
-      <span id="task-node-badge" class="badge node hidden"></span>
-      <span id="task-perm-badge" class="badge perm hidden"></span>
-      <button id="task-mode-badge" class="badge mode" title="The profile this task boots with — click to switch"></button>
-      <div class="spacer"></div>
-      <div class="statusbtns">
-        <button data-set-status="open" class="ghost">Open</button>
-        <button data-set-status="in_progress" class="ghost">In Progress</button>
-        <button data-set-status="done" class="ghost">Done</button>
+      <button id="back" class="iconbtn" title="Back to the board" aria-label="Back to the board"><svg class="i"><use href="#i-arrow-left"/></svg></button>
+      <div class="task-titles">
+        <h2 id="task-title"></h2>
+        <div class="task-badges">
+          <span id="task-node-badge" class="chip node hidden"></span>
+          <button id="task-mode-badge" class="chip mode" title="The profile this task boots with — click to switch"><svg class="i"><use href="#i-layers"/></svg><span class="lbl"></span><svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+          <button id="task-perm-badge" class="chip perm hidden"><svg class="i"><use href="#i-shield"/></svg><span class="lbl"></span></button>
+        </div>
       </div>
-      <button id="btn-move" class="ghost hidden" title="Continue this task on another of your computers">Continue on…</button>
-      <button id="btn-delete" class="danger">Delete</button>
+      <div class="spacer"></div>
+      <div class="segmented statusbtns" role="group" aria-label="Status">
+        <button data-set-status="open"><span class="sdot open"></span>Open</button>
+        <button data-set-status="in_progress"><span class="sdot in_progress"></span>In progress</button>
+        <button data-set-status="done"><span class="sdot done"></span>Done</button>
+      </div>
+      <button id="btn-move" class="ghost hidden" title="Continue this task on another of your computers"><svg class="i"><use href="#i-move"/></svg>Continue on…</button>
+      <button id="btn-delete" class="danger" title="Delete this task and its workspace folder"><svg class="i"><use href="#i-trash"/></svg>Delete</button>
     </div>
 
     <div class="task-body">
       <aside class="sidebar">
-        <div class="panel">
-          <h3>Stack</h3>
-          <div class="stackbtns">
-            <button id="btn-up" class="primary">Start</button>
-            <button id="btn-down" class="ghost">Stop</button>
+        <div class="panel" data-panel="stack">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-activity"/></svg>Stack</h3></div>
+          <div class="panel-b">
+            <div class="stackbtns">
+              <button id="btn-up" class="primary"><svg class="i"><use href="#i-play"/></svg><span>Start</span></button>
+              <button id="btn-down" class="ghost"><svg class="i"><use href="#i-stop"/></svg><span>Stop</span></button>
+            </div>
+            <div id="mem-head" class="memhead"></div>
+            <div id="ide-choices"></div>
+            <div id="stack-entry"></div>
+            <table id="stack-table"><tbody></tbody></table>
+            <div id="stack-db" class="db"></div>
+            <div id="stack-log" class="stacklog hidden"><div class="stacklog-head"><span id="stack-log-name"></span><button id="stack-log-close" class="iconbtn xs" title="Close the log" aria-label="Close the log"><svg class="i"><use href="#i-x"/></svg></button></div><pre id="stack-log-body"></pre></div>
+            <div id="install-state" class="hidden"></div>
+            <div id="stack-warnings"></div>
           </div>
-          <div id="mem-head" class="memhead"></div>
-          <div id="ide-choices"></div>
-          <div id="stack-entry"></div>
-          <table id="stack-table"><tbody></tbody></table>
-          <div id="stack-db" class="db"></div>
-          <div id="stack-log" class="stacklog hidden"><div class="stacklog-head"><span id="stack-log-name"></span><button id="stack-log-close" class="mini">close</button></div><pre id="stack-log-body"></pre></div>
-          <div id="install-state" class="hidden"></div>
-          <div id="stack-warnings"></div>
         </div>
-        <div class="panel grow">
-          <h3>Files
-            <button id="files-up" class="mini" title="Up one level">..</button>
-            <button id="files-reveal" class="mini" title="Open this folder in the desktop file manager">open folder</button>
-          </h3>
-          <div id="files-path" class="path"></div>
-          <div id="files-list" class="files"></div>
+        <div class="panel grow" data-panel="files">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-folder"/></svg>Files</h3>
+            <div class="panel-actions">
+              <button id="files-up" class="iconbtn xs" title="Up one level" aria-label="Up one level"><svg class="i"><use href="#i-up"/></svg></button>
+              <button id="files-reveal" class="iconbtn xs" title="Open this folder in the desktop file manager" aria-label="Open in file manager"><svg class="i"><use href="#i-folder-open"/></svg></button>
+            </div>
+          </div>
+          <div class="panel-b">
+            <div id="files-path" class="crumbs"></div>
+            <div id="files-list" class="files"></div>
+          </div>
         </div>
-        <div class="panel">
-          <h3>Rationale <button id="jr-refresh" class="mini" title="Reload">&#8635;</button></h3>
-          <button id="jr-open" class="jrlink">Open the document &rarr;</button>
-          <select id="jr-filter"></select>
-          <div id="jr-list" class="jrlist"></div>
+        <div class="panel" data-panel="rationale">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-book"/></svg>Rationale</h3>
+            <div class="panel-actions">
+              <button id="jr-refresh" class="iconbtn xs" title="Reload" aria-label="Reload"><svg class="i"><use href="#i-refresh"/></svg></button>
+            </div>
+          </div>
+          <div class="panel-b">
+            <div class="jrtools">
+              <select id="jr-filter" aria-label="Filter by kind"></select>
+              <button id="jr-open" class="ghost sm"><svg class="i"><use href="#i-file-text"/></svg>Document</button>
+            </div>
+            <div id="jr-list" class="jrlist"></div>
+          </div>
         </div>
-        <div id="idea-panel" class="panel hidden">
-          <h3>Idea <button id="idea-refresh" class="mini" title="Reload">&#8635;</button></h3>
-          <div id="idea-list" class="jrlist"></div>
-          <button id="idea-publish" class="ghost" title="Commit the idea page(s) to the ideas repository (config.json: ideas)">Publish idea</button>
-          <div id="idea-result" class="jrmeta"></div>
+        <div id="idea-panel" class="panel hidden" data-panel="idea">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-bulb"/></svg>Idea</h3>
+            <div class="panel-actions">
+              <button id="idea-refresh" class="iconbtn xs" title="Reload" aria-label="Reload"><svg class="i"><use href="#i-refresh"/></svg></button>
+            </div>
+          </div>
+          <div class="panel-b">
+            <div id="idea-list" class="jrlist"></div>
+            <button id="idea-publish" class="ghost sm" title="Commit the idea page(s) to the ideas repository (config.json: ideas)">Publish idea</button>
+            <div id="idea-result" class="jrmeta"></div>
+          </div>
         </div>
-        <div class="panel">
-          <h3>Repos</h3>
-          <div id="repo-list"></div>
+        <div class="panel" data-panel="repos">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-branch"/></svg>Repos</h3></div>
+          <div class="panel-b"><div id="repo-list"></div></div>
         </div>
-        <div class="panel">
-          <h3>Uncommitted <button id="git-refresh" class="mini" title="Refresh">↻</button></h3>
-          <div id="git-body" class="git">—</div>
+        <div class="panel" data-panel="git">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-diff"/></svg>Uncommitted</h3>
+            <div class="panel-actions">
+              <button id="git-refresh" class="iconbtn xs" title="Refresh" aria-label="Refresh"><svg class="i"><use href="#i-refresh"/></svg></button>
+            </div>
+          </div>
+          <div class="panel-b"><div id="git-body" class="git">—</div></div>
         </div>
-        <div class="panel">
-          <h3>Tokens <button id="usage-refresh" class="mini" title="Refresh">↻</button></h3>
-          <div id="usage-body" class="usage">—</div>
+        <div class="panel" data-panel="usage">
+          <div class="panel-h"><h3><svg class="i"><use href="#i-gauge"/></svg>Tokens</h3>
+            <div class="panel-actions">
+              <button id="usage-refresh" class="iconbtn xs" title="Refresh" aria-label="Refresh"><svg class="i"><use href="#i-refresh"/></svg></button>
+            </div>
+          </div>
+          <div class="panel-b"><div id="usage-body" class="usage">—</div></div>
         </div>
       </aside>
 
       <div class="workarea">
-        <div class="tabs" id="term-tabs">
-          <button id="btn-newagent" class="mini" title="New agent session in the workspace">+ claude</button>
-          <span id="resume-list" class="resume-list"></span>
-          <button id="btn-newterm" class="mini" title="New shell tab">+ shell</button>
+        <div class="termbar">
+          <div class="tabs" id="term-tabs" role="tablist"></div>
+          <div class="termbar-actions">
+            <button id="resume-list" class="ghost sm hidden" title="Resume an earlier conversation in this workspace"><svg class="i"><use href="#i-history"/></svg><span>Resume</span><span class="count"></span><svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+            <button id="btn-newagent" class="ghost sm" title="New agent session in the workspace"><svg class="i"><use href="#i-sparkle"/></svg><span>claude</span></button>
+            <button id="btn-newterm" class="ghost sm" title="New shell tab"><svg class="i"><use href="#i-terminal"/></svg><span>shell</span></button>
+          </div>
         </div>
-        <div id="term-host" class="term-host"></div>
+        <div id="term-host" class="term-host">
+          <div id="term-empty" class="term-empty hidden">
+            <svg class="i big"><use href="#i-terminal"/></svg>
+            <h3>No sessions in this workspace</h3>
+            <p>Start an agent to work on the task, or open a shell in the workspace folder.
+              Sessions keep running when you leave this page.</p>
+            <div class="term-empty-actions">
+              <button id="empty-agent" class="primary"><svg class="i"><use href="#i-sparkle"/></svg><span>Start claude</span></button>
+              <button id="empty-shell" class="ghost"><svg class="i"><use href="#i-terminal"/></svg>Open a shell</button>
+            </div>
+          </div>
+        </div>
         <div id="file-view" class="file-view hidden">
           <div class="file-view-head">
+            <svg class="i"><use href="#i-file"/></svg>
             <span id="file-view-name"></span>
-            <button id="file-close" class="mini">close</button>
+            <span class="spacer"></span>
+            <button id="file-close" class="iconbtn xs" title="Close the file" aria-label="Close the file"><svg class="i"><use href="#i-x"/></svg></button>
           </div>
-          <pre id="file-view-body"></pre>
+          <div class="code"><pre class="gutter" id="file-view-gutter" aria-hidden="true"></pre><pre id="file-view-body"></pre></div>
         </div>
       </div>
     </div>
@@ -258,92 +382,122 @@
 </main>
 
 <!-- ---------------------------------------------------------- modals -->
-<div id="movepop" class="modal hidden">
+<div id="movepop" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="movepop-title">
   <div class="modal-card">
-    <h2>Continue on another computer</h2>
-    <p class="hint">The agent and the stack stop here. The task's branches travel with
-      everything not committed yet, plus its decision log and the agent's conversation;
-      the other computer recreates the workspace and copies its own local config.</p>
-    <div id="move-targets" class="agent-picker"></div>
-    <label class="checkline"><input id="move-agent" type="checkbox" checked>
-      Start the agent there, resuming the conversation</label>
-    <label class="checkline"><input id="move-stack" type="checkbox"> Start the stack there</label>
-    <div id="move-status" class="hint"></div>
+    <div class="modal-h"><h2 id="movepop-title">Continue on another computer</h2></div>
+    <div class="modal-b">
+      <p class="hint">The agent and the stack stop here. The task's branches travel with
+        everything not committed yet, plus its decision log and the agent's conversation;
+        the other computer recreates the workspace and copies its own local config.</p>
+      <div id="move-targets" class="agent-picker"></div>
+      <label class="checkline"><input id="move-agent" type="checkbox" checked>
+        Start the agent there, resuming the conversation</label>
+      <label class="checkline"><input id="move-stack" type="checkbox"> Start the stack there</label>
+      <div id="move-status" class="hint"></div>
+    </div>
     <div class="modal-actions">
-      <button id="move-cancel" class="ghost">Cancel</button>
+      <button id="move-cancel" class="ghost" data-close>Cancel</button>
       <button id="move-go" class="primary">Move it</button>
     </div>
   </div>
 </div>
 
-<div id="jrpop" class="modal hidden">
+<div id="jrpop" class="modal hidden" role="dialog" aria-modal="true" data-light>
   <div class="modal-card">
-    <div id="jrpop-head" class="jrpop-head"></div>
-    <div id="jrpop-text" class="jrpop-text"></div>
-    <div id="jrpop-why"></div>
-    <div class="modal-actions"><button id="jrpop-close" class="ghost">Close</button></div>
+    <div class="modal-b">
+      <div id="jrpop-head" class="jrpop-head"></div>
+      <div id="jrpop-text" class="jrpop-text"></div>
+      <div id="jrpop-why"></div>
+    </div>
+    <div class="modal-actions"><button id="jrpop-close" class="ghost" data-close>Close</button></div>
   </div>
 </div>
 
-<div id="docpop" class="modal hidden">
+<div id="docpop" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="docpop-title" data-light>
   <div class="modal-card wide">
-    <h2>Design rationale</h2>
-    <div id="docpop-path" class="hint"></div>
-    <pre id="docpop-body" class="docbody"></pre>
+    <div class="modal-h"><h2 id="docpop-title">Design rationale</h2><div id="docpop-path" class="hint"></div></div>
+    <div class="modal-b">
+      <pre id="docpop-body" class="docbody"></pre>
+    </div>
     <div class="modal-actions">
       <label class="jrnar"><input id="docpop-narrate" type="checkbox"> with narrative</label>
       <div class="spacer"></div>
       <button id="docpop-write" class="ghost">Write to the repo</button>
       <button id="docpop-publish" class="ghost hidden" title="Write it, then push it to the ledger repository (config.json: ledger)">Publish to the ledger</button>
-      <button id="docpop-close" class="primary">Close</button>
+      <button id="docpop-close" class="primary" data-close>Close</button>
     </div>
   </div>
 </div>
 
-<div id="modal" class="modal hidden">
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
   <div class="modal-card">
-    <h2>New task</h2>
-    <div id="node-line" class="hidden">
-      <h3>Run on</h3>
-      <div id="node-picker" class="agent-picker"></div>
-    </div>
-    <label>Name
-      <input id="new-name" type="text" placeholder="PROJ-42 search filters" autocomplete="off">
-    </label>
-    <div class="slug-preview">workspace: <code id="slug-preview">—</code></div>
-    <label>Branch
-      <input id="new-branch" type="text" placeholder="feat/PROJ-42-search-filters"
-             autocomplete="off" spellcheck="false">
-    </label>
-    <div class="hint" id="branch-hint">Created in every selected repository, and what your
-      commits get pushed to. Suggested from the name — edit it and the suggestion stops.</div>
-    <p class="hint">The workspace is the folder this task opens; each repository below gets
-      its own git worktree inside it.</p>
-    <h3>Repositories &amp; base branch</h3>
-    <div id="repo-picker" class="repo-picker"></div>
-    <h3>How the stack boots</h3>
-    <div id="mode-picker" class="agent-picker"></div>
-    <div class="hint" id="mode-hint"></div>
+    <div class="modal-h"><h2 id="modal-title">New task</h2></div>
+    <div class="modal-b">
+      <div id="node-line" class="field hidden">
+        <h3>Run on</h3>
+        <div id="node-picker" class="agent-picker"></div>
+      </div>
+      <label class="field">Name
+        <input id="new-name" type="text" placeholder="PROJ-42 search filters" autocomplete="off">
+        <span class="slug-preview">Workspace <code id="slug-preview">—</code></span>
+      </label>
+      <label class="field">Branch
+        <input id="new-branch" type="text" placeholder="feat/PROJ-42-search-filters"
+               autocomplete="off" spellcheck="false">
+        <span class="hint" id="branch-hint">Created in every selected repository, and what your
+          commits get pushed to. Suggested from the name — edit it and the suggestion stops.</span>
+      </label>
+      <h3>Repositories &amp; base branch</h3>
+      <p class="hint">The workspace is the folder this task opens; each repository below gets
+        its own git worktree inside it.</p>
+      <div id="repo-picker" class="repo-picker"></div>
+      <h3>How the stack boots</h3>
+      <div id="mode-picker" class="agent-picker"></div>
+      <div class="hint" id="mode-hint"></div>
 
-    <h3>Agent</h3>
-    <div id="agent-picker" class="agent-picker"></div>
-    <label class="checkline">
-      <input id="new-start" type="checkbox" checked>
-      <span id="new-start-label">Start an agent session in the workspace</span>
-    </label>
-    <label class="checkline">
-      <input id="new-dangerous" type="checkbox"> Skip all permission checks
-      (<code id="new-danger-flag">--dangerously-skip-permissions</code>)
-    </label>
-    <div class="hint" id="perm-hint">Default is <code>--permission-mode auto</code>.
-      Skipping lets the agent run anything in this workspace without asking.</div>
-    <div id="modal-error" class="error"></div>
+      <h3>Agent</h3>
+      <div id="agent-picker" class="agent-picker"></div>
+      <label class="checkline">
+        <input id="new-start" type="checkbox" checked>
+        <span id="new-start-label">Start an agent session in the workspace</span>
+      </label>
+      <label class="checkline">
+        <input id="new-dangerous" type="checkbox"> <span>Skip all permission checks
+        (<code id="new-danger-flag">--dangerously-skip-permissions</code>)</span>
+      </label>
+      <div class="hint" id="perm-hint">Default is <code>--permission-mode auto</code>.
+        Skipping lets the agent run anything in this workspace without asking.</div>
+      <div id="modal-error" class="error"></div>
+    </div>
     <div class="modal-actions">
-      <button id="modal-cancel" class="ghost">Cancel</button>
-      <button id="modal-create" class="primary">Create</button>
+      <span class="hint kbdhint"><kbd>Enter</kbd> creates · <kbd>Esc</kbd> cancels</span>
+      <div class="spacer"></div>
+      <button id="modal-cancel" class="ghost" data-close>Cancel</button>
+      <button id="modal-create" class="primary">Create task</button>
     </div>
   </div>
 </div>
+
+<!-- A confirmation, drawn by ask() in app.js. -->
+<div id="askpop" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" data-light>
+  <div class="modal-card narrow">
+    <div class="modal-b">
+      <div class="ask">
+        <div id="ask-icon" class="ask-icon"></div>
+        <div class="ask-text">
+          <h2 id="ask-title"></h2>
+          <div id="ask-body"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="ask-cancel" class="ghost" data-close>Cancel</button>
+      <button id="ask-ok" class="primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
 
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
