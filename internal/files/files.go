@@ -5,6 +5,7 @@ package files
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,7 +86,10 @@ func List(root, rel string) ([]Entry, error) {
 		if name == ".DS_Store" {
 			continue
 		}
-		e := Entry{Name: name, IsDir: de.IsDir(), Path: filepath.Join(strings.TrimPrefix(rel, "."), name)}
+		// Join cleans "" and "." away by itself. Trimming a leading "." here
+		// instead turned ".claude" into "claude", so nothing inside a dot-folder
+		// could be opened — and every workspace has .claude/ and .fride/.
+		e := Entry{Name: name, IsDir: de.IsDir(), Path: filepath.ToSlash(filepath.Join(rel, name))}
 		e.Path = strings.TrimPrefix(e.Path, "/")
 		if info, err := de.Info(); err == nil {
 			e.Size = info.Size()
@@ -163,8 +167,18 @@ func Read(root, rel string) (*FileContent, error) {
 		truncated = true
 	}
 	b := make([]byte, limit)
-	n, _ := f.Read(b)
+	n, _ := io.ReadFull(f, b)
 	b = b[:n]
+	// The cap can land inside a multi-byte character; without dropping that
+	// partial rune a large text file is reported as binary.
+	if truncated {
+		for i := 0; i < utf8.UTFMax && len(b) > 0; i++ {
+			if r, size := utf8.DecodeLastRune(b); r != utf8.RuneError || size != 1 {
+				break
+			}
+			b = b[:len(b)-1]
+		}
+	}
 
 	out := &FileContent{Path: rel, Size: fi.Size(), Truncate: truncated}
 	// A NUL byte or invalid UTF-8 means we should not try to show it as text.
