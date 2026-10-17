@@ -7,9 +7,15 @@
 package agent
 
 import (
+	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 // Kind identifies one agent CLI. It is what a task stores and what the UI
@@ -43,6 +49,12 @@ type Options struct {
 	// PermissionMode is Claude Code's --permission-mode. The other agents have
 	// no equivalent that is worth exposing and ignore it.
 	PermissionMode string
+	// Model and Effort override the CLI's own defaults; empty keeps them.
+	Model  string
+	Effort string
+	// Prompt is the first message of a new session, which then stays open
+	// for the person to follow and answer. Ignored when ResumeID is set.
+	Prompt string
 }
 
 type spec struct {
@@ -61,7 +73,12 @@ type spec struct {
 	// conversation records under. Where it is false the id can only be observed
 	// after the fact, which is a guess and is treated as one.
 	preassigns bool
-	argv       func(o Options) []string
+	// efforts are the values the CLI's effort flag accepts, offered in the UI.
+	efforts []string
+	argv    func(o Options) []string
+	// models suggests model names; the CLI accepts others too. Nil means
+	// there is no cheap way to ask.
+	models func() []string
 }
 
 // specs is the whole table, in the order the UI offers them.
@@ -72,21 +89,28 @@ var specs = []spec{
 		dangerFlag: "--dangerously-skip-permissions",
 		resumable:  true,
 		preassigns: true,
+		efforts:    []string{"low", "medium", "high", "xhigh", "max"},
 		argv:       claudeArgv,
+		// The aliases `claude --help` documents; each tracks the latest model.
+		models: func() []string { return []string{"fable", "opus", "sonnet", "haiku"} },
 	},
 	{
 		kind: Antigravity, label: "Antigravity CLI", bin: "agy",
 		safeLabel: "default", dangerLabel: "skip-permissions",
 		dangerFlag: "--dangerously-skip-permissions",
 		resumable:  true,
+		efforts:    []string{"low", "medium", "high"},
 		argv:       antigravityArgv,
+		models:     antigravityModels,
 	},
 	{
 		kind: Codex, label: "Codex CLI", bin: "codex",
 		safeLabel: "sandboxed", dangerLabel: "bypass-sandbox",
 		dangerFlag: "--dangerously-bypass-approvals-and-sandbox",
 		resumable:  true,
+		efforts:    []string{"low", "medium", "high", "xhigh", "max"},
 		argv:       codexArgv,
+		models:     codexModels,
 	},
 }
 
@@ -99,16 +123,26 @@ func claudeArgv(o Options) []string {
 	} else if o.PermissionMode != "" {
 		argv = append(argv, "--permission-mode", o.PermissionMode)
 	}
+	if o.Model != "" {
+		argv = append(argv, "--model", o.Model)
+	}
+	if o.Effort != "" {
+		argv = append(argv, "--effort", o.Effort)
+	}
 	if o.ResumeID != "" {
 		// Resume one specific conversation. --continue would only ever reopen the
 		// most recent one, so several agents in the same workspace could not be
 		// restored independently.
-		argv = append(argv, "--resume", o.ResumeID)
-	} else if o.SessionID != "" {
+		return append(argv, "--resume", o.ResumeID)
+	}
+	if o.SessionID != "" {
 		// Name the new conversation up front. Claude Code would otherwise pick a
 		// uuid of its own and only reveal it by writing the transcript file, which
 		// leaves the caller watching the filesystem to find out what it started.
 		argv = append(argv, "--session-id", o.SessionID)
+	}
+	if o.Prompt != "" {
+		argv = append(argv, o.Prompt) // positional: interactive, with this first turn
 	}
 	return argv
 }
@@ -122,10 +156,20 @@ func antigravityArgv(o Options) []string {
 	if o.Dangerous {
 		argv = append(argv, "--dangerously-skip-permissions")
 	}
+	if o.Model != "" {
+		argv = append(argv, "--model", o.Model)
+	}
+	if o.Effort != "" {
+		argv = append(argv, "--effort", o.Effort)
+	}
 	if o.ResumeID != "" {
 		// --conversation reopens one specific conversation; --continue would only
 		// ever take the most recent, which cannot restore several independently.
-		argv = append(argv, "--conversation", o.ResumeID)
+		return append(argv, "--conversation", o.ResumeID)
+	}
+	if o.Prompt != "" {
+		// --prompt would print one answer and exit; this keeps the session open.
+		argv = append(argv, "--prompt-interactive", o.Prompt)
 	}
 	return argv
 }
@@ -142,10 +186,75 @@ func codexArgv(o Options) []string {
 	if o.Dangerous {
 		argv = append(argv, "--dangerously-bypass-approvals-and-sandbox")
 	}
+	if o.Model != "" {
+		argv = append(argv, "--model", o.Model)
+	}
+	if o.Effort != "" {
+		// Codex has no effort flag; its config key is set per invocation instead.
+		argv = append(argv, "-c", "model_reasoning_effort="+o.Effort)
+	}
 	if o.ResumeID != "" {
-		argv = append(argv, o.ResumeID)
+		return append(argv, o.ResumeID)
+	}
+	if o.Prompt != "" {
+		argv = append(argv, o.Prompt)
 	}
 	return argv
+}
+
+// codexModels reads the model list Codex caches for its own picker, keeping
+// the ones it shows there.
+func codexModels() []string {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return nil
+		}
+		home = filepath.Join(h, ".codex")
+	}
+	b, err := os.ReadFile(filepath.Join(home, "models_cache.json"))
+	if err != nil {
+		return nil
+	}
+	var c struct {
+		Models []struct {
+			Slug       string `json:"slug"`
+			Visibility string `json:"visibility"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(b, &c) != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range c.Models {
+		if m.Slug != "" && (m.Visibility == "" || m.Visibility == "list") {
+			out = append(out, m.Slug)
+		}
+	}
+	return out
+}
+
+// antigravityModels asks `agy models`, which prints one "id<TAB>label" line
+// per model after a progress line. It goes over the network, hence the bound.
+func antigravityModels() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, "agy", "models").Output()
+	if err != nil {
+		return nil
+	}
+	return parseTabbedIDs(string(b))
+}
+
+func parseTabbedIDs(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if id, _, ok := strings.Cut(line, "\t"); ok && strings.TrimSpace(id) != "" {
+			out = append(out, strings.TrimSpace(id))
+		}
+	}
+	return out
 }
 
 func bin(o Options, dflt string) string {
@@ -215,6 +324,14 @@ func NewSessionID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
+// Models suggests model names for an agent; nil when it cannot tell.
+func Models(k Kind) []string {
+	if m := find(k).models; m != nil {
+		return m()
+	}
+	return nil
+}
+
 // Bin is the binary an agent is started as.
 func Bin(k Kind) string { return find(k).bin }
 
@@ -231,12 +348,15 @@ type Info struct {
 	SafeLabel   string `json:"safeLabel"`
 	DangerLabel string `json:"dangerLabel"`
 	DangerFlag  string `json:"dangerFlag"`
+	// Efforts are the accepted effort levels; the CLI's default needs none.
+	Efforts []string `json:"efforts,omitempty"`
 }
 
 func describe(sp spec) Info {
 	i := Info{
 		Kind: sp.kind, Label: sp.label, Bin: sp.bin, Resumable: sp.resumable,
 		SafeLabel: sp.safeLabel, DangerLabel: sp.dangerLabel, DangerFlag: sp.dangerFlag,
+		Efforts: sp.efforts,
 	}
 	// Looked up on every call rather than cached at startup: installing a CLI
 	// should make it selectable without restarting a server that is holding
@@ -261,6 +381,20 @@ func List() []Info {
 		out = append(out, describe(sp))
 	}
 	return out
+}
+
+// ValidEffort rejects a level the agent's flag would refuse, so a bad request
+// fails here rather than as a tab whose CLI exited on its arguments.
+func ValidEffort(k Kind, effort string) bool {
+	if effort == "" {
+		return true
+	}
+	for _, e := range find(k).efforts {
+		if e == effort {
+			return true
+		}
+	}
+	return false
 }
 
 // Check fails when the chosen agent is not installed, so a task creation says

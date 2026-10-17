@@ -847,6 +847,99 @@ $('#move-go').addEventListener('click', async () => {
   b.disabled = false;
 });
 
+/* ------------------------------------------------------------------ review
+
+   Review starts a reviewer for the task's merge requests, in a tab of its own,
+   with the agent, model and effort picked here. The choices are remembered
+   per browser, the model and effort per agent. */
+
+const review = { agents: [], kind: '', models: new Map() };
+function reviewPrefs() {
+  try { return JSON.parse(localStorage.getItem('fride.review')) || {}; } catch { return {}; }
+}
+function saveReviewPrefs(pr) {
+  try { localStorage.setItem('fride.review', JSON.stringify(pr)); } catch {}
+}
+
+$('#reviewpop').addEventListener('toggle', async e => {
+  if (e.newState !== 'open') return;
+  const pop = e.currentTarget, r = $('#btn-review').getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.style.top = (r.bottom + 4) + 'px';
+  // The task's own computer runs the reviewer, so its CLIs are the ones offered.
+  try { review.agents = (await api.get(tb() + '/agents')).agents || []; }
+  catch (err) { toast(err.message); return; }
+  const pr = reviewPrefs();
+  const usable = k => review.agents.some(a => a.kind === k && a.installed);
+  review.kind = [pr.last, state.taskAgent].find(usable) || (review.agents.find(a => a.installed) || {}).kind || '';
+  const host = $('#review-agents');
+  host.innerHTML = '';
+  for (const a of review.agents) {
+    const row = el('label', 'agent-pick' + (a.installed ? '' : ' missing'));
+    const rb = el('input');
+    rb.type = 'radio';
+    rb.name = 'review-agent';
+    rb.disabled = !a.installed;
+    rb.checked = a.kind === review.kind;
+    rb.addEventListener('change', () => { review.kind = a.kind; renderReviewChoices(); });
+    row.appendChild(rb);
+    const nm = el('div');
+    nm.appendChild(document.createTextNode(a.label));
+    if (!a.installed) nm.appendChild(el('small', null, a.detail || 'not installed'));
+    row.appendChild(nm);
+    host.appendChild(row);
+  }
+  renderReviewChoices();
+});
+
+function renderReviewChoices() {
+  const a = review.agents.find(x => x.kind === review.kind) || {};
+  const mine = (reviewPrefs().byAgent || {})[review.kind] || {};
+  $('#review-model').value = mine.model || '';
+  const sel = $('#review-effort');
+  sel.innerHTML = '';
+  for (const v of ['', ...(a.efforts || [])]) {
+    const o = el('option', null, v || 'the CLI\'s default');
+    o.value = v;
+    sel.appendChild(o);
+  }
+  sel.value = (a.efforts || []).includes(mine.effort) ? mine.effort : '';
+  sel.disabled = !(a.efforts || []).length;
+  $('#review-go').disabled = !a.installed;
+  fillReviewModels(review.kind);
+}
+
+// Suggestions only; any name the CLI accepts can be typed. Asking can take
+// seconds (one CLI asks its server), so the answer is kept per computer.
+async function fillReviewModels(kind) {
+  const list = $('#review-models');
+  list.innerHTML = '';
+  const key = tb() + '|' + kind;
+  if (!review.models.has(key)) {
+    review.models.set(key, api.get(`${tb()}/agents/models?kind=${encodeURIComponent(kind)}`)
+      .then(d => d.models || []).catch(() => []));
+  }
+  const models = await review.models.get(key);
+  if (review.kind !== kind) return;
+  for (const m of models) { const o = el('option'); o.value = m; list.appendChild(o); }
+}
+
+$('#review-go').addEventListener('click', async e => {
+  const b = e.currentTarget, p = pin();
+  const body = { agent: review.kind, model: $('#review-model').value.trim(), effort: $('#review-effort').value };
+  b.disabled = true;
+  try {
+    const s = await api.post(`${p.base}/tasks/${p.slug}/review`, body);
+    const pr = reviewPrefs();
+    pr.last = body.agent;
+    pr.byAgent = Object.assign(pr.byAgent || {}, { [body.agent]: { model: body.model, effort: body.effort } });
+    saveReviewPrefs(pr);
+    $('#reviewpop').hidePopover();
+    if (!stale(p)) { attachTerm(s, p); selectTerm(s.id); }
+  } catch (err) { toast(err.message); }
+  b.disabled = false;
+});
+
 function mirroredHere(node, task) {
   return (state.fleet.mirrors || []).some(m => m.node === node && m.task === task);
 }
