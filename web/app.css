@@ -1106,6 +1106,35 @@ pre.docbody {
 .orchbtns { display: flex; gap: 8px; flex: none; }
 .orchbtns .primary { flex: 1; }
 
+/* ---------------------------------------------------------------- inbox */
+
+/* The inbox borrows the orchestrator's chat for a thread's trail; what is its
+   own is the list of threads, each a message from outside and its state. */
+#inbox .panel.grow { min-height: 260px; padding: 0 12px 12px; }
+#inbox .panel-h { padding-left: 2px; padding-right: 0; }
+.inbox-list { display: flex; flex-direction: column; gap: 2px; overflow: auto; flex: 1; min-height: 0; }
+.inbox-row {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 7px 9px; border-radius: 6px; border: 1px solid transparent; background: none;
+}
+.inbox-row:hover { background: var(--bg3); }
+.inbox-row.active { background: var(--accent-soft); border-color: var(--accent-line); }
+.inbox-row-h { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.inbox-id { font-family: var(--mono); color: var(--faint); }
+.inbox-src { font-weight: 600; color: var(--dim); }
+.inbox-st { margin-left: auto; color: var(--dim); }
+.inbox-st.st-routing, .inbox-st.st-active { color: var(--accent-fg); }
+.inbox-st.st-needs_reply { color: var(--amber); font-weight: 600; }
+.inbox-st.st-failed { color: var(--red); }
+.inbox-st.st-done, .inbox-st.st-answered { color: var(--green); }
+.inbox-txt {
+  font-size: 13px; line-height: 1.45; margin: 3px 0 2px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.inbox-row small { display: block; font-size: 11.5px; color: var(--dim); }
+.inbox-btns { display: flex; gap: 8px; }
+.pill.inbox-pill { color: var(--accent-fg); border-color: var(--accent-line); }
+
 /* ---------------------------------------------------------------- setup */
 
 .setup-card {

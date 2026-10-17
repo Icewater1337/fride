@@ -62,7 +62,7 @@ func testServer(t *testing.T) (*Server, string, string) {
 		t.Fatal(err)
 	}
 	s := New(cfg, st, term.NewManager(), fstest.MapFS{}, 7777)
-	t.Cleanup(s.orch.Close)
+	t.Cleanup(func() { s.orch.Close(); s.orch.Wait() })
 	return s, path, string(b)
 }
 

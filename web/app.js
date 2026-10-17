@@ -289,6 +289,7 @@ function showView(name) {
   // A task is opened from the board, so the board stays lit while one is open.
   $('#nav-board').classList.toggle('active', name === 'board' || name === 'task');
   $('#nav-orch').classList.toggle('active', name === 'orch');
+  $('#nav-inbox').classList.toggle('active', name === 'inbox');
   $('#nav-instances').classList.toggle('active', name === 'instances');
   $('#nav-settings').classList.toggle('active', name === 'settings');
   $('#nav-computers').classList.toggle('active', name === 'computers');
@@ -560,6 +561,7 @@ async function openTask(slug, node) {
   state.openFile = '';
   state.viaIde.clear();
   stopOrch(); // reachable from the orchestrator view via the task switcher
+  stopInbox(); // and from the inbox, through a thread's task
   stopPolling();
   disposeTerms();
   clearTaskView(slug, state.currentNode);
@@ -1653,6 +1655,7 @@ $('#btn-delete').addEventListener('click', async () => {
 async function goBoard() {
   stopPolling();
   stopOrch();
+  stopInbox();
   disposeTerms();
   try { await loadBoard(); } catch (e) { toast(e.message); }
   showView('board');
@@ -1707,7 +1710,7 @@ $('#toggle-hidden').addEventListener('click', async () => {
   await loadBoard();
 });
 
-function leaveTask() { stopPolling(); stopOrch(); }
+function leaveTask() { stopPolling(); stopOrch(); stopInbox(); }
 
 $('#nav-board').addEventListener('click', goBoard);
 $('#nav-instances').addEventListener('click', async () => {
@@ -1785,7 +1788,8 @@ async function loadComputers() {
   if (!(f.mirrors || []).length) mh.appendChild(el('div', 'hint', 'Nothing from another computer is open here.'));
 }
 
-$('#nav-orch').addEventListener('click', () => { stopPolling(); showView('orch'); startOrch(); });
+$('#nav-orch').addEventListener('click', () => { stopPolling(); stopInbox(); showView('orch'); startOrch(); });
+$('#nav-inbox').addEventListener('click', () => { leaveTask(); showView('inbox'); startInbox(); });
 
 /* ------------------------------------------------ environment prerequisites */
 
@@ -2610,13 +2614,17 @@ function renderOrchLog(v) {
   if (atBottom || !host.scrollTop) host.scrollTop = host.scrollHeight;
 }
 
-function orchMessage(m) {
+function orchMessage(m, opts = {}) {
   const row = el('div', 'orch-msg ' + m.role);
   const head = el('div', 'orch-head');
   head.appendChild(el('span', 'orch-who', {
     user: 'You', orchestrator: 'Orchestrator', event: 'did', error: 'failed',
   }[m.role] || m.role));
   if (m.task) head.appendChild(el('span', 'pill', m.task));
+  // Where an inbox thread is involved, say which: the chat interleaves them.
+  if (opts.threads !== false && (m.threads || []).length) {
+    head.appendChild(el('span', 'pill inbox-pill', 'inbox ' + m.threads.map(id => '#' + id).join(' ')));
+  }
   head.appendChild(el('span', 'orch-time', m.time
     ? new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''));
   row.appendChild(head);
@@ -2672,6 +2680,212 @@ $('#orch-reset').addEventListener('click', async () => {
                    ok: 'Clear chat', danger: true })) return;
   try { await api.post('/api/orchestrator/reset'); orch.lastSeen = -1; await loadOrch(true); }
   catch (e) { $('#orch-error').textContent = e.message; }
+});
+
+
+/* ------------------------------------------------------------------ inbox */
+
+/* The inbox is the orchestrator's door to the outside: messages sent with
+   `fride in` or POST /api/inbox by a script, a chat bridge or an assistant.
+   Each one is a thread, and the thread keeps what came of it — the answer, the
+   task it went to, that task's news — because whoever sent it was not here to
+   watch. Like the orchestrator's view, this is a poll. */
+
+const INBOX_STATUS = {
+  queued: 'queued', routing: 'reading', active: 'following', needs_reply: 'needs a reply',
+  answered: 'answered', done: 'done', closed: 'closed', failed: 'failed',
+};
+
+const inbox = {
+  poll: null,
+  threads: [],
+  // selected is the open thread; 0 is "New message", which writes to the
+  // inbox as if from outside — the quickest way to see what a relay would.
+  selected: 0,
+  listKey: '',
+  logKey: '',
+};
+
+function startInbox() {
+  stopInbox();
+  inbox.listKey = inbox.logKey = '';
+  loadInbox();
+  inbox.poll = setInterval(loadInbox, 2000);
+}
+function stopInbox() { if (inbox.poll) { clearInterval(inbox.poll); inbox.poll = null; } }
+
+async function loadInbox() {
+  let list;
+  try { list = await api.get('/api/inbox'); }
+  catch (e) { $('#inbox-error').textContent = e.message; return; }
+  inbox.threads = list || [];
+  if (inbox.selected && !inbox.threads.some(t => t.id === inbox.selected)) inbox.selected = 0;
+  renderInboxList();
+  await loadThread();
+}
+
+function renderInboxList() {
+  const host = $('#inbox-list');
+  const key = JSON.stringify([inbox.selected, inbox.threads.map(t =>
+    [t.id, t.status, t.updated, (t.tasks || []).join(',')])]);
+  if (key === inbox.listKey) return;
+  inbox.listKey = key;
+  host.innerHTML = '';
+  if (!inbox.threads.length) {
+    host.appendChild(el('div', 'jrmeta', 'Nothing has arrived yet.'));
+    return;
+  }
+  for (const t of inbox.threads) {
+    const row = el('button', 'inbox-row' + (t.id === inbox.selected ? ' active' : ''));
+    row.type = 'button';
+    const top = el('div', 'inbox-row-h');
+    top.appendChild(el('span', 'inbox-id', '#' + t.id));
+    top.appendChild(el('span', 'inbox-src', t.source));
+    top.appendChild(el('span', 'inbox-st st-' + t.status, INBOX_STATUS[t.status] || t.status));
+    row.appendChild(top);
+    row.appendChild(el('div', 'inbox-txt', t.text));
+    const meta = [whenShort(t.updated)];
+    if ((t.tasks || []).length) meta.push(t.tasks.join(', '));
+    row.appendChild(el('small', null, meta.join(' · ')));
+    row.addEventListener('click', () => selectThread(t.id));
+    host.appendChild(row);
+  }
+}
+
+function selectThread(id) {
+  inbox.selected = id;
+  inbox.logKey = '';
+  $('#inbox-error').textContent = '';
+  renderInboxList();
+  loadThread();
+  $('#inbox-input').focus();
+}
+
+async function loadThread() {
+  const id = inbox.selected;
+  if (!id) { renderNewMessage(); return; }
+  let v;
+  try { v = await api.get('/api/inbox/' + id); }
+  catch (e) { $('#inbox-error').textContent = e.message; return; }
+  if (id === inbox.selected) renderThread(v);
+}
+
+function renderThread(v) {
+  const head = $('#inbox-head');
+  head.innerHTML = '';
+  head.appendChild(el('span', 'badge' + (v.status === 'active' ? ' up' : ''), INBOX_STATUS[v.status] || v.status));
+  head.appendChild(el('span', 'orch-meta', `#${v.id} from ${v.source}` + (v.ref ? ` (${v.ref})` : '')));
+  for (const slug of v.tasks || []) {
+    const done = (v.finished || []).includes(slug);
+    const b = el('button', 'chip' + (done ? '' : ' node remote'), slug + (done ? ' · closed' : ''));
+    b.type = 'button';
+    b.title = done ? 'This task has been closed' : 'Open this task';
+    if (!done) b.addEventListener('click', () => openTask(slug, ''));
+    head.appendChild(b);
+  }
+  if (v.position) head.appendChild(el('span', 'orch-meta think',
+    v.position === 1 ? 'next to be read' : `${v.position - 1} ahead of it in the queue`));
+  if (v.status === 'routing') head.appendChild(el('span', 'orch-meta think', 'reading…'));
+  if (v.status === 'needs_reply') head.appendChild(el('span', 'orch-meta wait', 'waiting for your reply'));
+  $('#inbox-error').textContent = v.error ? 'Last attempt failed: ' + v.error : '';
+
+  const log = $('#inbox-log');
+  const msgs = v.messages || [];
+  const key = [v.id, v.status, msgs.length ? msgs[msgs.length - 1].id : 0].join(':');
+  if (key !== inbox.logKey) {
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    inbox.logKey = key;
+    log.innerHTML = '';
+    if (!msgs.length) {
+      // The trail is the orchestrator's chat filtered to this thread, and a
+      // cleared chat takes it along; the message itself is kept on the thread.
+      log.appendChild(orchMessage({ role: 'user', text: v.text, time: v.created }, { threads: false }));
+    }
+    for (const m of msgs) log.appendChild(orchMessage(m, { threads: false }));
+    if (v.status === 'routing') log.appendChild(el('div', 'orch-msg think', 'reading…'));
+    if (atBottom || !log.scrollTop) log.scrollTop = log.scrollHeight;
+  }
+
+  $('#inbox-input').placeholder = v.status === 'needs_reply'
+    ? 'Answer its question'
+    : 'Reply in this thread — more for its task, or a correction';
+  setLabel($('#inbox-send'), 'Reply');
+  $('#inbox-close').classList.toggle('hidden', v.status === 'closed');
+}
+
+function renderNewMessage() {
+  const head = $('#inbox-head');
+  head.innerHTML = '';
+  head.appendChild(el('span', 'badge', 'new message'));
+  head.appendChild(el('span', 'orch-meta', 'Sent as if from outside, with source "ui"'));
+  $('#inbox-error').textContent = '';
+  const log = $('#inbox-log');
+  if (inbox.logKey !== 'new') {
+    inbox.logKey = 'new';
+    log.innerHTML = '';
+    const empty = el('div', 'orch-empty');
+    empty.appendChild(icon('inbox', 'big'));
+    empty.appendChild(el('div', null,
+      'Pick a thread to read what came of it. Or write a message here: the orchestrator ' +
+      'routes it to the task it continues, starts a new task for it, or asks you back — ' +
+      'exactly as it would for one relayed from your phone.'));
+    log.appendChild(empty);
+  }
+  $('#inbox-input').placeholder = 'Fix the empty state of the search page in the frontend';
+  setLabel($('#inbox-send'), 'Send');
+  $('#inbox-close').classList.add('hidden');
+}
+
+// whenShort is a timestamp at the precision a list needs: the time today, the
+// day otherwise.
+function whenShort(t) {
+  if (!t) return '';
+  const d = new Date(t);
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+}
+
+async function sendInbox() {
+  const box = $('#inbox-input'), text = box.value.trim();
+  if (!text) return;
+  const btn = $('#inbox-send');
+  btn.disabled = true;
+  try {
+    const v = inbox.selected
+      ? await api.post(`/api/inbox/${inbox.selected}/reply`, { text })
+      : await api.post('/api/inbox', { text, source: 'ui' });
+    box.value = '';
+    growBox(box);
+    inbox.selected = v.id;
+    inbox.listKey = inbox.logKey = '';
+    $('#inbox-error').textContent = '';
+    await loadInbox();
+  } catch (e) { $('#inbox-error').textContent = e.message; }
+  btn.disabled = false;
+  box.focus();
+}
+
+function growBox(box) {
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight, 240) + 'px';
+}
+
+$('#inbox-send').addEventListener('click', sendInbox);
+$('#inbox-input').addEventListener('input', e => growBox(e.target));
+$('#inbox-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendInbox(); }
+});
+$('#inbox-new').addEventListener('click', () => selectThread(0));
+$('#inbox-close').addEventListener('click', async () => {
+  const id = inbox.selected;
+  if (!id) return;
+  try {
+    await api.post(`/api/inbox/${id}/close`);
+    inbox.listKey = inbox.logKey = '';
+    await loadInbox();
+    toast(`Stopped following #${id}. Its tasks are left as they are.`, 'ok');
+  } catch (e) { $('#inbox-error').textContent = e.message; }
 });
 
 

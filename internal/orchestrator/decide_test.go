@@ -299,7 +299,7 @@ func TestTheLoopDoesNotRepeatATurnForAnIdleAgent(t *testing.T) {
 	h.turns["t1"] = []agent.Turn{{UUID: "a1", Role: "assistant", Text: "Done."}}
 	dir := t.TempDir()
 	o := New(dir, dir, st.bin, h)
-	defer o.Close()
+	defer func() { o.Close(); o.Wait() }()
 	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestTheLoopRetriesAFailedLookWithTheSameTurns(t *testing.T) {
 	h.turns["t1"] = []agent.Turn{{UUID: "q1", Role: "assistant", Text: "Which database?"}}
 	dir := t.TempDir()
 	o := New(dir, dir, flaky, h)
-	defer o.Close()
+	defer func() { o.Close(); o.Wait() }()
 	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestAResetDuringATurnIsNotUndoneByIt(t *testing.T) {
 	}
 	h := newFakeHost()
 	o := New(dir, dir, bin, h)
-	defer o.Close()
+	defer func() { o.Close(); o.Wait() }()
 
 	if err := o.Say("tell t1 to go"); err != nil {
 		t.Fatal(err)

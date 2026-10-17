@@ -29,6 +29,7 @@ Layout:
 ```
 main.go                  CLI; every UI action is also a subcommand
 orch_cli.go, fleet_cli.go `fride orch …` / `fride fleet`, clients of the running server
+in_cli.go                `fride in …`: the inbox, a client of the running server
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
@@ -42,7 +43,7 @@ internal/workspace       worktree create/remove, the per-task agent guide
 internal/task            task creation, shared by the CLI, the server and the orchestrator
 internal/agent           agent CLIs: flags, detection, transcripts
 internal/jsonl           reading JSONL that survives long lines and reports errors
-internal/orchestrator    the supervising agent above the task agents
+internal/orchestrator    the supervising agent above the task agents, and its inbox
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)
 internal/journal         decision log, rationale document, ledger, idea pages
@@ -50,6 +51,7 @@ internal/server          HTTP + WebSocket
 web/                     the UI, no build step (xterm.js vendored)
 docs/CONFIG.md           config.json reference
 docs/FLEET.md            fleet mode
+docs/INBOX.md            messages from outside: `fride in`, /api/inbox
 ```
 
 Conventions:

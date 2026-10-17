@@ -67,11 +67,15 @@ const (
 
 // Message is one entry in the orchestrator's chat.
 type Message struct {
-	ID   int       `json:"id"`
-	Role string    `json:"role"`
-	Text string    `json:"text"`
-	Task string    `json:"task,omitempty"`
-	Time time.Time `json:"time"`
+	ID   int    `json:"id"`
+	Role string `json:"role"`
+	Text string `json:"text"`
+	Task string `json:"task,omitempty"`
+	// Threads are the inbox threads the message belongs to: the message that
+	// opened one, what was said and done about it, and news of the tasks it
+	// is following. A thread's view is the chat filtered to it.
+	Threads []int     `json:"threads,omitempty"`
+	Time    time.Time `json:"time"`
 }
 
 // state is everything that survives a restart. The conversation itself lives in
@@ -85,6 +89,46 @@ type state struct {
 	Messages []Message         `json:"messages"`
 	Cursors  map[string]string `json:"cursors,omitempty"`
 	Seq      int               `json:"seq"`
+
+	// The inbox: its threads, the messages not read yet, and instructions
+	// waiting for an agent to be ready. See inbox.go.
+	Threads   []Thread        `json:"threads,omitempty"`
+	ThreadSeq int             `json:"threadSeq,omitempty"`
+	Queue     []inboxItem     `json:"queue,omitempty"`
+	Reading   *inboxItem      `json:"reading,omitempty"`
+	Held      map[string]held `json:"held,omitempty"`
+}
+
+// origin is who a brain turn is for. It decides whether the turn's actions
+// run or are only proposed, and whether the guard on talking to an agent
+// forever applies.
+type origin int
+
+const (
+	// fromLoop is a scheduled look. Nobody asked for it.
+	fromLoop origin = iota
+	// fromUser is someone typing in the chat. They are present and see
+	// everything that happens, so nothing they ask for is refused.
+	fromUser
+	// fromInbox is a message from outside. It was asked for, so it acts; but
+	// nobody is watching, so the send guard holds as it does for the loop.
+	fromInbox
+)
+
+// turn is one brain turn's circumstances.
+type turn struct {
+	origin origin
+	// thread is the inbox thread the turn is reading, and item the message.
+	thread int
+	item   *inboxItem
+}
+
+// threads is what the turn's own messages are filed under.
+func (t turn) threads() []int {
+	if t.thread == 0 {
+		return nil
+	}
+	return []int{t.thread}
 }
 
 // Orchestrator is the supervising agent. One per server.
@@ -107,8 +151,15 @@ type Orchestrator struct {
 	// mem is what the monitor loop carries between ticks; see decide.go.
 	mem memory
 
-	stop chan struct{}
-	once sync.Once
+	// wake asks the run loop to read the inbox now rather than on its next tick.
+	wake chan struct{}
+	// turns counts the monitor loop and the turns running in a goroutine of
+	// their own, so that Wait can tell when the last of them has written its
+	// result. Added to only under mu and only while not closed, which is what
+	// keeps an Add from racing a Wait that has already begun.
+	turns sync.WaitGroup
+	stop  chan struct{}
+	once  sync.Once
 }
 
 // New loads the orchestrator's state and starts its monitor loop.
@@ -122,6 +173,7 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 		host:  host,
 		brain: &brain{bin: claudeBin, dir: workspaceRoot},
 		mem:   memory{tasks: map[string]taskState{}},
+		wake:  make(chan struct{}, 1),
 		stop:  make(chan struct{}),
 	}
 	o.st = state{Mode: ModeChat, Autonomy: AutonomyAuto, Cursors: map[string]string{}}
@@ -129,12 +181,43 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 	for slug, c := range o.st.Cursors {
 		o.mem.tasks[slug] = taskState{cursor: c}
 	}
-	go o.run()
+	// A message that was being read when the last process stopped is read
+	// again: its turn never finished, so nothing of it was applied.
+	if it := o.st.Reading; it != nil {
+		o.st.Reading = nil
+		o.requeue(*it, "FrIDE restarted while this was being read")
+	}
+	o.turns.Add(1)
+	go func() {
+		defer o.turns.Done()
+		o.run()
+	}()
+	o.kick()
 	return o
 }
 
-// Close stops the monitor loop.
-func (o *Orchestrator) Close() { o.once.Do(func() { close(o.stop) }) }
+// Close stops the monitor loop. No turn starts after it; one already running
+// finishes — see Wait.
+func (o *Orchestrator) Close() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.once.Do(func() { close(o.stop) })
+}
+
+// Wait blocks, after Close, until the monitor loop has stopped and every turn
+// still running has finished. A turn writes the state file when it ends, so
+// this is what makes "nothing more will be written" true.
+func (o *Orchestrator) Wait() { o.turns.Wait() }
+
+// closed reports whether Close has been called. Called with the lock held.
+func (o *Orchestrator) closed() bool {
+	select {
+	case <-o.stop:
+		return true
+	default:
+		return false
+	}
+}
 
 // ------------------------------------------------------------------ persistence
 
@@ -181,14 +264,25 @@ func (o *Orchestrator) save() {
 }
 
 // add appends a message. Called with the lock held.
-func (o *Orchestrator) add(role, task, text string) {
+func (o *Orchestrator) add(role, task, text string) { o.addTo(role, task, text) }
+
+// addTo appends a message filed under these inbox threads, and under every
+// thread following its task: news of a task is news for whoever sent the
+// message it came from. Called with the lock held.
+func (o *Orchestrator) addTo(role, task, text string, threads ...int) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
+	var ids []int
+	for _, id := range append(threads, o.threadsFor(task)...) {
+		if !containsInt(ids, id) {
+			ids = append(ids, id)
+		}
+	}
 	o.st.Seq++
 	o.st.Messages = append(o.st.Messages, Message{
-		ID: o.st.Seq, Role: role, Task: task, Text: text, Time: time.Now(),
+		ID: o.st.Seq, Role: role, Task: task, Text: text, Threads: ids, Time: time.Now(),
 	})
 }
 
@@ -203,6 +297,8 @@ type View struct {
 	Thinking bool      `json:"thinking"`
 	Awaiting bool      `json:"awaiting"`
 	Error    string    `json:"error,omitempty"`
+	// Queued is how many inbox messages are waiting to be read.
+	Queued int `json:"queued,omitempty"`
 	// Tasks is the current task list, so the workspace picker and the chat can
 	// be drawn from one poll.
 	Tasks []TaskInfo `json:"tasks"`
@@ -215,6 +311,7 @@ func (o *Orchestrator) Snapshot() View {
 		Watching: append([]string{}, o.st.Watching...),
 		Messages: append([]Message{}, o.st.Messages...),
 		Thinking: o.thinking, Awaiting: o.mem.awaiting, Error: o.lastErr,
+		Queued: len(o.st.Queue),
 	}
 	o.mu.Unlock()
 	v.Tasks = o.host.Tasks()
@@ -321,6 +418,10 @@ func (o *Orchestrator) Say(text string) error {
 		return fmt.Errorf("say something")
 	}
 	o.mu.Lock()
+	if o.closed() {
+		o.mu.Unlock()
+		return fmt.Errorf("the orchestrator has stopped")
+	}
 	if o.thinking {
 		o.mu.Unlock()
 		return fmt.Errorf("the orchestrator is still working on the previous turn")
@@ -336,11 +437,15 @@ func (o *Orchestrator) Say(text string) error {
 		ts.unanswered = 0
 		o.mem.tasks[slug] = ts
 	}
+	o.turns.Add(1)
 	o.save()
 	o.mu.Unlock()
 
-	input := o.prompt(text, nil)
-	go func() { _ = o.think(context.Background(), gen, input, true, nil) }()
+	input := o.prompt("THE USER SAYS:\n"+text+"\n\n", nil)
+	go func() {
+		defer o.turns.Done()
+		_ = o.think(context.Background(), gen, input, turn{origin: fromUser}, nil)
+	}()
 	return nil
 }
 
@@ -357,7 +462,7 @@ func (o *Orchestrator) Say(text string) error {
 // seconds; holding the lock across it would block every Snapshot, and the UI
 // polls Snapshot — so the page would freeze for exactly as long as the most
 // interesting thing it could be showing.
-func (o *Orchestrator) think(ctx context.Context, gen int, input string, fromUser bool,
+func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn,
 	seen func(now time.Time)) error {
 	o.mu.Lock()
 	session := o.st.Session
@@ -366,12 +471,22 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, fromUse
 	reply, session, err := o.brain.Think(ctx, input, session)
 
 	o.mu.Lock()
+	// Whatever happens next, the turn is over, so the queue may move on.
+	defer o.kick()
+	o.st.Reading = nil
 	if gen != o.gen {
 		// Cleared while this turn ran. Nothing of it is kept — not the session
 		// id, which is the conversation the user asked to forget, nor the
-		// reply, whose actions were decided inside it.
+		// reply, whose actions were decided inside it. A message from the
+		// inbox is read again in the new conversation: clearing the chat is
+		// not a reason to drop what someone sent.
 		o.thinking = false
 		o.add(RoleEvent, "", "A turn still running when the conversation was cleared was discarded.")
+		if tr.item != nil {
+			it := *tr.item
+			it.Attempts-- // it was never actually tried
+			o.requeue(it, "")
+		}
 		o.save()
 		o.mu.Unlock()
 		return errCleared
@@ -380,7 +495,10 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, fromUse
 	o.mem = o.mem.afterTurn(err == nil, time.Now())
 	if err != nil {
 		o.lastErr = err.Error()
-		o.add(RoleError, "", err.Error())
+		o.addTo(RoleError, "", err.Error(), tr.threads()...)
+		if tr.item != nil {
+			o.requeue(*tr.item, err.Error())
+		}
 		o.thinking = false
 		o.save()
 		o.mu.Unlock()
@@ -390,15 +508,26 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, fromUse
 		seen(time.Now())
 	}
 	o.lastErr = ""
-	o.add(RoleOrchestrator, "", reply.Say)
+	about := tr.threads()
+	if tr.origin != fromInbox {
+		about = o.mentioned(reply.Say)
+	}
+	o.addTo(RoleOrchestrator, "", reply.Say, about...)
 	o.save()
 	o.mu.Unlock()
 
-	o.apply(reply, fromUser)
+	o.apply(reply, tr)
 
 	o.mu.Lock()
-	if reply.NeedsUser && gen == o.gen {
+	switch {
+	case tr.origin == fromInbox:
+		// Settled even if the chat was cleared meanwhile: the actions ran. A
+		// question about one message is that thread's, answered there, and
+		// does not stop the loop from minding every other task.
+		o.settleInbox(tr, reply.NeedsUser)
+	case reply.NeedsUser && gen == o.gen:
 		o.mem.awaiting = true
+		o.asking(about)
 	}
 	o.thinking = false
 	o.save()
@@ -417,30 +546,59 @@ var errCleared = errors.New("the conversation was cleared during this turn")
 //
 // Only one turn runs at a time — `thinking` guarantees it — so the bookkeeping
 // below does not race with another apply. The lock is here for the readers.
-func (o *Orchestrator) apply(r Reply, fromUser bool) {
+func (o *Orchestrator) apply(r Reply, tr turn) {
+	// started are the tasks whose agent this reply has just started. Their
+	// sessions are still drawing their screens, so an instruction for them is
+	// held until they are ready rather than typed into the start-up.
+	started := map[string]bool{}
 	for _, a := range r.Actions {
 		// In "ask" autonomy the loop may look, but not touch. Actions it wanted
 		// are recorded as proposals and the user is asked — the chat is the
-		// approval channel, so answering "go ahead" is what runs them.
+		// approval channel, so answering "go ahead" is what runs them. Outside
+		// orchestrate mode the loop only runs for the tasks inbox threads are
+		// following, and nobody has handed those to it either.
 		o.mu.Lock()
-		propose := !fromUser && o.st.Autonomy == AutonomyAsk
-		if propose {
+		propose := tr.origin == fromLoop &&
+			(o.st.Autonomy == AutonomyAsk || o.st.Mode != ModeOrchestrate)
+		later := !propose && a.Kind == ActSendToAgent && started[a.Task]
+		switch {
+		case propose:
 			o.add(RoleEvent, a.Task, "proposed: "+describe(a))
 			o.mem.awaiting = true
+			o.asking(o.threadsFor(a.Task))
+			o.save()
+		case later:
+			o.hold(a.Task, a.Text, append(tr.threads(), o.threadsFor(a.Task)...))
+			o.addTo(RoleEvent, a.Task, describe(a)+" (once its agent is ready)"+reason(a),
+				tr.threads()...)
 			o.save()
 		}
 		o.mu.Unlock()
-		if propose {
+		if propose || later {
 			continue
 		}
 
-		err := o.do(a, fromUser)
+		slug, err := o.do(a, tr)
 
 		o.mu.Lock()
 		if err != nil {
-			o.add(RoleError, a.Task, describe(a)+" — "+err.Error())
+			o.addTo(RoleError, a.Task, describe(a)+" — "+err.Error(), tr.threads()...)
 		} else {
-			o.add(RoleEvent, a.Task, describe(a)+reason(a))
+			if tr.thread != 0 {
+				o.link(tr.thread, slug)
+			}
+			switch a.Kind {
+			case ActCreateTask:
+				if a.StartAgent == nil || *a.StartAgent {
+					started[slug] = true
+				}
+				if s := strings.TrimSpace(a.Instruction); s != "" {
+					o.hold(slug, s, append(tr.threads(), o.threadsFor(slug)...))
+				}
+			case ActStartAgent, ActResumeAgent:
+				started[slug] = true
+			}
+			o.addTo(RoleEvent, slug, describe(a)+reason(a), tr.threads()...)
 		}
 		o.save()
 		o.mu.Unlock()
@@ -470,6 +628,9 @@ func describe(a Action) string {
 		if a.Branch != "" {
 			s += " on " + a.Branch
 		}
+		if in := strings.TrimSpace(a.Instruction); in != "" {
+			s += ", then tell its agent: " + in
+		}
 		return s
 	case ActSendToAgent:
 		return "→ " + a.Task + ": " + a.Text
@@ -494,38 +655,47 @@ func describe(a Action) string {
 	return a.Kind
 }
 
-// do executes one action. The host calls are made WITHOUT the lock; only the
+// do executes one action and returns the task it acted on — for create_task,
+// the one it made. The host calls are made WITHOUT the lock; only the
 // orchestrator's own bookkeeping takes it, and only for as long as it takes.
-func (o *Orchestrator) do(a Action, fromUser bool) error {
-	switch a.Kind {
-	case ActCreateTask:
-		if strings.TrimSpace(a.Name) == "" {
-			return fmt.Errorf("a task needs a name")
-		}
-		if len(a.Repos) == 0 {
-			return fmt.Errorf("a task needs at least one repository")
-		}
-		t, err := o.host.CreateTask(NewTask{
-			Name: a.Name, Repos: a.Repos, Branch: a.Branch, Profile: a.Profile,
-			Agent: a.AgentKind, Dangerous: a.Dangerous,
-			// An agent is started unless the model explicitly said not to. A
-			// workspace with nothing running in it is not what "start a task"
-			// means, and there would be nothing for the orchestrator to
-			// supervise either. The field is a pointer for exactly this reason:
-			// "absent" and "false" have to mean different things here.
-			StartAgent: a.StartAgent == nil || *a.StartAgent,
-		})
-		if err != nil {
-			return err
-		}
-		// A task the orchestrator created is one it is expected to follow.
-		o.mu.Lock()
-		if o.st.Mode == ModeOrchestrate && !contains(o.st.Watching, t.Slug) {
-			o.st.Watching = append(o.st.Watching, t.Slug)
-		}
-		o.mu.Unlock()
-		return nil
+func (o *Orchestrator) do(a Action, tr turn) (string, error) {
+	if a.Kind == ActCreateTask {
+		return o.create(a)
+	}
+	return a.Task, o.act(a, tr)
+}
 
+func (o *Orchestrator) create(a Action) (string, error) {
+	if strings.TrimSpace(a.Name) == "" {
+		return "", fmt.Errorf("a task needs a name")
+	}
+	if len(a.Repos) == 0 {
+		return "", fmt.Errorf("a task needs at least one repository")
+	}
+	t, err := o.host.CreateTask(NewTask{
+		Name: a.Name, Repos: a.Repos, Branch: a.Branch, Profile: a.Profile,
+		Agent: a.AgentKind, Dangerous: a.Dangerous,
+		// An agent is started unless the model explicitly said not to. A
+		// workspace with nothing running in it is not what "start a task"
+		// means, and there would be nothing for the orchestrator to
+		// supervise either. The field is a pointer for exactly this reason:
+		// "absent" and "false" have to mean different things here.
+		StartAgent: a.StartAgent == nil || *a.StartAgent,
+	})
+	if err != nil {
+		return "", err
+	}
+	// A task the orchestrator created is one it is expected to follow.
+	o.mu.Lock()
+	if o.st.Mode == ModeOrchestrate && !contains(o.st.Watching, t.Slug) {
+		o.st.Watching = append(o.st.Watching, t.Slug)
+	}
+	o.mu.Unlock()
+	return t.Slug, nil
+}
+
+func (o *Orchestrator) act(a Action, tr turn) error {
+	switch a.Kind {
 	case ActSendToAgent:
 		if strings.TrimSpace(a.Text) == "" {
 			return fmt.Errorf("nothing to send")
@@ -543,9 +713,10 @@ func (o *Orchestrator) do(a Action, fromUser bool) error {
 			return fmt.Errorf("%s is waiting on a %s confirmation in its terminal, "+
 				"so nothing can be typed at it — answer it in the task's tab", a.Task, tool)
 		}
-		// A message the user asked for is never refused: they are present, and
-		// they can see what is happening.
-		if !fromUser {
+		// A message the user asked for in the chat is never refused: they are
+		// present, and they can see what is happening. One from the inbox is
+		// guarded like the loop's own, because nobody is.
+		if tr.origin != fromUser {
 			var err error
 			if ts, err = ts.budget(a.Task, time.Now()); err != nil {
 				o.mem.awaiting = true

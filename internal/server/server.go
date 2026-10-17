@@ -117,6 +117,8 @@ func (s *Server) Routes() *http.ServeMux {
 	s.apiRoutes(mux)
 	mux.HandleFunc("/api/orchestrator", s.handleOrchestrator)
 	mux.HandleFunc("/api/orchestrator/", s.handleOrchestrator)
+	mux.HandleFunc("/api/inbox", s.handleInbox)
+	mux.HandleFunc("/api/inbox/", s.handleInbox)
 	s.localFleetRoutes(mux)
 	api := http.NewServeMux()
 	s.apiRoutes(api)

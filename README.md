@@ -98,6 +98,18 @@ are answered. Then:
 
 See [docs/FLEET.md](docs/FLEET.md).
 
+## Messages from outside (the inbox)
+
+`fride in "<message>"` hands the orchestrator a message from anywhere: a
+script, a chat bridge, an assistant relaying a voice note. It routes the
+message to the task it clearly continues, starts a new task for it with the
+request as the agent's first instruction, answers it, or asks back. Each
+message is a **thread** that keeps what came of it, including news of the
+task it went to, so the sender can read it later with `fride in status <id>`
+or in the UI's Inbox, and answer with `fride in reply <id> "…"`.
+
+The same is `POST /api/inbox` on the local API. See [docs/INBOX.md](docs/INBOX.md).
+
 ## CLI
 
 Everything the UI does is a subcommand, so the agent inside a workspace can
@@ -133,6 +145,9 @@ fride task move <task> <computer>         # continue a task on another computer
 
 fride orch say "start a task with backend and frontend from main on feat/PROJ-42"
 fride orch watch <task>... [--ask]
+
+fride in "fix the empty state of the search page" --from chat [--ref <id>] [--wait]
+fride in ls | in status <id> | in reply <id> "…" | in close <id>
 ```
 
 `FRIDE_HOME` moves the state folder (default `~/.fride`). Several independent

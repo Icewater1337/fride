@@ -136,7 +136,9 @@ func (f *fakeHost) counts() (int, int, int) {
 func newTestOrch(t *testing.T, h Host) *Orchestrator {
 	t.Helper()
 	o := New(t.TempDir(), t.TempDir(), "/nonexistent-claude", h)
-	t.Cleanup(o.Close)
+	// Registered after the temp dirs, so it runs before they are removed: a
+	// turn still running would write its state into a folder being deleted.
+	t.Cleanup(func() { o.Close(); o.Wait() })
 	return o
 }
 
@@ -196,7 +198,7 @@ func TestAskAutonomyProposesRatherThanActs(t *testing.T) {
 	}
 	reply := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "carry on"}}}
 
-	o.apply(reply, false) // false: the loop, not the user
+	o.apply(reply, loop) // the loop, not the user
 
 	if _, sent, _ := h.counts(); sent != 0 {
 		t.Fatalf("an unprompted action was carried out in ask mode: %v", h.sent)
@@ -209,7 +211,7 @@ func TestAskAutonomyProposesRatherThanActs(t *testing.T) {
 	}
 
 	// The same reply, once the user has asked for it, does act.
-	o.apply(reply, true)
+	o.apply(reply, user)
 	if _, sent, _ := h.counts(); sent != 1 {
 		t.Fatalf("an approved action was not carried out: %v", h.sent)
 	}
@@ -223,7 +225,7 @@ func TestUnansweredNudgesStopAndEscalate(t *testing.T) {
 	}
 	reply := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "keep going"}}}
 	for i := 0; i < maxUnansweredNudges+3; i++ {
-		o.apply(reply, false)
+		o.apply(reply, loop)
 	}
 	if _, sent, _ := h.counts(); sent != maxUnansweredNudges {
 		t.Fatalf("sent %d instructions, want the budget of %d", sent, maxUnansweredNudges)
@@ -238,7 +240,7 @@ func TestUnansweredNudgesStopAndEscalate(t *testing.T) {
 	ts.unanswered = 0
 	o.mem.tasks["t1"] = ts
 	o.mu.Unlock()
-	o.apply(reply, false)
+	o.apply(reply, loop)
 	if _, sent, _ := h.counts(); sent != maxUnansweredNudges+1 {
 		t.Fatalf("a task that answered was not nudged again: %v", h.sent)
 	}
@@ -260,10 +262,10 @@ func TestNothingIsTypedAtAnAgentOnAConfirmation(t *testing.T) {
 	o.mu.Unlock()
 
 	send := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "just say yes"}}}
-	for _, fromUser := range []bool{false, true} {
-		o.apply(send, fromUser)
+	for _, by := range []turn{loop, user} {
+		o.apply(send, by)
 		if _, sent, _ := h.counts(); sent != 0 {
-			t.Fatalf("typed at a blocked agent (fromUser=%v): %v", fromUser, h.sent)
+			t.Fatalf("typed at a blocked agent (origin %v): %v", by.origin, h.sent)
 		}
 		if !strings.Contains(lastText(o), "confirmation") {
 			t.Fatalf("the refusal does not say why: %q", lastText(o))
@@ -283,7 +285,7 @@ func TestNothingIsTypedAtAnAgentOnAConfirmation(t *testing.T) {
 	if blocked != "" {
 		t.Fatalf("the block outlived the dialog: %q", blocked)
 	}
-	o.apply(send, true)
+	o.apply(send, user)
 	if _, sent, _ := h.counts(); sent != 1 {
 		t.Fatalf("an unblocked agent was still refused: %v", h.sent)
 	}
@@ -329,7 +331,7 @@ func TestCreateTaskStartsAnAgentUnlessRefused(t *testing.T) {
 			o.apply(Reply{Actions: []Action{{
 				Kind: ActCreateTask, Name: "T", Repos: []NewRepo{{Name: "backend"}},
 				StartAgent: c.field,
-			}}}, true)
+			}}}, user)
 			if len(h.created) != 1 {
 				t.Fatalf("no task created")
 			}
@@ -352,7 +354,7 @@ func TestASlowActionDoesNotBlockTheView(t *testing.T) {
 		defer close(done)
 		o.apply(Reply{Actions: []Action{{
 			Kind: ActCreateTask, Name: "T", Repos: []NewRepo{{Name: "backend"}},
-		}}}, true)
+		}}}, user)
 	}()
 
 	<-h.started
@@ -392,7 +394,7 @@ func TestResumingPicksUpWhereTheAgentLeftOff(t *testing.T) {
 
 	o.apply(Reply{Actions: []Action{
 		{Kind: ActResumeAgent, Task: "t1", Conversation: "conv-7"},
-	}}, true)
+	}}, user)
 
 	if len(h.resumed) != 1 || h.resumed[0] != "t1/conv-7" {
 		t.Fatalf("resumed %v, want the named conversation", h.resumed)
@@ -417,7 +419,7 @@ func TestAFailedResumeIsReportedAndChangesNothing(t *testing.T) {
 	o.mem.tasks["t1"] = taskState{cursor: "old-uuid"}
 	o.mu.Unlock()
 
-	o.apply(Reply{Actions: []Action{{Kind: ActResumeAgent, Task: "t1"}}}, true)
+	o.apply(Reply{Actions: []Action{{Kind: ActResumeAgent, Task: "t1"}}}, user)
 
 	if len(h.resumed) != 0 {
 		t.Fatalf("resumed anyway: %v", h.resumed)
@@ -487,9 +489,10 @@ func TestStatePersists(t *testing.T) {
 	o.save()
 	o.mu.Unlock()
 	o.Close()
+	o.Wait()
 
 	again := New(dir, dir, "/nonexistent-claude", h)
-	defer again.Close()
+	defer func() { again.Close(); again.Wait() }()
 	v := again.Snapshot()
 	if v.Mode != ModeOrchestrate || v.Autonomy != AutonomyAsk || len(v.Watching) != 1 {
 		t.Fatalf("setup not restored: %+v", v)
@@ -661,6 +664,30 @@ func TestBrainReportsAFailedTurn(t *testing.T) {
 	}
 }
 
+// An expired login is reported on stdout, as a JSON result, with nothing on
+// stderr. The reason has to survive into the error, or the chat says only
+// "exit status 1".
+func TestBrainReportsAFailureGivenAsAResult(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\ncat > /dev/null\n" +
+		`echo '{"type":"result","is_error":true,"result":"Failed to authenticate. API Error: 401"}'` +
+		"\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := &brain{bin: bin, dir: filepath.Join(dir, "not-created-yet")}
+	_, _, err := b.Think(context.Background(), "hello", "")
+	if err == nil || !strings.Contains(err.Error(), "Failed to authenticate") {
+		t.Fatalf("err = %v, want the CLI's own reason", err)
+	}
+	// And the workspaces root, which only exists once a task does, is not a
+	// reason for a turn to fail.
+	if _, statErr := os.Stat(b.dir); statErr != nil {
+		t.Fatalf("the working directory was not created: %v", statErr)
+	}
+}
+
 // The schema is what makes a turn parseable at all, so it has to stay valid
 // JSON and has to offer exactly the actions the executor knows.
 func TestSchemaCoversEveryAction(t *testing.T) {
@@ -676,6 +703,12 @@ func TestSchemaCoversEveryAction(t *testing.T) {
 }
 
 // ---------------------------------------------------------------- helpers
+
+// The two turns most tests apply replies under.
+var (
+	loop = turn{origin: fromLoop}
+	user = turn{origin: fromUser}
+)
 
 func lastText(o *Orchestrator) string {
 	msgs := o.Snapshot().Messages
