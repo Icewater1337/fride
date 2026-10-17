@@ -1,11 +1,18 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/Icewater1337/fride/internal/orchestrator"
 )
 
 // The inbox routes: how anything outside the IDE hands the orchestrator a
@@ -106,3 +113,42 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, fmt.Errorf("no route for %s %s", r.Method, r.URL.Path))
 	}
 }
+
+// Notify runs config.json's inbox.notify command, if there is one, with the
+// note as JSON on stdin and its gist in the environment. The command is read
+// from the settings each time, so a changed config.json applies from its next
+// reload (Re-check in Settings, or a restart) without touching the inbox.
+//
+// Bounded: a command that hangs would otherwise hold up every note after it.
+func (h orchHost) Notify(n orchestrator.Note) error {
+	command := h.s.cfg.Settings.InboxNotify()
+	if command == "" {
+		return nil
+	}
+	body, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), notifyTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell(), "-c", command)
+	cmd.Dir = h.s.cfg.StateDir
+	cmd.Stdin = bytes.NewReader(body)
+	cmd.Env = append(os.Environ(),
+		"FRIDE_THREAD="+strconv.Itoa(n.Thread.ID),
+		"FRIDE_STATUS="+n.Thread.Status,
+		"FRIDE_SOURCE="+n.Thread.Source,
+		"FRIDE_REF="+n.Thread.Ref,
+		"FRIDE_TEXT="+n.Text,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		detail := strings.TrimSpace(string(out))
+		if len(detail) > 300 {
+			detail = detail[:300] + "…"
+		}
+		return fmt.Errorf("inbox.notify: %v %s", err, detail)
+	}
+	return nil
+}
+
+const notifyTimeout = 30 * time.Second

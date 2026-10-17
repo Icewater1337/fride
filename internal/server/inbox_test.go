@@ -2,7 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/Icewater1337/fride/internal/orchestrator"
+	"github.com/Icewater1337/fride/internal/settings"
 )
 
 func TestInboxRoutes(t *testing.T) {
@@ -73,5 +79,41 @@ func TestInboxIsNotOnTheFleetListener(t *testing.T) {
 	s.Routes()
 	if w := do(t, s.localAPI, "POST", "/api/inbox", `{"text":"hello"}`); w.Code != 404 {
 		t.Fatalf("the fleet routes answered POST /api/inbox with %d", w.Code)
+	}
+}
+
+func TestNotifyRunsTheConfiguredCommand(t *testing.T) {
+	s, _, _ := testServer(t)
+	h := orchHost{s}
+	note := orchestrator.Note{
+		Thread:   orchestrator.Thread{ID: 7, Source: "chat", Ref: "m-1", Status: "needs_reply"},
+		Messages: []orchestrator.Message{{ID: 3, Role: "orchestrator", Text: "Which repo?"}},
+		Text:     "FrIDE inbox #7 · needs your reply\nWhich repo?",
+	}
+
+	// No command configured: nothing to do, and that is not an error.
+	if err := h.Notify(note); err != nil {
+		t.Fatalf("Notify without a command = %v", err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out")
+	s.cfg.Settings.Inbox = &settings.Inbox{Notify: `printf '%s|%s|%s|%s\n%s' "$FRIDE_THREAD" "$FRIDE_STATUS" "$FRIDE_SOURCE" "$FRIDE_REF" "$FRIDE_TEXT" > ` + out + `; cat > ` + out + `.json`}
+	if err := h.Notify(note); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(out)
+	if want := "7|needs_reply|chat|m-1\n" + note.Text; string(got) != want {
+		t.Fatalf("environment = %q, want %q", got, want)
+	}
+	var back orchestrator.Note
+	raw, _ := os.ReadFile(out + ".json")
+	if err := json.Unmarshal(raw, &back); err != nil || back.Thread.ID != 7 || len(back.Messages) != 1 {
+		t.Fatalf("stdin was not the note as JSON: %s (%v)", raw, err)
+	}
+
+	// A failing command is reported, with what it said.
+	s.cfg.Settings.Inbox = &settings.Inbox{Notify: "echo no route to host >&2; exit 3"}
+	if err := h.Notify(note); err == nil || !strings.Contains(err.Error(), "no route to host") {
+		t.Fatalf("a failing command = %v", err)
 	}
 }

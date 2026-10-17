@@ -71,6 +71,20 @@ of these.
 The UI's **Inbox** shows the same threads. Writing there with no thread
 selected sends a new message with the source `ui`, the way a relay would.
 
+## Hearing back
+
+A thread is only useful to someone who reads it. Set `inbox.notify` in
+config.json to a command, and FrIDE runs it whenever a thread has news: the
+orchestrator's answer, what it did, an instruction reaching its agent, the
+task finishing or stopping on a question. The command gets a summary ready to
+forward in `FRIDE_TEXT`, the thread's number, status, source and ref in
+`FRIDE_THREAD`, `FRIDE_STATUS`, `FRIDE_SOURCE` and `FRIDE_REF`, and all of it
+as JSON on stdin. See [inbox in CONFIG.md](CONFIG.md#inbox).
+
+A relay that took the message in from a chat can use the thread number to post
+the summary back into that chat, and to send the answer to a question there
+back with `fride in reply`.
+
 ## How it behaves
 
 - **Messages queue.** One arriving while the orchestrator is busy waits its

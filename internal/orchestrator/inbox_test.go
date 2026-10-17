@@ -379,3 +379,86 @@ func TestInboxRejectsEmptyAndHugeMessages(t *testing.T) {
 		t.Fatal("an oversized message was accepted")
 	}
 }
+
+func TestInboxNewsIsToldToTheSender(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, Reply{
+		Say: "Started a task for it.",
+		Actions: []Action{{Kind: ActCreateTask, Name: "Search filters",
+			Repos: []NewRepo{{Name: "backend"}}, Instruction: "Fix the search filters."}},
+	})
+	v, _, _ := o.Receive("plaud", "rec-1", "fix the search filters")
+	settled(t, o, v.ID)
+	waitFor(t, func() bool { return len(h.noted()) == 1 })
+
+	n := h.noted()[0]
+	// One note for the whole turn: the answer and what was done, together.
+	// The sender's own message is not news to them.
+	if n.Thread.ID != v.ID || n.Thread.Status != ThreadActive || len(n.Messages) != 2 {
+		t.Fatalf("note = %+v", n)
+	}
+	for _, m := range n.Messages {
+		if m.Role == RoleUser {
+			t.Fatal("the sender was sent their own message back")
+		}
+	}
+	for _, want := range []string{"inbox #1", "following", "new", "Started a task for it.", "• create task"} {
+		if !strings.Contains(n.Text, want) {
+			t.Fatalf("the rendered note is missing %q:\n%s", want, n.Text)
+		}
+	}
+
+	// News from a look without a turn: the instruction reaching its agent.
+	h.mu.Lock()
+	h.obs["new"] = Observation{Running: true, Waiting: true}
+	h.mu.Unlock()
+	o.tick(context.Background())
+	waitFor(t, func() bool { return len(h.noted()) == 2 })
+	if got := h.noted()[1].Text; !strings.Contains(got, "ready now") {
+		t.Fatalf("second note = %q", got)
+	}
+
+	// Nothing new, nothing sent.
+	o.tick(context.Background())
+	time.Sleep(50 * time.Millisecond)
+	if n := len(h.noted()); n != 2 {
+		t.Fatalf("an idle look sent %d notes, want still 2", n)
+	}
+}
+
+func TestNotesSurviveARestartWithoutRepeating(t *testing.T) {
+	dir := t.TempDir()
+	h := newFakeHost()
+	st := stubClaude(t, Reply{Say: "It is on main."})
+	o := New(dir, t.TempDir(), st.bin, h)
+	v, _, _ := o.Receive("cli", "", "which branch?")
+	settled(t, o, v.ID)
+	waitFor(t, func() bool { return len(h.noted()) == 1 })
+	o.Close()
+	o.Wait()
+
+	again := New(dir, t.TempDir(), st.bin, h)
+	t.Cleanup(func() { again.Close(); again.Wait() })
+	again.noteNews()
+	time.Sleep(50 * time.Millisecond)
+	if n := len(h.noted()); n != 1 {
+		t.Fatalf("a restart re-sent old news: %d notes", n)
+	}
+}
+
+func TestClosingAThreadIsNotNewsToWhoeverClosedIt(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.thinking = true
+	o.mu.Unlock()
+	v, _, _ := o.Receive("cli", "", "never mind")
+	if _, err := o.CloseThread(v.ID); err != nil {
+		t.Fatal(err)
+	}
+	o.noteNews()
+	time.Sleep(50 * time.Millisecond)
+	if n := len(h.noted()); n != 0 {
+		t.Fatalf("closing sent %d notes", n)
+	}
+}

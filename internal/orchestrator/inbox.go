@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -205,6 +206,11 @@ func (o *Orchestrator) CloseThread(id int) (ThreadView, error) {
 		}
 		o.st.Queue = keep
 		o.addTo(RoleEvent, "", fmt.Sprintf("Stopped following inbox #%d.", id), id)
+		// Whoever closed it knows; that is not news to send them.
+		if o.st.Noted == nil {
+			o.st.Noted = map[int]int{}
+		}
+		o.st.Noted[id] = o.st.Seq
 		o.save()
 	}
 	return o.viewLocked(id), nil
@@ -656,4 +662,107 @@ func containsInt(xs []int, x int) bool {
 		}
 	}
 	return false
+}
+
+// ------------------------------------------------------------------ telling the sender
+
+// noteNews hands the host a note for every inbox thread that has news since its
+// last one. Called once a turn or a look is over, so a turn's answer and what it
+// did travel together rather than as a trickle of fragments.
+//
+// A thread still being read is skipped: half of its turn is not news yet. If the
+// queue to the host is full the thread is left as it is and tried again at the
+// next call, rather than its news lost.
+func (o *Orchestrator) noteNews() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	changed := false
+	for i := range o.st.Threads {
+		t := &o.st.Threads[i]
+		if t.Status == ThreadRouting {
+			continue
+		}
+		last := o.st.Noted[t.ID]
+		top := last
+		var news []Message
+		for _, m := range o.st.Messages {
+			if m.ID <= last || !containsInt(m.Threads, t.ID) {
+				continue
+			}
+			top = max(top, m.ID)
+			if m.Role != RoleUser {
+				news = append(news, m)
+			}
+		}
+		if top == last {
+			continue
+		}
+		if len(news) > 0 {
+			th := *t
+			th.Tasks = append([]string(nil), t.Tasks...)
+			th.Finished = append([]string(nil), t.Finished...)
+			select {
+			case o.notes <- Note{Thread: th, Messages: news, Text: renderNote(th, news)}:
+			default:
+				continue
+			}
+		}
+		if o.st.Noted == nil {
+			o.st.Noted = map[int]int{}
+		}
+		o.st.Noted[t.ID] = top
+		changed = true
+	}
+	if changed {
+		o.save()
+	}
+}
+
+// deliverNotes hands notes to the host one at a time, in order, until Close.
+// A failure is logged and not retried: the note is news, and a sender told the
+// same thing twice by a flaky relay is worse off than one told it once late.
+func (o *Orchestrator) deliverNotes() {
+	for {
+		select {
+		case <-o.stop:
+			return
+		case n := <-o.notes:
+			if err := o.host.Notify(n); err != nil {
+				log.Printf("inbox #%d: telling the sender failed: %v", n.Thread.ID, err)
+			}
+		}
+	}
+}
+
+// renderNote is a note as a person reads it: which thread and where it stands,
+// then what was said and done.
+func renderNote(t Thread, msgs []Message) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "FrIDE inbox #%d · %s", t.ID, statusLabel(t.Status))
+	if open := t.open(); len(open) > 0 {
+		b.WriteString(" · " + strings.Join(open, ", "))
+	}
+	for _, m := range msgs {
+		switch m.Role {
+		case RoleOrchestrator:
+			b.WriteString("\n" + m.Text)
+		case RoleError:
+			b.WriteString("\n⚠ " + m.Text)
+		default:
+			b.WriteString("\n• " + m.Text)
+		}
+	}
+	return b.String()
+}
+
+func statusLabel(s string) string {
+	switch s {
+	case ThreadRouting:
+		return "reading"
+	case ThreadActive:
+		return "following"
+	case ThreadAsking:
+		return "needs your reply"
+	}
+	return s
 }
