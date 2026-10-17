@@ -141,13 +141,13 @@ func (c *Config) RunDir(slug string) string {
 
 // AgentArgv builds the command line for a task's agent session.
 //
-// `dangerous` asks the agent to stop confirming anything; which flag that is
+// o.Dangerous asks the agent to stop confirming anything; which flag that is
 // belongs to the agent table. It is opt-in per task and never the default.
 //
-// Exactly one of resumeID and sessionID is meaningful: the first reopens an
-// existing conversation, the second names the one about to be created.
-func (c *Config) AgentArgv(kind agent.Kind, dangerous bool, resumeID, sessionID string) []string {
-	o := agent.Options{Dangerous: dangerous, ResumeID: resumeID, SessionID: sessionID}
+// Exactly one of ResumeID and SessionID is meaningful: the first reopens an
+// existing conversation, the second names the one about to be created. The
+// installation's own choices (binary, permission mode) are filled in here.
+func (c *Config) AgentArgv(kind agent.Kind, o agent.Options) []string {
 	if kind == agent.Claude {
 		o.Bin, o.PermissionMode = c.ClaudeBin, c.ClaudePermissionMode
 	}

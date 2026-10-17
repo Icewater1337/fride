@@ -28,6 +28,7 @@ import (
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/mem"
 	"github.com/Icewater1337/fride/internal/orchestrator"
+	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/settings"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
@@ -131,6 +132,7 @@ func (s *Server) Routes() *http.ServeMux {
 func (s *Server) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/repos", s.handleRepos)
 	mux.HandleFunc("/api/agents", s.handleAgents)
+	mux.HandleFunc("/api/agents/models", s.handleAgentModels)
 	mux.HandleFunc("/api/tasks", s.handleTasks) // GET list, POST create
 	mux.HandleFunc("/api/tasks/", s.handleTask) // /api/tasks/<slug>[/action]
 	mux.HandleFunc("/api/settings", s.handleSettings)
@@ -199,6 +201,17 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		Agents  []agent.Info `json:"agents"`
 		Default agent.Kind   `json:"default"`
 	}{agent.List(), agent.Normalize(s.cfg.Settings.Agent())})
+}
+
+// handleAgentModels suggests model names for one agent. Not part of
+// /api/agents because asking can take seconds: one CLI asks its server.
+func (s *Server) handleAgentModels(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	if !agent.Valid(kind) {
+		writeErr(w, 400, fmt.Errorf("unknown agent %q", kind))
+		return
+	}
+	writeJSON(w, 200, map[string][]string{"models": agent.Models(agent.Normalize(kind))})
 }
 
 // handleEnv reports the machine-level prerequisites. GET is cached and never
@@ -414,17 +427,23 @@ func (s *Server) startAgent(slug string, resumeID string) (*term.Session, error)
 	if t, err := s.st.Get(slug); err == nil {
 		kind, dangerous = agent.Normalize(t.Agent), t.Dangerous
 	}
+	title := string(kind)
+	if resumeID != "" {
+		title += " \u27f2"
+	}
+	return s.launchAgent(slug, kind, title, agent.Options{Dangerous: dangerous, ResumeID: resumeID})
+}
+
+// launchAgent starts one agent session in the task's workspace and binds it
+// to the conversation it records.
+func (s *Server) launchAgent(slug string, kind agent.Kind, title string, o agent.Options) (*term.Session, error) {
 	if err := agent.Check(kind); err != nil {
 		return nil, err
 	}
 	// A workspace created before the guide learned about the stack gets that
 	// section now, before the agent reads the file. Best effort.
 	_ = workspace.EnsureGuide(s.cfg, slug, string(kind))
-	title := string(kind)
-	if resumeID != "" {
-		title += " \u27f2"
-	}
-	if dangerous {
+	if o.Dangerous {
 		title += " !"
 	}
 
@@ -433,34 +452,42 @@ func (s *Server) startAgent(slug string, resumeID string) (*term.Session, error)
 	// was not there before \u2014 is a guess with a deadline, and losing that race
 	// leaves a LIVE conversation looking unclaimed, so the board offers it for
 	// resuming and a second tab opens on the session you are already sitting in.
-	sessionID := ""
-	if resumeID == "" && agent.Preassigns(kind) {
+	if o.ResumeID == "" && agent.Preassigns(kind) {
 		id, err := agent.NewSessionID()
 		if err != nil {
 			return nil, fmt.Errorf("could not mint a session id: %w", err)
 		}
-		sessionID = id
+		o.SessionID = id
 	}
 
 	sess, err := s.terms.Start(slug, term.KindAgent, title, s.cfg.WorkspaceDir(slug),
-		s.cfg.AgentArgv(kind, dangerous, resumeID, sessionID), nil)
+		s.cfg.AgentArgv(kind, o), nil)
 	if err != nil {
 		return nil, err
 	}
-	sess.SetDangerous(dangerous)
+	sess.SetDangerous(o.Dangerous)
 	switch {
-	case resumeID != "":
-		sess.Claim(resumeID)
-	case sessionID != "":
+	case o.ResumeID != "":
+		sess.Claim(o.ResumeID)
+	case o.SessionID != "":
 		// Claimed immediately: the transcript will carry this id whether or not the
 		// agent is ever given a prompt, so there is nothing left to observe.
-		sess.Claim(sessionID)
-	case agent.Resumable(kind):
+		sess.Claim(o.SessionID)
+	case agent.Resumable(kind) && kind == s.taskAgent(slug):
 		// The remaining agents cannot be told which id to use, so their transcript
-		// still has to be spotted after the fact.
+		// still has to be spotted after the fact. Only in the store of the task's
+		// own agent, which is the one claimNewTranscript watches: a reviewer of
+		// another kind would be bound to whatever the task's agent writes next.
 		go s.claimNewTranscript(slug, sess)
 	}
 	return sess, nil
+}
+
+func (s *Server) taskAgent(slug string) agent.Kind {
+	if t, err := s.st.Get(slug); err == nil {
+		return agent.Normalize(t.Agent)
+	}
+	return agent.Claude
 }
 
 // claimNewTranscript watches for the transcript a freshly started agent creates
@@ -937,6 +964,58 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			out["published"] = pub
 		}
 		writeJSON(w, 200, out)
+
+	case action == "review" && r.Method == http.MethodPost:
+		var req struct {
+			Agent  string `json:"agent"` // empty: the task's own agent
+			Model  string `json:"model"` // empty: the CLI's default
+			Effort string `json:"effort"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		if !agent.Valid(req.Agent) {
+			writeErr(w, 400, fmt.Errorf("unknown agent %q", req.Agent))
+			return
+		}
+		kind := agent.Normalize(t.Agent)
+		if req.Agent != "" {
+			kind = agent.Normalize(req.Agent)
+		}
+		// It becomes one argument, but one starting with a dash would still be
+		// read as a flag.
+		model := strings.TrimSpace(req.Model)
+		if strings.HasPrefix(model, "-") || strings.ContainsAny(model, " \t\r\n") {
+			writeErr(w, 400, fmt.Errorf("%q is not a model name", req.Model))
+			return
+		}
+		if !agent.ValidEffort(kind, req.Effort) {
+			writeErr(w, 400, fmt.Errorf("%s has no effort level %q", kind, req.Effort))
+			return
+		}
+		if err := review.Install(s.cfg, slug); err != nil {
+			writeErr(w, 500, fmt.Errorf("could not write the review skill: %w", err))
+			return
+		}
+		// The branch checked out now, which an agent may have switched since the
+		// task was created.
+		branches := workspace.Branches(s.cfg, slug)
+		repos := make([]review.Repo, 0, len(t.Repos))
+		for _, tr := range t.Repos {
+			b := branches[tr.Name]
+			if b == "" || b == "HEAD" {
+				b = tr.Branch
+			}
+			repos = append(repos, review.Repo{Name: tr.Name, Branch: b, BaseRef: tr.BaseRef})
+		}
+		sess, err := s.launchAgent(slug, kind, "review "+string(kind), agent.Options{
+			Dangerous: t.Dangerous, Model: model, Effort: req.Effort, Prompt: review.Prompt(repos)})
+		if err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		writeJSON(w, 201, sess)
 
 	case action == "usage" && r.Method == http.MethodGet:
 		u, err := usage.ForWorkspace(filepath.Join(s.cfg.Home, ".claude"), s.cfg.WorkspaceDir(slug))

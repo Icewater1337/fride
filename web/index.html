@@ -301,6 +301,7 @@
         <button data-set-status="in_progress"><span class="sdot in_progress"></span>In progress</button>
         <button data-set-status="done"><span class="sdot done"></span>Done</button>
       </div>
+      <button id="btn-review" class="ghost" popovertarget="reviewpop" title="Start a reviewer for the merge requests of this task's branches"><svg class="i"><use href="#i-eye"/></svg>Review</button>
       <button id="btn-move" class="ghost hidden" title="Continue this task on another of your computers"><svg class="i"><use href="#i-move"/></svg>Continue on…</button>
       <button id="btn-delete" class="danger" title="Delete this task and its workspace folder"><svg class="i"><use href="#i-trash"/></svg>Delete</button>
     </div>
@@ -420,6 +421,20 @@
 </main>
 
 <!-- ---------------------------------------------------------- modals -->
+<!-- Anchored under #btn-review by app.js; a native popover, so Escape and a
+     click elsewhere close it. -->
+<div id="reviewpop" class="menu reviewpop" popover>
+  <div class="menu-h">Review the merge requests</div>
+  <div id="review-agents" class="agent-picker"></div>
+  <label class="field">Model
+    <input id="review-model" type="text" list="review-models" placeholder="the CLI's default"
+           autocomplete="off" spellcheck="false">
+    <datalist id="review-models"></datalist>
+  </label>
+  <label class="field">Effort <select id="review-effort"></select></label>
+  <div class="reviewpop-actions"><button id="review-go" class="primary">Start review</button></div>
+</div>
+
 <div id="movepop" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="movepop-title">
   <div class="modal-card">
     <div class="modal-h"><h2 id="movepop-title">Continue on another computer</h2></div>

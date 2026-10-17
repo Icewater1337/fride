@@ -78,6 +78,13 @@ keeps a page about it, written by its agent as the work happens, and
 *Publish idea* sends the page to the team's ideas repository (see `ideas` in
 docs/CONFIG.md).
 
+**Review.** *Review* in a task's header starts a reviewer in a tab of its
+own, with the agent, model and effort you pick. It finds the merge requests
+(or pull requests) of the task's branches and reviews them against each
+repository's own review rules (`.pr_agent.toml`, `AGENTS.md` and the like) plus
+a general rubric, then writes its findings to `REVIEW.md` in the workspace. It
+only reads: nothing is pushed or commented.
+
 **config.json.** Everything above, for your stack, in one declarative file,
 written during setup and readable by a person. Reference:
 [docs/CONFIG.md](docs/CONFIG.md). `fride config check` validates it.

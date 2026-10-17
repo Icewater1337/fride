@@ -58,6 +58,44 @@ func TestOtherAgentsArgv(t *testing.T) {
 	}
 }
 
+// A reviewer starts with a model, an effort and a first message. Each CLI
+// spells them differently, and the prompt has to stay interactive: --print
+// style flags would answer once and close the tab.
+func TestModelEffortPromptArgv(t *testing.T) {
+	o := Options{Model: "m1", Effort: "high", Prompt: "review it"}
+	cases := []struct {
+		kind Kind
+		o    Options
+		want []string
+	}{
+		{Claude, Options{Model: "m1", Effort: "high", Prompt: "review it", SessionID: "u1"},
+			[]string{"claude", "--model", "m1", "--effort", "high", "--session-id", "u1", "review it"}},
+		{Antigravity, o, []string{"agy", "--model", "m1", "--effort", "high", "--prompt-interactive", "review it"}},
+		{Codex, o, []string{"codex", "--model", "m1", "-c", "model_reasoning_effort=high", "review it"}},
+		// Resuming continues a conversation; a new first message has no place there.
+		{Claude, Options{Prompt: "review it", ResumeID: "abc"}, []string{"claude", "--resume", "abc"}},
+		{Codex, Options{Prompt: "review it", ResumeID: "s1"}, []string{"codex", "resume", "s1"}},
+	}
+	for _, c := range cases {
+		if got := Argv(c.kind, c.o); strings.Join(got, "\x00") != strings.Join(c.want, "\x00") {
+			t.Errorf("%s: got %q, want %q", c.kind, got, c.want)
+		}
+	}
+}
+
+func TestValidEffort(t *testing.T) {
+	if !ValidEffort(Codex, "") || !ValidEffort(Claude, "max") || ValidEffort(Antigravity, "max") || ValidEffort(Claude, "--x") {
+		t.Error("effort validation does not follow the table")
+	}
+}
+
+func TestParseTabbedIDs(t *testing.T) {
+	got := parseTabbedIDs("Fetching available models...\nmodel-a\tModel A (High)\nmodel-b\tModel B\n")
+	if strings.Join(got, ",") != "model-a,model-b" {
+		t.Errorf("parseTabbedIDs = %q", got)
+	}
+}
+
 // Claude Code validates --session-id as a uuid and refuses to start otherwise,
 // which would take out the session with a message no one is watching for.
 func TestNewSessionID(t *testing.T) {

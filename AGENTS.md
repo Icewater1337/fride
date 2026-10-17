@@ -47,6 +47,7 @@ internal/orchestrator    the supervising agent above the task agents, and its in
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)
 internal/journal         decision log, rationale document, ledger, idea pages
+internal/review          the reviewer of a task's merge requests: skill and prompt
 internal/server          HTTP + WebSocket
 web/                     the UI, no build step (xterm.js vendored)
 docs/CONFIG.md           config.json reference
