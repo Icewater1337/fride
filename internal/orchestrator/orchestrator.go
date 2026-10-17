@@ -97,6 +97,8 @@ type state struct {
 	Queue     []inboxItem     `json:"queue,omitempty"`
 	Reading   *inboxItem      `json:"reading,omitempty"`
 	Held      map[string]held `json:"held,omitempty"`
+	// Noted is, per thread, the last message its sender has been told about.
+	Noted map[int]int `json:"noted,omitempty"`
 }
 
 // origin is who a brain turn is for. It decides whether the turn's actions
@@ -153,6 +155,10 @@ type Orchestrator struct {
 
 	// wake asks the run loop to read the inbox now rather than on its next tick.
 	wake chan struct{}
+	// notes carries news for inbox threads to the one goroutine that hands it
+	// to the host, so a slow notify command never holds up a turn, and notes
+	// about one thread arrive in the order they were written.
+	notes chan Note
 	// turns counts the monitor loop and the turns running in a goroutine of
 	// their own, so that Wait can tell when the last of them has written its
 	// result. Added to only under mu and only while not closed, which is what
@@ -174,6 +180,7 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 		brain: &brain{bin: claudeBin, dir: workspaceRoot},
 		mem:   memory{tasks: map[string]taskState{}},
 		wake:  make(chan struct{}, 1),
+		notes: make(chan Note, 64),
 		stop:  make(chan struct{}),
 	}
 	o.st = state{Mode: ModeChat, Autonomy: AutonomyAuto, Cursors: map[string]string{}}
@@ -187,10 +194,14 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 		o.st.Reading = nil
 		o.requeue(*it, "FrIDE restarted while this was being read")
 	}
-	o.turns.Add(1)
+	o.turns.Add(2)
 	go func() {
 		defer o.turns.Done()
 		o.run()
+	}()
+	go func() {
+		defer o.turns.Done()
+		o.deliverNotes()
 	}()
 	o.kick()
 	return o
@@ -464,6 +475,9 @@ func (o *Orchestrator) Say(text string) error {
 // interesting thing it could be showing.
 func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn,
 	seen func(now time.Time)) error {
+	// Once the turn is over, whatever it said or did about an inbox thread is
+	// told to that thread's sender.
+	defer o.noteNews()
 	o.mu.Lock()
 	session := o.st.Session
 	o.mu.Unlock()

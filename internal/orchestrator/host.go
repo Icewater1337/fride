@@ -152,4 +152,18 @@ type Host interface {
 	Observe(slug, cursor string) (Observation, error)
 	// Detail is the expensive half, fetched only for a turn being taken.
 	Detail(slug string) Detail
+	// Notify tells whoever sent an inbox message that its thread has news.
+	// What that means — a command, nothing at all — is the host's to decide.
+	Notify(Note) error
+}
+
+// Note is one round of news for an inbox thread: the thread as it stands now,
+// and the messages added to it since the last note. The sender's own messages
+// are left out; they know what they said.
+type Note struct {
+	Thread   Thread    `json:"thread"`
+	Messages []Message `json:"messages"`
+	// Text is the same, rendered for a person: what a command that only
+	// forwards it somewhere (a chat, a push service) would send.
+	Text string `json:"text"`
 }

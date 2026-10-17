@@ -58,6 +58,8 @@ type Settings struct {
 	Ideas *Ideas `json:"ideas,omitempty"`
 	// Memory is what one more stack needs, checked before a stack starts.
 	Memory *Memory `json:"memory,omitempty"`
+	// Inbox configures messages from outside the IDE (INBOX.md).
+	Inbox *Inbox `json:"inbox,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -277,6 +279,25 @@ type Memory struct {
 	// DockerPerStackGB is Docker's memory one stack needs: the containers its
 	// services start, Testcontainers included. Default 0 (not checked).
 	DockerPerStackGB *float64 `json:"dockerPerStackGB,omitempty"`
+}
+
+// Inbox configures the orchestrator's inbox.
+type Inbox struct {
+	// Notify is a shell command run whenever an inbox thread has news: the
+	// orchestrator's answer, what it did, what became of the thread's tasks.
+	// It is how whoever sent the message hears back. The thread and its new
+	// messages arrive as JSON on stdin, and FRIDE_THREAD, FRIDE_STATUS,
+	// FRIDE_SOURCE, FRIDE_REF and FRIDE_TEXT (a summary ready to forward) are
+	// set, so a one-line curl needs no JSON tooling.
+	Notify string `json:"notify,omitempty"`
+}
+
+// InboxNotify is the command to run for inbox news, "" when none is set.
+func (s *Settings) InboxNotify() string {
+	if s == nil || s.Inbox == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Inbox.Notify)
 }
 
 // DefaultPerStackGB is the RAM a stack is assumed to need when config.json

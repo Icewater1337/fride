@@ -126,6 +126,7 @@ backend's compose file.
 | `ledger` | Publish every task's rationale document to a shared git repository. See [ledger](#ledger). |
 | `ideas` | The repository a task's idea pages are published to. See [ideas](#ideas). |
 | `memory` | What one more stack needs, checked before a stack starts. See [memory](#memory). |
+| `inbox` | `{ "notify": "<shell command>" }`: how the sender of an inbox message hears back. See [inbox](#inbox). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 
 ## repos.&lt;name&gt;
@@ -343,6 +344,31 @@ and the orchestrator never forces.
 swapping (`vm_stat` on macOS, `MemAvailable` on Linux). On macOS the kernel's
 memory pressure counts too: critical always refuses, and a raised level refuses
 when only about one stack fits. Docker's side sums `docker stats`.
+
+## inbox
+
+Messages from outside the IDE (`fride in`, `POST /api/inbox`) each get a
+thread; see [INBOX.md](INBOX.md). `notify` is a shell command run whenever a
+thread has news: the orchestrator's answer, what it did, an instruction
+reaching its agent, what became of the thread's task. It is how whoever sent
+the message hears back, wherever they are.
+
+```json
+"inbox": { "notify": "curl -s -d \"$FRIDE_TEXT\" https://example.com/hooks/fride" }
+```
+
+The command runs through your shell, in the FrIDE state folder, with up to 30
+seconds to finish. It gets:
+
+| | |
+|---|---|
+| `FRIDE_TEXT` | A summary to forward as it is: the thread, where it stands, and what was said and done. |
+| `FRIDE_THREAD`, `FRIDE_STATUS`, `FRIDE_SOURCE`, `FRIDE_REF` | The thread's number, status, source and the sender's own ref. Enough to route the summary back to where the message came from. |
+| stdin | The same as JSON: `{"thread": {…}, "messages": [{"role", "text", "task", "time"}…], "text": "…"}`. |
+
+News is sent once per turn or look, never for the sender's own messages, and
+never twice: a failing command is logged and not retried. Edits apply from the
+next reload of config.json (**Re-check** in Settings, or a restart).
 
 ## requirements
 

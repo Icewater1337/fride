@@ -29,6 +29,7 @@ type fakeHost struct {
 	detail    map[string]Detail
 	sendErr   error
 	resumeErr error
+	notes     []Note
 }
 
 func newFakeHost() *fakeHost {
@@ -123,6 +124,19 @@ func after(all []agent.Turn, cursor string) ([]agent.Turn, string) {
 		return fresh, fresh[len(fresh)-1].UUID
 	}
 	return nil, cursor
+}
+
+func (f *fakeHost) Notify(n Note) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notes = append(f.notes, n)
+	return nil
+}
+
+func (f *fakeHost) noted() []Note {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Note(nil), f.notes...)
 }
 
 func (f *fakeHost) counts() (int, int, int) {

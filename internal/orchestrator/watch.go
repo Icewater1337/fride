@@ -36,6 +36,9 @@ func (o *Orchestrator) run() {
 // loop runs every fifteen seconds for as long as the IDE is open. What it
 // decides by is in decide.go, as a function of plain values.
 func (o *Orchestrator) tick(ctx context.Context) {
+	// A look can bring inbox news without a turn: an instruction delivered, a
+	// thread finished because its task was closed.
+	defer o.noteNews()
 	o.mu.Lock()
 	// Waiting on the user suppresses acting, not looking. The thing it is
 	// waiting for is often answered somewhere else entirely — a permission
