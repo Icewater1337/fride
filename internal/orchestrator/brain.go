@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -73,6 +74,11 @@ type Action struct {
 	// absent field has to stay distinguishable from an explicit false: the
 	// default is to start one.
 	StartAgent *bool `json:"startAgent,omitempty"`
+	// Instruction is the new task's first instruction for its agent. It is
+	// held and typed in once that agent is at its prompt, because the task's
+	// slug is only known after creating it, and a freshly started agent is
+	// still drawing its screen.
+	Instruction string `json:"instruction,omitempty"`
 
 	// set_status
 	Status string `json:"status,omitempty"`
@@ -142,6 +148,7 @@ func schema() string {
           "agent": {"type": "string", "enum": ["claude", "codex", "antigravity"]},
           "dangerous": {"type": "boolean"},
           "startAgent": {"type": "boolean"},
+          "instruction": {"type": "string", "description": "For create_task: the first instruction for the new task's agent, typed in once it is ready. One line."},
           "status": {"type": "string", "enum": ["open", "in_progress", "done"]},
           "conversation": {"type": "string", "description": "For resume_agent: which recorded conversation to reopen. Omit for the most recent free one."}
         }
@@ -174,7 +181,7 @@ workspace, or read a named file.
 You have no shell and cannot write anything. Everything that changes the
 machine goes through the actions below, which is what keeps it reviewable.
 
-Your two jobs:
+Your three jobs:
 
 1. CREATING WORK. The user describes a task in a sentence — which repositories,
    which branch, what it branches from. Turn that into one create_task action.
@@ -189,6 +196,10 @@ Your two jobs:
      means origin/main.
    - Do not invent a profile or a permission setting the user did not
      ask for. Leave them out and the IDE's own defaults apply.
+   - When the request says what the work is, not only where it happens, put
+     that in instruction: the IDE types it into the new agent once it is
+     ready. Without it the agent starts and waits for someone to tell it what
+     to do.
 
 2. ORCHESTRATING. In orchestrator mode you are given, on a timer, an
    observation of every supervised task: what its agent has said since you last
@@ -224,6 +235,18 @@ Your two jobs:
    - Never send the same instruction twice to a task that has not moved. If a
      task has been nudged repeatedly and is not progressing, stop nudging and
      escalate.
+
+3. THE INBOX. Messages also arrive from outside the IDE — relayed by a script,
+   a chat bridge or an assistant — each in a numbered thread. Their sender is
+   not watching the board: your "say" is the answer they read in that thread.
+   - Route each message: to the task it clearly continues (it names the task,
+     its ticket or its branch) with send_to_agent; to a new task with
+     create_task and its instruction; or answer it, if it is a question.
+   - Never guess which task a message belongs to. If it is not clear, ask
+     with needsUser=true.
+   - Tasks an inbox thread is following are shown to you on a timer even in
+     chat mode, so their sender hears what came of the message. Report when
+     one finishes, stops on a question, or gets stuck; stay quiet otherwise.
 
 Rules for what you say:
 - Write to a developer who is not watching. Lead with what changed.
@@ -295,6 +318,12 @@ func (b *brain) turn(ctx context.Context, input, session string) (Reply, string,
 	if session != "" {
 		argv = append(argv, "--resume", session)
 	}
+	// The workspaces root only comes into being with the first task, and the
+	// first thing anyone asks the orchestrator for is usually that task. An
+	// empty folder to read is harmless; a missing one fails every turn.
+	if err := os.MkdirAll(b.dir, 0o755); err != nil {
+		return Reply{}, session, fmt.Errorf("the orchestrator could not think: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, b.bin, argv...)
 	cmd.Dir = b.dir
 	// The prompt goes on stdin, which `-p` reads when it is given no prompt
@@ -312,6 +341,17 @@ func (b *brain) turn(ctx context.Context, input, session string) (Reply, string,
 		if ok := asExit(err, &ee); ok && len(ee.Stderr) > 0 {
 			return Reply{}, session, fmt.Errorf("the orchestrator could not think: %s",
 				firstLine(string(ee.Stderr)))
+		}
+		// With --output-format json the CLI reports some failures — a login
+		// that has expired, among them — as a result on stdout, exits 1 and
+		// leaves stderr empty. "exit status 1" alone says nothing worth acting on.
+		var failed struct {
+			IsError bool   `json:"is_error"`
+			Result  string `json:"result"`
+		}
+		if json.Unmarshal(out, &failed) == nil && failed.IsError && failed.Result != "" {
+			return Reply{}, session, fmt.Errorf("the orchestrator could not think: %s",
+				firstLine(failed.Result))
 		}
 		if ctx.Err() != nil {
 			return Reply{}, session, fmt.Errorf("the orchestrator timed out after %s", brainTimeout)

@@ -113,6 +113,16 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   orch off                              stop supervising, back to chat
                                         (all four talk to a running fride serve)
 
+  in "<message>" [--from <source>] [--ref <id>] [--wait] [--json]
+                                        hand the orchestrator a message from outside;
+                                        it routes it to a task, starts one, or asks back.
+                                        No message (or "-") reads it from stdin. --ref:
+                                        the sender's id, so a retry is not a second message
+  in ls [--json]                        the inbox threads, newest first
+  in status <id> [--json]               one thread: what came of the message so far
+  in reply <id> "<message>" [--wait]    answer its question, or send more for its task
+  in close <id>                         stop following it (its tasks are left alone)
+
   version
 
 [task] may be omitted when the working directory is inside a task workspace,
@@ -154,6 +164,9 @@ func main() {
 		return
 	case "orch":
 		cmdOrch(os.Args[2:])
+		return
+	case "in":
+		cmdIn(os.Args[2:])
 		return
 	case "fleet":
 		cmdFleet(os.Args[2:])

@@ -9,6 +9,8 @@ import (
 
 // run is the monitor loop. It ticks whether or not orchestrate mode is on,
 // because the cost of a tick that decides to do nothing is one map lookup.
+// The inbox is read first, on every tick and whenever something kicks it: a
+// message someone sent is worth more than a look nobody asked for.
 func (o *Orchestrator) run() {
 	t := time.NewTicker(tickInterval)
 	defer t.Stop()
@@ -16,14 +18,18 @@ func (o *Orchestrator) run() {
 		select {
 		case <-o.stop:
 			return
+		case <-o.wake:
+			o.drain()
 		case <-t.C:
+			o.drain()
 			o.tick(context.Background())
 		}
 	}
 }
 
-// tick is one round of supervision: look at every watched task, decide whether
-// anything has happened worth spending a turn on, and if so consult the brain.
+// tick is one round of supervision: look at every supervised task, decide
+// whether anything has happened worth spending a turn on, and if so consult
+// the brain.
 //
 // The decision to consult is made here, in Go, on purpose. Asking the model
 // "should I think about this?" costs the same as thinking about it, and this
@@ -36,19 +42,31 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	// dialog is cleared in the task's own tab, not in this chat — and a loop
 	// that stopped observing would never notice, and would stay frozen with a
 	// stale picture until the user thought to come back and say so.
-	if o.st.Mode != ModeOrchestrate || o.thinking || len(o.st.Watching) == 0 {
+	if o.thinking {
 		o.mu.Unlock()
 		return
 	}
-	watching := append([]string{}, o.st.Watching...)
+	shown := o.supervised()
+	// Also looked at: tasks with an instruction waiting for their agent, which
+	// is delivered from the observation without consulting anyone.
+	look := append([]string{}, shown...)
+	for slug := range o.st.Held {
+		if !contains(look, slug) {
+			look = append(look, slug)
+		}
+	}
+	if len(look) == 0 {
+		o.mu.Unlock()
+		return
+	}
 	cursors := map[string]string{}
-	for _, s := range watching {
+	for _, s := range look {
 		cursors[s] = o.mem.tasks[s].cursor
 	}
 	o.mu.Unlock()
 
-	obs := make([]Observation, 0, len(watching))
-	for _, slug := range watching {
+	all := make([]Observation, 0, len(look))
+	for _, slug := range look {
 		ob, err := o.host.Observe(slug, cursors[slug])
 		if err != nil {
 			// A task that has been deleted underneath us is not an error worth
@@ -56,7 +74,14 @@ func (o *Orchestrator) tick(ctx context.Context) {
 			o.dropWatch(slug, err)
 			continue
 		}
-		obs = append(obs, ob)
+		all = append(all, ob)
+	}
+	o.deliverHeld(all)
+	obs := all[:0:0]
+	for _, ob := range all {
+		if contains(shown, ob.Task.Slug) {
+			obs = append(obs, ob)
+		}
 	}
 	if len(obs) == 0 {
 		return
@@ -84,46 +109,74 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		d := o.host.Detail(obs[i].Task.Slug)
 		obs[i].Detail = &d
 	}
-	_ = o.think(ctx, gen, o.prompt("", obs), false, func(now time.Time) {
+	_ = o.think(ctx, gen, o.prompt("", obs), turn{origin: fromLoop}, func(now time.Time) {
 		o.mem = o.mem.saw(obs, now)
 	})
 }
 
-func (o *Orchestrator) dropWatch(slug string, err error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if !contains(o.st.Watching, slug) {
-		return
+// supervised is what a scheduled look shows the brain: the workspaces picked in
+// orchestrate mode, and, in any mode, those an inbox thread is following — a
+// message sent from elsewhere is only useful if what came of it is reported.
+// Called with the lock held.
+func (o *Orchestrator) supervised() []string {
+	var out []string
+	if o.st.Mode == ModeOrchestrate {
+		out = append(out, o.st.Watching...)
 	}
-	out := []string{}
-	for _, s := range o.st.Watching {
-		if s != slug {
+	for _, s := range o.followed() {
+		if !contains(out, s) {
 			out = append(out, s)
 		}
 	}
-	o.st.Watching = out
-	o.add(RoleEvent, slug, "stopped supervising "+slug+": "+err.Error())
-	if len(out) == 0 {
-		o.st.Mode = ModeChat
-		o.add(RoleEvent, "", "Nothing left to orchestrate — back to chat.")
+	return out
+}
+
+// dropWatch lets go of a task that can no longer be observed — closed, or
+// removed: it stops being supervised, an instruction held for it is reported
+// as not sent, and the inbox threads following it are finished with it.
+func (o *Orchestrator) dropWatch(slug string, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if h, ok := o.st.Held[slug]; ok {
+		delete(o.st.Held, slug)
+		o.addTo(RoleError, slug, "this instruction for "+slug+" was not sent: "+h.Text+
+			" — "+err.Error(), h.Threads...)
+	}
+	o.finish(slug, err)
+	if contains(o.st.Watching, slug) {
+		out := []string{}
+		for _, s := range o.st.Watching {
+			if s != slug {
+				out = append(out, s)
+			}
+		}
+		o.st.Watching = out
+		// In chat mode the selection is only kept for the next switch; the task
+		// leaving it is not news.
+		if o.st.Mode == ModeOrchestrate {
+			o.add(RoleEvent, slug, "stopped supervising "+slug+": "+err.Error())
+			if len(out) == 0 {
+				o.st.Mode = ModeChat
+				o.add(RoleEvent, "", "Nothing left to orchestrate — back to chat.")
+			}
+		}
 	}
 	o.save()
 }
 
 // ------------------------------------------------------------------ the prompt
 
-// prompt renders one turn's input. Exactly one of userText and obs is set.
+// prompt renders one turn's input: lead, which says what the turn is for (the
+// user's words, a message from the inbox), or a scheduled look at obs.
 //
 // The machine state is re-sent every turn rather than relied on from the
 // conversation's memory. It is small, it changes underneath the orchestrator
 // constantly, and a supervisor acting on a task list from ten minutes ago is
 // worse than one that has to re-read it.
-func (o *Orchestrator) prompt(userText string, obs []Observation) string {
+func (o *Orchestrator) prompt(lead string, obs []Observation) string {
 	var b strings.Builder
-	if userText != "" {
-		b.WriteString("THE USER SAYS:\n")
-		b.WriteString(userText)
-		b.WriteString("\n\n")
+	if lead != "" {
+		b.WriteString(lead)
 	} else {
 		b.WriteString("SCHEDULED LOOK at the workspaces you are supervising. ")
 		b.WriteString("Nobody asked for this turn: say nothing unless something ")
@@ -133,6 +186,16 @@ func (o *Orchestrator) prompt(userText string, obs []Observation) string {
 	o.mu.Lock()
 	mode, autonomy := o.st.Mode, o.st.Autonomy
 	watching := strings.Join(o.st.Watching, ", ")
+	var threads []Thread
+	inbox := map[string][]string{} // task → the threads following it, as "#7"
+	for _, t := range o.st.Threads {
+		if t.following() {
+			threads = append(threads, t)
+			for _, s := range t.open() {
+				inbox[s] = append(inbox[s], fmt.Sprintf("#%d", t.ID))
+			}
+		}
+	}
 	o.mu.Unlock()
 
 	b.WriteString("MODE: " + mode)
@@ -142,6 +205,10 @@ func (o *Orchestrator) prompt(userText string, obs []Observation) string {
 			b.WriteString("\nYou may not act unprompted in this mode. Describe what you " +
 				"would do and set needsUser=true; the user answering is what runs it.")
 		}
+	} else if lead == "" {
+		b.WriteString("\nThis look is only for the tasks inbox threads are following. " +
+			"In chat mode you may not act unprompted: report what came of them, and if " +
+			"something should be done, describe it and set needsUser=true.")
 	}
 	b.WriteString("\n\n")
 
@@ -181,7 +248,19 @@ func (o *Orchestrator) prompt(userText string, obs []Observation) string {
 		if t.Attention {
 			b.WriteString(" AGENT WAITING")
 		}
+		if ids := inbox[t.Slug]; len(ids) > 0 {
+			b.WriteString(" (inbox " + strings.Join(ids, ", ") + ")")
+		}
 		b.WriteString("\n")
+	}
+
+	if len(threads) > 0 {
+		b.WriteString("\nINBOX THREADS being followed (their sender reads what you say " +
+			"about these tasks; name the task when you report on one):\n")
+		for _, t := range threads {
+			b.WriteString(fmt.Sprintf("  #%d from %s [%s] → %s: %s\n", t.ID, t.Source,
+				t.Status, strings.Join(t.open(), ", "), clip(t.Text, 200)))
+		}
 	}
 
 	if len(obs) > 0 {
