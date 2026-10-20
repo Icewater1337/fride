@@ -124,6 +124,12 @@ func (s *Settings) Check() []Problem {
 		}
 	}
 
+	if c := s.Companion; c != nil && strings.TrimSpace(c.WebhookURL) != "" {
+		if err := LoopbackURL(c.WebhookURL); err != nil {
+			add(true, "companion.webhookUrl", "%v", err)
+		}
+	}
+
 	if l := s.Ledger; l != nil {
 		if strings.TrimSpace(l.Remote) == "" {
 			add(true, "ledger.remote", "name the ledger repository's git URL")

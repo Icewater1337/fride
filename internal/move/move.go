@@ -72,6 +72,11 @@ type Manifest struct {
 	Root []RootFile `json:"root,omitempty"`
 	// Resume is the conversation to reopen on arrival.
 	Resume string `json:"resume,omitempty"`
+	// Source is the task's id where it came from, set only when it arrives
+	// under another one (`fride task import --as`). The bundles still carry
+	// the snapshot under that id, and a branch that is busy here is then
+	// continued on a branch of the new id's own.
+	Source string `json:"source,omitempty"`
 }
 
 // RootFile is one file at the workspace root, outside the repositories. Its
@@ -329,7 +334,8 @@ func WriteArchive(w io.Writer, cfg *config.Config, m *Manifest, have map[string]
 	jdir := journal.Dir(cfg, m.Task.Slug)
 	if entries, err := os.ReadDir(jdir); err == nil {
 		for _, e := range entries {
-			if !e.IsDir() {
+			// A lock file is this computer's, and only while someone holds it.
+			if !e.IsDir() && !strings.HasSuffix(e.Name(), ".lock") {
 				if err := addFile(tw, "journal/"+e.Name(), filepath.Join(jdir, e.Name())); err != nil {
 					return err
 				}
@@ -578,6 +584,12 @@ func checkRootPath(p string, repos []Repo) error {
 // Prepare receives the archive and fetches its bundles into side refs. Nothing
 // a user sees changes yet; Finish makes it real, Abort throws it away.
 func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error) {
+	return PrepareAs(cfg, st, r, "")
+}
+
+// PrepareAs is Prepare under another task id: as, when it is not empty. It is
+// how a bundle lands next to the task it was taken from, which keeps its id.
+func PrepareAs(cfg *config.Config, st *store.Store, r io.Reader, as string) (*Manifest, error) {
 	tmp, err := os.MkdirTemp(cfg.StateDir, "incoming-*")
 	if err != nil {
 		return nil, err
@@ -592,10 +604,30 @@ func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error
 		drop()
 		return nil, err
 	}
-	slug := m.Task.Slug
-	if err := store.ValidateSlug(slug); err != nil {
+	// src is the id the archive was made under: its snapshot refs are named
+	// after it. slug is the one the task gets here.
+	src := m.Task.Slug
+	if err := store.ValidateSlug(src); err != nil {
 		drop()
 		return nil, err
+	}
+	slug := src
+	if as != "" && as != src {
+		if err := store.ValidateSlug(as); err != nil {
+			drop()
+			return nil, err
+		}
+		slug = as
+		m.Task.Slug, m.Source = as, src
+		// Staged under the new id, so Finish and Abort read it as such.
+		b, err := json.MarshalIndent(m, "", "  ")
+		if err == nil {
+			err = os.WriteFile(filepath.Join(tmp, "manifest.json"), b, 0o600)
+		}
+		if err != nil {
+			drop()
+			return nil, err
+		}
 	}
 	repos := make([]string, 0, len(m.Repos))
 	for _, rp := range m.Repos {
@@ -650,7 +682,7 @@ func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error
 			return nil, fmt.Errorf("%s: commit %s is not here: %w", rp.Name, short(rp.Head), err)
 		}
 		if rp.WIP != "" {
-			specs = append(specs, "+"+wipRef(slug, rp.Name)+":"+incomingWIP(slug, rp.Name))
+			specs = append(specs, "+"+wipRef(src, rp.Name)+":"+incomingWIP(slug, rp.Name))
 		}
 		if len(specs) > 4 {
 			if _, err := git(main.Main, nil, specs...); err != nil {
@@ -667,10 +699,18 @@ func Staged(cfg *config.Config, slug string) (*Manifest, error) {
 	return readManifest(stagingDir(cfg, slug))
 }
 
+// Landing is what this computer adds to a task that arrives: its own local
+// config (Local, which returns notes for the user), the agent's guide file and
+// the journal hook. Passed in so this package stays free of the workspace
+// package's dependencies; task.Landing is the real one.
+type Landing struct {
+	Local func(repo, dest string) []string
+	Guide func(slug string, repos []string, agent, branch string) error
+	Hook  func(slug string) error
+}
+
 // Finish creates the workspace from a prepared move and registers the task.
-// guide writes the agent's guide file; it is passed in so this package stays
-// free of the workspace package's dependencies.
-func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, dest string) []string, guide func(repos []string, agent, branch string) error, hook func() error) (*Manifest, []string, error) {
+func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Manifest, []string, error) {
 	if err := store.ValidateSlug(slug); err != nil {
 		return nil, nil, err
 	}
@@ -700,14 +740,20 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 		_ = removeUnder(cfg.WorkspaceRoot, ws)
 		return nil, notes, err
 	}
-	for _, rp := range m.Repos {
+	for i := range m.Repos {
+		rp := &m.Repos[i]
 		main, _ := cfg.Repo(rp.Name)
 		target := rp.Head
 		if rp.Bundle != "" {
 			target = incomingRef(slug, rp.Name)
 		}
-		if err := placeBranch(main.Main, rp.Branch, target); err != nil {
+		branch, err := landBranch(main.Main, rp.Branch, target, m.Source != "", slug)
+		if err != nil {
 			return fail(fmt.Errorf("%s: %w", rp.Name, err))
+		}
+		if branch != rp.Branch {
+			notes = append(notes, fmt.Sprintf("%s: branch %s is in use here — the task continues on %s", rp.Name, rp.Branch, branch))
+			rp.Branch = branch
 		}
 		wt := cfg.RepoDir(slug, rp.Name)
 		if _, err := git(main.Main, nil, "worktree", "add", wt, rp.Branch); err != nil {
@@ -719,7 +765,7 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 				return fail(fmt.Errorf("%s: re-applying uncommitted work: %w", rp.Name, err))
 			}
 		}
-		notes = append(notes, local(rp.Name, wt)...)
+		notes = append(notes, land.Local(rp.Name, wt)...)
 	}
 	// The workspace's own files, before the guide and the hook: those are
 	// this computer's to write, with its own paths.
@@ -751,6 +797,14 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 	}
 	t := m.Task
 	t.K = 0
+	t.Repos = append([]store.TaskRepo(nil), m.Task.Repos...)
+	for i := range t.Repos {
+		for _, rp := range m.Repos {
+			if rp.Name == t.Repos[i].Name {
+				t.Repos[i].Branch = rp.Branch
+			}
+		}
+	}
 	if err := st.Add(&t); err != nil {
 		return fail(err)
 	}
@@ -762,10 +816,10 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 			branch = rp.Branch
 		}
 	}
-	if err := guide(repos, t.Agent, branch); err != nil {
+	if err := land.Guide(slug, repos, t.Agent, branch); err != nil {
 		notes = append(notes, "the agent guide could not be written: "+err.Error())
 	}
-	if err := hook(); err != nil {
+	if err := land.Hook(slug); err != nil {
 		notes = append(notes, "the journal hook could not be installed: "+err.Error())
 	}
 	if n, err := installTranscripts(cfg, staging, m, ws); err != nil {
@@ -775,6 +829,34 @@ func Finish(cfg *config.Config, st *store.Store, slug string, local func(repo, d
 	}
 	cleanup(cfg, slug, m)
 	return m, notes, nil
+}
+
+// landBranch places the task's branch, and returns the one it ended up on. A
+// task that arrives under a new id (rename) may share its repository with the
+// task it was taken from, whose worktree has that branch checked out; it then
+// continues on <branch>-<slug> rather than failing. A task that keeps its id
+// never changes branch: that is the user's name for the work.
+func landBranch(repo, branch, target string, rename bool, slug string) (string, error) {
+	if rename && checkedOut(repo, branch) {
+		branch = branch + "-" + slug
+	}
+	err := placeBranch(repo, branch, target)
+	if err != nil && rename && !strings.HasSuffix(branch, "-"+slug) {
+		branch = branch + "-" + slug
+		err = placeBranch(repo, branch, target)
+	}
+	return branch, err
+}
+
+// checkedOut reports whether a worktree of repo has branch checked out.
+func checkedOut(repo, branch string) bool {
+	wl, _ := git(repo, nil, "worktree", "list", "--porcelain")
+	for _, l := range strings.Split(wl, "\n") {
+		if strings.TrimSpace(l) == "branch refs/heads/"+branch {
+			return true
+		}
+	}
+	return false
 }
 
 // placeBranch makes branch point at target: created when missing, fast-

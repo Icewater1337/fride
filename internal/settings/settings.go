@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -60,6 +62,8 @@ type Settings struct {
 	Memory *Memory `json:"memory,omitempty"`
 	// Inbox configures messages from outside the IDE (INBOX.md).
 	Inbox *Inbox `json:"inbox,omitempty"`
+	// Companion runs FrIDE under a local companion program (COMPANION.md).
+	Companion *Companion `json:"companion,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -290,6 +294,57 @@ type Inbox struct {
 	// FRIDE_SOURCE, FRIDE_REF and FRIDE_TEXT (a summary ready to forward) are
 	// set, so a one-line curl needs no JSON tooling.
 	Notify string `json:"notify,omitempty"`
+}
+
+// Companion configures companion mode: FrIDE run by a program on the same
+// computer that takes over what fleet mode does — placement, moves, relaying
+// news — and talks to FrIDE's API with a token it was paired with.
+type Companion struct {
+	// Enabled starts `fride serve` in companion mode, as --under-fridolin does.
+	Enabled bool `json:"enabled,omitempty"`
+	// WebhookURL receives thread news as signed JSON POSTs. Loopback only:
+	// http://127.0.0.1:<port>/…, http://[::1]:<port>/… or
+	// http://localhost:<port>/…. Default: the URL the companion gave when it
+	// paired, if any.
+	WebhookURL string `json:"webhookUrl,omitempty"`
+}
+
+// CompanionEnabled reports whether config.json turns companion mode on.
+func (s *Settings) CompanionEnabled() bool {
+	return s != nil && s.Companion != nil && s.Companion.Enabled
+}
+
+// CompanionWebhook is the configured webhook URL, "" when none is set.
+func (s *Settings) CompanionWebhook() string {
+	if s == nil || s.Companion == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.Companion.WebhookURL)
+}
+
+// LoopbackURL checks that a webhook URL can only reach this computer: http or
+// https, and a host that is a loopback address or "localhost". Thread news
+// carries what the user asked for and what the agents did, so it must not be
+// sent anywhere else, whatever config.json says.
+func LoopbackURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("not a URL: %v", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("must be an http:// or https:// URL")
+	}
+	if u.User != nil {
+		return fmt.Errorf("must not carry a user or password")
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("must be a loopback URL (127.0.0.1, [::1] or localhost), not %q", host)
 }
 
 // InboxNotify is the command to run for inbox news, "" when none is set.

@@ -151,3 +151,23 @@ func TestExpandAndVars(t *testing.T) {
 		t.Fatalf("Vars = %v", v)
 	}
 }
+
+func TestCompanionWebhookMustBeLoopback(t *testing.T) {
+	for url, ok := range map[string]bool{
+		"http://127.0.0.1:8770/fride": true, "http://[::1]:9/x": true, "https://localhost:8443/": true,
+		"http://192.168.1.4:8770/": false, "http://example.com/": false, "file:///tmp/x": false,
+		"http://localhost.example.com/": false, "http://127.0.0.1.nip.io/": false,
+	} {
+		if err := LoopbackURL(url); (err == nil) != ok {
+			t.Errorf("LoopbackURL(%s) = %v", url, err)
+		}
+		s := &Settings{Companion: &Companion{WebhookURL: url}}
+		found := false
+		for _, p := range s.Check() {
+			found = found || (p.Where == "companion.webhookUrl" && p.Error)
+		}
+		if found == ok {
+			t.Errorf("config check of %s: problem reported = %v", url, found)
+		}
+	}
+}

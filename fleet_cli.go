@@ -97,15 +97,6 @@ func joinFleet(cfg *config.Config, srv *server.Server, name string) {
 	}()
 }
 
-func fleetEnabled(cfg *config.Config, args []string) (bool, string) {
-	on, rest := flagBool(args, "--fleet")
-	name, _ := flagValue(rest, "--name")
-	if cfg.Settings != nil && cfg.Settings.Fleet != nil && cfg.Settings.Fleet.Enabled {
-		on = true
-	}
-	return on, name
-}
-
 func cmdFleet(args []string) {
 	var v struct {
 		Enabled bool         `json:"enabled"`

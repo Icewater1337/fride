@@ -46,6 +46,13 @@ func read(t *testing.T, path string) string {
 	return string(b)
 }
 
+// noLanding adds nothing of this computer's own to an arriving task.
+var noLanding = Landing{
+	Local: func(string, string) []string { return nil },
+	Guide: func(string, []string, string, string) error { return nil },
+	Hook:  func(string) error { return nil },
+}
+
 // computer is one FrIDE home: its own base folder, workspaces and store.
 type computer struct {
 	cfg *config.Config
@@ -147,10 +154,7 @@ func TestMoveCarriesEverything(t *testing.T) {
 	if err := Detach(src.cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	none := func(string, string) []string { return nil }
-	ok := func([]string, string, string) error { return nil }
-	nop := func() error { return nil }
-	got, notes, err := Finish(dst.cfg, dst.st, slug, none, ok, nop)
+	got, notes, err := Finish(dst.cfg, dst.st, slug, noLanding)
 	if err != nil {
 		t.Fatalf("Finish: %v (%v)", err, notes)
 	}
@@ -237,8 +241,7 @@ func TestMoveBranchWithoutCommits(t *testing.T) {
 	if err := Detach(src.cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Finish(dst.cfg, dst.st, slug, func(string, string) []string { return nil },
-		func([]string, string, string) error { return nil }, func() error { return nil }); err != nil {
+	if _, _, err := Finish(dst.cfg, dst.st, slug, noLanding); err != nil {
 		t.Fatal(err)
 	}
 	if g := read(t, filepath.Join(dst.cfg.RepoDir(slug, "app"), "f.txt")); g != "1\nchanged\n" {
