@@ -1469,14 +1469,13 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
 	out, cancel := sess.Subscribe()
 	defer cancel()
 
-	// Make the program repaint for the browser that just arrived. Deliberately
-	// delayed: the client measures its pane and sends its own resize as soon as
-	// the socket opens, and nudging before that lands would toggle a size that is
-	// about to be replaced — the redraw has to be the last thing to happen.
-	go func() {
-		time.Sleep(400 * time.Millisecond)
-		sess.Redraw()
-	}()
+	// The program is made to repaint for this browser once the browser has sent
+	// its first size, not at some delay after connecting. A tab that is not on
+	// screen sits in a hidden pane and its terminal keeps xterm's default 80x24
+	// until it is first shown; a repaint before then is laid out for the wrong
+	// width. Showing the tab later sends a size the PTY already has, which is no
+	// SIGWINCH and so no repaint, and the mangled screen stayed.
+	measured := false
 
 	done := make(chan struct{})
 	go func() { // pty -> browser
@@ -1504,6 +1503,10 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case "resize":
 			_ = sess.Resize(in.Rows, in.Cols)
+			if !measured && in.Rows > 0 && in.Cols > 0 {
+				measured = true
+				go sess.Redraw()
+			}
 		}
 	}
 	<-doneOrTimeout(done)
