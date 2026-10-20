@@ -114,13 +114,17 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Notify runs config.json's inbox.notify command, if there is one, with the
+// Notify queues the companion's webhook in companion mode, and runs
+// config.json's inbox.notify command, if there is one, with the
 // note as JSON on stdin and its gist in the environment. The command is read
 // from the settings each time, so a changed config.json applies from its next
 // reload (Re-check in Settings, or a restart) without touching the inbox.
 //
 // Bounded: a command that hangs would otherwise hold up every note after it.
 func (h orchHost) Notify(n orchestrator.Note) error {
+	// The companion's webhook first: queued, never waited for, so neither a
+	// slow companion nor a slow command holds the other up.
+	h.s.companionNote(n)
 	command := h.s.cfg.Settings.InboxNotify()
 	if command == "" {
 		return nil

@@ -10,18 +10,16 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/fleet"
-	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/move"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
-	"github.com/Icewater1337/fride/internal/workspace"
+	"github.com/Icewater1337/fride/internal/task"
 	"github.com/gorilla/websocket"
 )
 
@@ -634,40 +632,12 @@ func (s *Server) handleImportFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := req.Slug
-	local := func(repo, dest string) []string {
-		copied, notes := workspace.CopyLocalConfig(s.cfg, repo, dest)
-		if len(copied) > 0 {
-			notes = append(notes, repo+": copied "+strings.Join(copied, ", ")+" from this computer's checkout")
-		}
-		return notes
-	}
-	guide := func(repos []string, agentKind, branch string) error {
-		return workspace.WriteGuide(s.cfg, slug, repos, agentKind, branch)
-	}
-	hook := func() error {
-		bin, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		return journal.InstallHook(s.cfg, slug, bin)
-	}
-	m, notes, err := move.Finish(s.cfg, s.st, slug, local, guide, hook)
+	m, notes, err := move.Finish(s.cfg, s.st, slug, task.Landing(s.cfg))
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	// A profile this computer does not have falls back to its default.
-	if t, err := s.st.Get(slug); err == nil && t.Profile != "" && s.cfg.Settings != nil {
-		if _, _, ok := s.cfg.Settings.Profile(t.Profile); !ok {
-			_, _ = s.st.Update(slug, func(t *store.Task) error { t.Profile = ""; return nil })
-			notes = append(notes, "profile "+t.Profile+" does not exist here — using the default")
-		}
-	}
-	repos := make([]string, 0, len(m.Repos))
-	for _, rp := range m.Repos {
-		repos = append(repos, rp.Name)
-	}
-	stack.SetupAsync(s.cfg, slug, repos)
+	notes = append(notes, task.Arrived(s.cfg, s.st, m)...)
 	if req.StartAgent {
 		if _, err := s.startAgent(slug, m.Resume); err != nil {
 			notes = append(notes, "the agent could not be started: "+err.Error())

@@ -62,8 +62,7 @@ func moveIt(t *testing.T, src, dst *computer, task *store.Task) *Manifest {
 	if err := Detach(src.cfg, m); err != nil {
 		t.Fatal(err)
 	}
-	if _, notes, err := Finish(dst.cfg, dst.st, task.Slug, func(string, string) []string { return nil },
-		func([]string, string, string) error { return nil }, func() error { return nil }); err != nil {
+	if _, notes, err := Finish(dst.cfg, dst.st, task.Slug, noLanding); err != nil {
 		t.Fatalf("Finish: %v (%v)", err, notes)
 	}
 	return m

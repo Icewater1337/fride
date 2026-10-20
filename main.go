@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/companion"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/doctor"
 	"github.com/Icewater1337/fride/internal/journal"
@@ -54,6 +55,11 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
 
   serve [--port N] [--fleet [--name N]] run the web UI (default 7777, or $FRIDE_PORT);
                                         --fleet links it with your other computers
+  serve --under-fridolin                companion mode: a local companion program runs
+                                        FrIDE (fleet off; see docs/COMPANION.md); also
+                                        FRIDE_UNDER_FRIDOLIN=1 or companion.enabled
+  pair-companion [--json]               print a one-time code the companion trades for
+                                        its API token (POST /api/companion/pair)
   fleet                                 this computer and the others in your fleet
   doctor                                is this machine ready? (exit 1 if not)
 
@@ -77,6 +83,10 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   task move <task> <computer> [--stack] [--no-agent]
                                         continue the task on another computer: branches,
                                         uncommitted work, decision log and conversation
+  task export <task> <file>            the task as one file (- for stdout): branches,
+                                        uncommitted work, decision log, conversation
+  task import <file> [--as <id>]        land an exported task here in a fresh workspace;
+                                        --as imports it under another id
   task rm <task> [--force]              remove the workspace
 
   stack up [task] [--wait] [--timeout 10m] [--ide <svc,...>] [--force]
@@ -170,6 +180,9 @@ func main() {
 		return
 	case "fleet":
 		cmdFleet(os.Args[2:])
+		return
+	case "pair-companion":
+		cmdPairCompanion(cfg, os.Args[2:])
 		return
 	}
 	requireConfig(cfg, os.Args[1])
@@ -333,8 +346,20 @@ func cmdServe(cfg *config.Config, st *store.Store, args []string) {
 			filepath.Join(cfg.StateDir, "config.json"))
 	}
 	srv := server.New(cfg, st, term.NewManager(), sub, port)
-	if on, name := fleetEnabled(cfg, args); on {
-		joinFleet(cfg, srv, name)
+	mode := serveMode(cfg, args, os.Getenv)
+	if mode.companion {
+		// The companion takes over what fleet mode does — placement, moves —
+		// so the tailnet, its sign-in and the port mirrors stay off.
+		if mode.fleetAsked {
+			fmt.Println("note: companion mode — fleet mode stays off")
+		}
+		srv.EnableCompanion()
+		if companion.Current(cfg.StateDir) == nil {
+			fmt.Println("companion mode: pair the companion with `fride pair-companion`")
+		}
+	}
+	if mode.fleet {
+		joinFleet(cfg, srv, mode.name)
 		// Leave the fleet properly on Ctrl-C or a stop signal: an ephemeral
 		// node logs out, so it disappears from the tailnet at once.
 		sig := make(chan os.Signal, 1)
@@ -632,6 +657,12 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 
 	case "move":
 		cmdTaskMove(cfg, st, args[1:])
+
+	case "export":
+		cmdTaskExport(cfg, st, args[1:])
+
+	case "import":
+		cmdTaskImport(cfg, st, args[1:])
 
 	case "profile":
 		if len(args) < 3 {

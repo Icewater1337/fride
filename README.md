@@ -105,6 +105,31 @@ are answered. Then:
 
 See [docs/FLEET.md](docs/FLEET.md).
 
+## Run by a companion (companion mode)
+
+`fride serve --under-fridolin` (or `FRIDE_UNDER_FRIDOLIN=1`, or
+`companion.enabled` in config.json) hands fleet duties to a **companion**: a
+program on the same computer that runs FrIDE as part of a larger system,
+places tasks on your machines and relays news to wherever you are. FrIDE's own
+fleet mode stays off; everything else, the orchestrator included, works as
+always.
+
+- `fride pair-companion` prints a one-time code the companion trades for a
+  long-lived API token (`POST /api/companion/pair`, loopback only; FrIDE keeps
+  only its hash).
+- With the token, the companion hands over messages, follows and answers
+  threads, closes tasks, asks whether a stack fits in memory, and exports and
+  imports tasks, all under `/api/companion/`.
+- Thread news goes to the companion's loopback webhook as JSON signed with
+  HMAC-SHA256 (`X-Fride-Signature`), retried with backoff, never holding up
+  the orchestrator.
+- `fride task export <task> <file>` and `fride task import <file> [--as <id>]`
+  carry a task as one file: branches, uncommitted work, decision log and the
+  agent's conversation. They work in every mode.
+
+Without the mode, FrIDE is exactly what it was. See
+[docs/COMPANION.md](docs/COMPANION.md).
+
 ## Messages from outside (the inbox)
 
 `fride in "<message>"` hands the orchestrator a message from anywhere: a
@@ -149,6 +174,11 @@ fride idea ls | idea cat <path> | idea publish [task]   # the ideas repository
 
 fride fleet                               # this computer and your others (fleet mode)
 fride task move <task> <computer>         # continue a task on another computer
+fride task export <task> <file>           # the task as one file …
+fride task import <file> [--as <id>]      # … and back, in a fresh workspace
+
+fride serve --under-fridolin              # companion mode (docs/COMPANION.md)
+fride pair-companion                      # one-time code for the companion's token
 
 fride orch say "start a task with backend and frontend from main on feat/PROJ-42"
 fride orch watch <task>... [--ask]
@@ -219,7 +249,9 @@ stack…) that FrIDE validates, rate-limits and logs in the chat.
 The server binds to `127.0.0.1` only, and checks the `Host` header (DNS
 rebinding) and the `Origin` header, including on the WebSocket upgrade, where
 the same-origin policy does not apply. There is no authentication: any process
-running as you can drive the API. Do not expose it beyond loopback.
+running as you can drive the API. Do not expose it beyond loopback. In
+companion mode, `/api/companion/*` also needs the companion's bearer token and
+refuses browsers (any `Origin`) and non-loopback callers.
 Secret-bearing local files (`.env*`, `.npmrc`, `*.pem`, `*.key`) are withheld
 from the file browser's API.
 

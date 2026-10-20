@@ -51,6 +51,8 @@ type Server struct {
 	orch *orchestrator.Orchestrator
 	// fleet is set when this computer is part of the user's fleet (fleet.go).
 	fleet *fleetState
+	// companion is set in companion mode (companion.go).
+	companion *companionState
 	// localAPI is the API alone, for requests the node proxy serves here.
 	localAPI http.Handler
 	// settingsMu serialises settings edits: each one reads config.json,
@@ -121,6 +123,10 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInbox)
 	s.localFleetRoutes(mux)
+	if s.companion != nil {
+		// Like the inbox, never on the fleet listener: only here, on loopback.
+		mux.HandleFunc("/api/companion/", s.handleCompanion)
+	}
 	api := http.NewServeMux()
 	s.apiRoutes(api)
 	s.localAPI = api

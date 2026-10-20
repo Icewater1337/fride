@@ -81,6 +81,11 @@ forward in `FRIDE_TEXT`, the thread's number, status, source and ref in
 `FRIDE_THREAD`, `FRIDE_STATUS`, `FRIDE_SOURCE` and `FRIDE_REF`, and all of it
 as JSON on stdin. See [inbox in CONFIG.md](CONFIG.md#inbox).
 
+In [companion mode](COMPANION.md) the same news also goes to the companion's
+webhook, as signed JSON with an event (`started`, `update`, `question`,
+`done`, `failed`), and the companion follows and answers threads through
+`/api/companion/threads/<id>`.
+
 A relay that took the message in from a chat can use the thread number to post
 the summary back into that chat, and to send the answer to a question there
 back with `fride in reply`.
