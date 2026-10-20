@@ -30,13 +30,16 @@ Layout:
 main.go                  CLI; every UI action is also a subcommand
 orch_cli.go, fleet_cli.go `fride orch …` / `fride fleet`, clients of the running server
 in_cli.go                `fride in …`: the inbox, a client of the running server
+companion_cli.go         `serve` modes, `fride pair-companion`, `fride task export|import`
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
 internal/infra           docker compose: shared and per-task containers
 internal/mem             the memory check before a stack starts
 internal/fleet           fleet mode: tailnet (tsnet) / loopback network, identity, tunnels
-internal/move            continue a task on another computer: snapshot, bundles, restore
+internal/move            continue a task on another computer: snapshot, bundles, restore;
+                         the same archive as a file (task export / import)
+internal/companion       companion mode: pairing code and token, the signed webhook
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide
@@ -53,6 +56,7 @@ web/                     the UI, no build step (xterm.js vendored)
 docs/CONFIG.md           config.json reference
 docs/FLEET.md            fleet mode
 docs/INBOX.md            messages from outside: `fride in`, /api/inbox
+docs/COMPANION.md        companion mode: pairing, /api/companion, webhook, export/import
 ```
 
 Conventions:
@@ -71,3 +75,6 @@ Conventions:
 - The fleet listener serves `apiRoutes` to the user's other devices, and
   answers only `Host: fride` with no `Origin` (`fleet.Host`). A new
   server-to-server call must send exactly that.
+- Companion mode must leave standalone FrIDE untouched: its routes are
+  registered only in that mode, and `serveMode` keeps fleet behaviour as it
+  was without it.

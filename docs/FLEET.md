@@ -108,6 +108,11 @@ The source keeps the task's branches, and its snapshot as
 Resuming the conversation works for Claude Code. Codex and Antigravity tasks
 move too, and start a fresh session on arrival.
 
+Between computers that cannot reach each other, or under a
+[companion](COMPANION.md) that does the placing, the same archive travels as a
+file: `fride task export <task> <file>` here, `fride task import <file>`
+there.
+
 ## Opening a stack from another computer
 
 A task running elsewhere shows **Open here** in its stack panel. Clicking it

@@ -128,6 +128,7 @@ backend's compose file.
 | `memory` | What one more stack needs, checked before a stack starts. See [memory](#memory). |
 | `inbox` | `{ "notify": "<shell command>" }`: how the sender of an inbox message hears back. See [inbox](#inbox). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
+| `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 
 ## repos.&lt;name&gt;
 
@@ -369,6 +370,20 @@ seconds to finish. It gets:
 News is sent once per turn or look, never for the sender's own messages, and
 never twice: a failing command is logged and not retried. Edits apply from the
 next reload of config.json (**Re-check** in Settings, or a restart).
+
+## companion
+
+Companion mode: a program on the same computer runs FrIDE and talks to it
+with a token it was paired with. See [COMPANION.md](COMPANION.md).
+
+```json
+"companion": { "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }
+```
+
+| field | meaning |
+|---|---|
+| `enabled` | Start `fride serve` in companion mode, as `--under-fridolin` or `FRIDE_UNDER_FRIDOLIN=1` do. Fleet mode then stays off. |
+| `webhookUrl` | Where thread news is POSTed, signed. Loopback only (`127.0.0.1`, `[::1]`, `localhost`); `fride config check` refuses anything else. Default: the URL the companion gave when it paired. |
 
 ## requirements
 
