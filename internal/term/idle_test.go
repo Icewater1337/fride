@@ -40,3 +40,29 @@ func TestIdleRaisesAttention(t *testing.T) {
 	t.Fatalf("attention never raised: busy=%v attention=%v lastOutput=%v closed=%v kind=%q",
 		s.Busy, s.Attention, s.lastOutput, s.closed, s.Kind)
 }
+
+// BEL also ends an OSC sequence, and Claude Code sets the window title (and
+// more) that way within its first second. Only a bell of its own means the
+// agent wants attention, wherever the reads split the sequences.
+func TestOnlyABellOfItsOwnRaisesAttention(t *testing.T) {
+	osc := "\x1b]0;✳ Claude Code\x07\x1b]7501;x\x07\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"
+	for name, c := range map[string]struct {
+		chunks []string
+		want   bool
+	}{
+		"titles":           {[]string{osc}, false},
+		"split title":      {[]string{"\x1b]0;wor", "king\x07", "\x1b", "]0;x\x07"}, false},
+		"a bell":           {[]string{"done\x07"}, true},
+		"a bell after OSC": {[]string{osc + "\x07"}, true},
+		"a bell after ST":  {[]string{"\x1b]8;;x\x1b\\", "\x07"}, true},
+	} {
+		var b belScan
+		got := false
+		for _, ch := range c.chunks {
+			got = b.ring([]byte(ch))
+		}
+		if got != c.want {
+			t.Errorf("%s: ring = %v, want %v", name, got, c.want)
+		}
+	}
+}
