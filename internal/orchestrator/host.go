@@ -95,6 +95,10 @@ type Detail struct {
 	Resumable []Conversation `json:"resumable,omitempty"`
 }
 
+// BlockedTrust is Observation.Blocked while a Claude Code agent waits at its
+// folder-trust question rather than on a tool.
+const BlockedTrust = "Claude Code's folder-trust question"
+
 // Observation is one look at a supervised task: what its agent has said since
 // the last look, and whether it is waiting for anybody.
 type Observation struct {
@@ -110,7 +114,8 @@ type Observation struct {
 	Idle time.Duration `json:"idle"`
 	// Blocked names a tool the agent asked to use and has not had answered,
 	// meaning it has stopped on a confirmation dialog rather than at its prompt.
-	// Nothing may be typed at it in that state — see agent.Pending.
+	// Nothing may be typed at it in that state — see agent.Pending. It is
+	// BlockedTrust while a fresh agent waits at its folder-trust question.
 	Blocked string `json:"blocked,omitempty"`
 	// Turns is what the agent has said since the cursor. Empty means it has been
 	// quiet, which is itself worth reporting.

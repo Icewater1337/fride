@@ -6,7 +6,6 @@
 package term
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -71,6 +70,7 @@ type Session struct {
 	exitMsg    string
 	lastOutput time.Time
 	rows, cols uint16
+	bel        belScan
 }
 
 // sessionJSON is what the UI is sent for a session.
@@ -234,8 +234,13 @@ func (s *Session) publish(p []byte) {
 	}
 	// A BEL is Claude Code's terminal-bell notification. It only arrives when
 	// the user has that channel enabled, so it is a bonus signal, not the
-	// primary one — but when it does arrive it is unambiguous.
-	if bytes.IndexByte(p, 0x07) >= 0 {
+	// primary one — but when it does arrive it is unambiguous. Only a bell of
+	// its own counts: BEL also ends an OSC sequence, and Claude Code sends
+	// several (the window title among them) within its first second, long
+	// before it reads input. Counting those made a fresh agent look ready at
+	// once, and the orchestrator's first instruction was typed into a TUI
+	// still starting, which dropped it.
+	if s.bel.ring(p) {
 		s.Attention = true
 	} else {
 		s.Attention = false
@@ -619,4 +624,34 @@ func (m *Manager) ClaimedIDs(task string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// belScan finds a bell that is not the terminator of an OSC sequence
+// (ESC ] … BEL), carrying its state across reads, since a sequence can be split
+// between two.
+type belScan struct {
+	esc, osc bool
+}
+
+func (b *belScan) ring(p []byte) bool {
+	rang := false
+	for _, c := range p {
+		switch {
+		case b.osc:
+			// An OSC ends at BEL or at ST (ESC \).
+			if c == 0x07 || (b.esc && c == '\\') {
+				b.osc, b.esc = false, false
+			} else {
+				b.esc = c == 0x1b
+			}
+		case b.esc:
+			b.esc = false
+			b.osc = c == ']'
+		case c == 0x1b:
+			b.esc = true
+		case c == 0x07:
+			rang = true
+		}
+	}
+	return rang
 }

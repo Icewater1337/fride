@@ -82,9 +82,11 @@ func Run(cfg *config.Config) *Report {
 	add(tool("lsof", "lsof", "command -v lsof", "seeing which ports are in use, and stopping services", "install lsof"))
 
 	var agents []string
+	claude := false
 	for _, a := range agent.List() {
 		if a.Installed {
 			agents = append(agents, a.Label)
+			claude = claude || a.Kind == agent.Claude
 		}
 	}
 	ac := Check{ID: "agents", Label: "agent CLI", OK: len(agents) > 0,
@@ -119,6 +121,10 @@ func Run(cfg *config.Config) *Report {
 			c.Detail = strings.Join(errs, "\n")
 		}
 		add(c)
+	}
+
+	if claude && cfg.Configured() {
+		add(claudeTrust(cfg))
 	}
 
 	if cfg.Configured() && usesContainers(cfg) {
@@ -167,6 +173,26 @@ func Run(cfg *config.Config) *Report {
 		}
 	}
 	return r
+}
+
+// claudeTrust checks that Claude Code trusts the workspace root. An agent
+// started in a folder it does not trust stops at that question first, which a
+// person answers in the tab, but the orchestrator cannot: its instruction
+// would pick "No, exit". Optional, since the question can be answered by hand.
+func claudeTrust(cfg *config.Config) Check {
+	c := Check{ID: "claude-trust", Label: "Claude Code trusts the workspaces", Optional: true,
+		Needed: "agents the orchestrator starts (the inbox, a companion) beginning work on their own",
+		Fix: fmt.Sprintf("run `claude` once in %s and choose \"Yes, I trust this folder\"; "+
+			"that covers every task's workspace below it", cfg.WorkspaceRoot)}
+	switch trusted, ok := agent.ClaudeTrusts(cfg.Home, cfg.WorkspaceRoot); {
+	case !ok:
+		c.Detail = "Claude Code's config could not be read"
+	case trusted:
+		c.OK, c.Detail = true, cfg.WorkspaceRoot
+	default:
+		c.Detail = "not trusted yet: " + cfg.WorkspaceRoot
+	}
+	return c
 }
 
 func usesContainers(cfg *config.Config) bool {

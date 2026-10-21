@@ -194,6 +194,12 @@ fride stack down fride-setup-check
 fride task rm fride-setup-check --force
 ```
 
+If they will hand FrIDE work from outside the IDE (the inbox, a companion)
+and use Claude Code, have them trust the workspace folder once: run `claude`
+in `workspaceRoot` and choose "Yes, I trust this folder". Otherwise every
+agent the orchestrator starts stops at that question; `fride doctor` checks
+it.
+
 Then tell the developer:
 
 - which profiles exist, what each runs, and which is the default;

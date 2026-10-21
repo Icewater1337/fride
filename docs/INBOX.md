@@ -101,6 +101,12 @@ back with `fride in reply`.
   starting when the orchestrator decides what to tell it. So the instruction
   is held and typed in once the agent is at its prompt, or reported as not
   sent if it gets nowhere within ten minutes.
+- **A folder Claude Code does not trust stops a new agent.** Claude Code
+  asks once per folder whether to trust it, with "No, exit" preselected, so
+  typing an instruction there would end the session. The orchestrator types
+  nothing at that question and tells the sender instead. Trust the workspace
+  folder once (run `claude` in it and choose "Yes, I trust this folder"),
+  which covers every task below it; `fride doctor` checks it.
 - **Sends are rate-limited.** An inbox message gets the same limits as the
   orchestrator's own nudges, because nobody is watching.
 
