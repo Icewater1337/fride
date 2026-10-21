@@ -283,6 +283,14 @@ func renderObservation(ob Observation) string {
 		b.WriteString("No agent session is running in this workspace. Nothing here " +
 			"can be nudged; start_agent opens a fresh one, which begins with no " +
 			"memory of what came before.\n")
+	case ob.Blocked == BlockedTrust:
+		b.WriteString(fmt.Sprintf("The agent is STOPPED AT CLAUDE CODE'S FOLDER-TRUST QUESTION "+
+			"(quiet for %s): it has not started, because Claude Code asks once per folder whether "+
+			"to trust it. Nothing can be typed at it — Enter would answer \"No, exit\" and end "+
+			"the session — so send_to_agent is refused, and an instruction held for it waits. "+
+			"Tell the user to answer it in the task's tab, and that trusting FrIDE's workspace "+
+			"folder once (run `claude` in it and choose \"Yes, I trust this folder\") spares "+
+			"the tasks after this one the question.\n", round(ob.Idle)))
 	case ob.Blocked != "":
 		b.WriteString(fmt.Sprintf("The agent has STOPPED ON A CONFIRMATION: it asked to "+
 			"use %s and is showing a permission dialog (quiet for %s). Nothing can be "+

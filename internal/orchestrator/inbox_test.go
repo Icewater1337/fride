@@ -462,3 +462,28 @@ func TestClosingAThreadIsNotNewsToWhoeverClosedIt(t *testing.T) {
 		t.Fatalf("closing sent %d notes", n)
 	}
 }
+
+// An agent at Claude Code's folder-trust question has not started: the held
+// instruction waits for it instead of answering the question "No, exit", and
+// the look tells the brain what to ask the user for.
+func TestHeldInstructionWaitsOutTheFolderTrustQuestion(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.st.Held = map[string]held{"t1": {Text: "go", Since: time.Now()}}
+	o.mu.Unlock()
+	ob := Observation{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true, Blocked: BlockedTrust}
+	o.deliverHeld([]Observation{ob})
+	if _, sent, _ := h.counts(); sent != 0 {
+		t.Fatalf("typed at the trust question: %v", h.sent)
+	}
+	o.mu.Lock()
+	_, still := o.st.Held["t1"]
+	o.mu.Unlock()
+	if !still {
+		t.Fatal("the instruction was dropped instead of waiting")
+	}
+	if got := renderObservation(ob); !strings.Contains(got, "FOLDER-TRUST") || strings.Contains(got, "asked to use") {
+		t.Fatalf("the look does not say it is the trust question: %q", got)
+	}
+}

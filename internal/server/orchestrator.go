@@ -11,6 +11,7 @@ import (
 	"github.com/Icewater1337/fride/internal/orchestrator"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
+	"github.com/Icewater1337/fride/internal/term"
 	"github.com/Icewater1337/fride/internal/workspace"
 )
 
@@ -233,7 +234,32 @@ func (h orchHost) Send(slug, text string) error {
 	if sess == nil {
 		return fmt.Errorf("no agent session is running in %s", slug)
 	}
+	// Whatever is typed at the folder-trust question, its Enter answers
+	// "No, exit" and ends the session.
+	if h.atTrustDialog(slug, sess) {
+		return fmt.Errorf("%s's agent is asking whether to trust its folder, so nothing can be "+
+			"typed at it; %s", slug, h.trustFix())
+	}
 	return sess.SendLine(text)
+}
+
+// atTrustDialog reports whether a task's Claude Code agent is stopped at its
+// folder-trust question. The screen alone would keep saying so after someone
+// answered it in the tab, since the question stays in the scrollback; that
+// Claude Code has registered the session settles it (agent.ClaudeStarted).
+// Trusting the folder elsewhere does not: this process still shows the
+// question.
+func (h orchHost) atTrustDialog(slug string, sess *term.Session) bool {
+	if h.s.taskAgent(slug) != agent.Claude || !agent.TrustPrompt(sess.Screen(40)) {
+		return false
+	}
+	return !agent.ClaudeStarted(h.s.cfg.Home, sess.Pid(), sess.Dir, sess.Created)
+}
+
+// trustFix says how the user lets FrIDE's agents start unattended.
+func (h orchHost) trustFix() string {
+	return fmt.Sprintf("answer it in the task's tab; to spare the tasks after it the question, "+
+		"trust %s once (run `claude` there and choose \"Yes, I trust this folder\")", h.s.cfg.WorkspaceRoot)
 }
 
 // Observe reports what has happened in a task since the cursor.
@@ -293,10 +319,13 @@ func (h orchHost) Observe(slug, cursor string) (orchestrator.Observation, error)
 			}
 		}
 	}
+	if ob.Waiting && ob.Blocked == "" && h.atTrustDialog(slug, sess) {
+		ob.Blocked = orchestrator.BlockedTrust
+	}
 	// The screen is worth its space in two cases: there is no transcript to
 	// read, or the agent is waiting and said nothing — which is what a
 	// permission prompt or a picker looks like from here.
-	if !agent.Tailable(kind) || (ob.Waiting && len(ob.Turns) == 0) {
+	if !agent.Tailable(kind) || (ob.Waiting && len(ob.Turns) == 0) || ob.Blocked == orchestrator.BlockedTrust {
 		ob.Screen = sess.Screen(40)
 	}
 	return ob, nil
