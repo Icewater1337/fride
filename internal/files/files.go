@@ -114,10 +114,11 @@ type FileContent struct {
 	Withheld bool   `json:"withheld,omitempty"`
 }
 
-// secretish matches the local config files repositories keep secrets in:
+// Secretish reports a path whose content the API must not serve: the local
+// config files repositories keep secrets in:
 // .env and .env.properties hold API keys and OIDC client secrets, and .npmrc
 // carries the registry token.
-func secretish(rel string) bool {
+func Secretish(rel string) bool {
 	base := strings.ToLower(filepath.Base(rel))
 	switch {
 	case base == ".npmrc", base == ".netrc", base == ".pypirc":
@@ -150,7 +151,7 @@ func Read(root, rel string) (*FileContent, error) {
 	if fi.IsDir() {
 		return nil, fmt.Errorf("%s is a directory", rel)
 	}
-	if secretish(rel) {
+	if Secretish(rel) {
 		return &FileContent{Path: rel, Size: fi.Size(), Withheld: true}, nil
 	}
 

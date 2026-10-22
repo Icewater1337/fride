@@ -29,7 +29,7 @@ better reader of an *agent's* diff, because it also holds the session that
 produced it. The third and fourth rows are the reason to build this inside
 FrIDE rather than point a separate tool at the worktrees.
 
-There is already a **Review** button in the task header. It starts an agent
+There was already a **Review** button in the task header. It starts an agent
 that reviews the task's merge requests (`internal/review/skill.md`). That stays,
 renamed **Agent review**. It is a reviewer working *for* you. The Review tab is
 where *you* read.
@@ -88,6 +88,8 @@ Done differently, because of weaknesses found in its code:
 
 ## MVP
 
+![The Review tab: file tree, Review focus, Evidence, and the diff](review/overview.jpg)
+
 A **Review** tab sits first in the task's tab bar, next to the agent and shell
 tabs. Its badge counts the files not yet viewed.
 
@@ -142,14 +144,19 @@ tabs. Its badge counts the files not yet viewed.
    output, and whether it ran *after the last edit*. A green run from before
    the last edit proves nothing about the code as it is now. Also listed: the
    test files the change adds or touches.
-5. **Session links on hunks**: each hunk with added lines is matched against
-   the agent's Edit/MultiEdit/Write calls. The hunk band then shows which
-   session wrote it, when, the agent's words just before the edit (its stated
-   intent), and the user prompt it was working on. Subagents' edits count.
+5. **Session links on hunks**: each distinctive added line is credited to the
+   latest Edit/MultiEdit/Write call of the agent whose new text contains it.
+   The band over a hunk names the edits that wrote it (often more than one),
+   when, the agent's words just before each edit (its stated intent), and the
+   prompt it was working on. It also counts the lines no edit accounts for.
+   Subagents' edits count.
+   ![A hunk written by two edits, the agent's and a subagent's](review/hunk-links.jpg)
 6. **Noise folding**: whitespace-only hunks and generated, vendored or lock
    files (by name, and by `linguist-generated`/`linguist-vendored` in
    `.gitattributes`) are folded, never hidden, and each says why.
-7. **Keys**: `j`/`k` next/previous file, `v` toggles viewed, `n` jumps to the
+7. **Credentials stay out**: a file the file browser withholds (`.env*`,
+   keys, `.npmrc`) shows its counts but not its lines.
+8. **Keys**: `j`/`k` next/previous file, `v` toggles viewed, `n` jumps to the
    next unviewed file, `r` refreshes.
 
 ### Data model
@@ -168,10 +175,11 @@ Changes  { repos: [RepoChanges], focus: [Focus], evidence: Evidence, traced: boo
 RepoChanges { repo, base, mergeBase, head, branch, files: [File], err }
 File     { path, oldPath, status (A|M|D|R|T), added, deleted, binary, hash,
            noise ("" | generated | vendored | lockfile), noiseWhy,
-           viewed ("" | viewed | changed), hunks: [Hunk], truncated }
+           viewed ("" | viewed | changed), hunks: [Hunk], truncated, withheld }
 Hunk     { id (sha1 of path+content), header, oldStart, oldLines, newStart, newLines,
-           lines: ["+…", "-…", " …"], mechanical ("" | whitespace), trace: Trace|null }
-Trace    { session, time, tool, intent, prompt, sidechain }
+           lines: ["+…", "-…", " …"], mechanical ("" | whitespace),
+           traces: [Trace], unattributed }
+Trace    { session, time, tool, intent, prompt, sidechain, lines }
 Focus    { severity (high|medium|low), title, reason, repo, path, hunk }
 Evidence { commands: [Command], tests: [repo/path], lastEdit }
 Command  { session, time, command, kind (test|build|lint|typecheck),
@@ -191,13 +199,19 @@ Transcript parsing is per agent, so it lives in `internal/agent`
 supported, for the reason `agent.Tailable` gives. For other agents the tab
 still shows the diff, focus and viewed state, and says that session links are
 unavailable. The diff, focus and viewed state live in
-`internal/review/changes.go`, beside the reviewer skill.
+`internal/review` (`changes.go`, `focus.go`, `link.go`, `viewed.go`,
+`build.go`), beside the reviewer skill, and the tab is `web/review.js`.
+
+The page is never redrawn under the reader. A poll every 20 seconds keeps the
+tab's count current. When the change moved on, the review offers a refresh
+("2 files changed since") instead of shifting the diff mid-read.
 
 ### Limits of the MVP
 
-- **Session links are a text match**, not recorded provenance. An edit that a
-  later edit rewrote, or one made through a shell (`sed`, a generator), is not
-  linked. A hunk only claims an edit that contains its lines.
+- **Session links are a text match**, not recorded provenance. A line written
+  through a shell (`sed`, a generator) or by hand is not linked; it is counted
+  as "from no edit". A generic line the agent wrote in two places of one file
+  can be credited to the wrong one of them.
 - **Big diffs are capped**: 3,000 lines per file and 40,000 in total. The cap
   is stated in the UI, and the file can still be opened in full.
 - Evidence is what the agent *ran*. FrIDE does not re-run anything yet.

@@ -51,13 +51,15 @@ internal/orchestrator    the supervising agent above the task agents, and its in
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)
 internal/journal         decision log, rationale document, ledger, idea pages
-internal/review          the reviewer of a task's merge requests: skill and prompt
+internal/review          the Review tab (changes vs merge-base, viewed marks, focus,
+                         evidence, hunk links) and the merge-request reviewer skill
 internal/server          HTTP + WebSocket
-web/                     the UI, no build step (xterm.js vendored)
+web/                     the UI, no build step (xterm.js vendored); review.js is the Review tab
 docs/CONFIG.md           config.json reference
 docs/FLEET.md            fleet mode
 docs/INBOX.md            messages from outside: `fride in`, /api/inbox
 docs/COMPANION.md        companion mode: pairing, /api/companion, webhook, export/import
+docs/REVIEW.md           the Review tab: design, MVP scope, data model, later phases
 ```
 
 Conventions:
