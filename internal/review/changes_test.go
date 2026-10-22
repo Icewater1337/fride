@@ -82,6 +82,7 @@ func TestDiffCoversCommittedUncommittedAndUntracked(t *testing.T) {
 	write(t, dir, "go.sum", "a v1 h1:x\nb v2 h1:y\n")
 	write(t, dir, "new file.go", "package api\n\nfunc New() {}\n")
 	write(t, dir, "logo.bin", "\x00\x01\x02")
+	write(t, dir, ".env", "API_KEY=s3cret\n")
 
 	rc := Diff(dir, "api", "main", newBudget())
 	if rc.Err != "" {
@@ -93,7 +94,7 @@ func TestDiffCoversCommittedUncommittedAndUntracked(t *testing.T) {
 	}
 
 	want := map[string]string{"server.go": "M", "old.go": "D", "renamed.go": "R", "fmt.go": "M",
-		"go.sum": "M", "new file.go": "A", "logo.bin": "A"}
+		"go.sum": "M", "new file.go": "A", "logo.bin": "A", ".env": "A"}
 	for p, st := range want {
 		f, ok := files[p]
 		if !ok {
@@ -124,6 +125,9 @@ func TestDiffCoversCommittedUncommittedAndUntracked(t *testing.T) {
 	}
 	if f := files["logo.bin"]; !f.Binary {
 		t.Errorf("binary untracked file not flagged: %+v", f)
+	}
+	if f := files[".env"]; !f.Withheld || len(f.Hunks) != 0 || f.Added != 1 {
+		t.Errorf("a credentials file is served: %+v", f)
 	}
 	if f := files["go.sum"]; f.Noise != "lockfile" || f.NoiseWhy == "" {
 		t.Errorf("go.sum not folded as a lockfile: %+v", f)
@@ -241,10 +245,12 @@ func TestViewedExpiresWhenTheFileChanges(t *testing.T) {
 	}
 }
 
-func TestLinkHunksAttributesToTheEditThatWroteThem(t *testing.T) {
+func TestLinkHunksCreditsEachLineToTheEditThatWroteIt(t *testing.T) {
 	dir := "/ws/api"
 	files := []File{{Path: "server.go", Hunks: []Hunk{
-		{ID: "h1", Lines: []string{" func Serve() {", "+\tif err := ready(ctx); err != nil {", "+\t\treturn fmt.Errorf(\"not ready: %w\", err)", "+\t}", " }"}},
+		{ID: "h1", Lines: []string{" func Serve() {", "+\tif err := ready(ctx); err != nil {",
+			"+\t\treturn fmt.Errorf(\"not ready: %w\", err)", "+\t}",
+			"+\tw.Header().Set(\"Cache-Control\", \"no-store\")", "+\tlistenAndServeByHand(addr)", " }"}},
 		{ID: "h2", Lines: []string{"-\tlegacy()", "+\tmodernCallSite(withOptions)"}},
 		{ID: "h3", Lines: []string{"+}", "+"}}, // nothing distinctive: never claimed
 	}}}
@@ -254,18 +260,29 @@ func TestLinkHunksAttributesToTheEditThatWroteThem(t *testing.T) {
 			Text: "\tif err := ready(ctx); err != nil {\n\t\treturn err\n\t}"},
 		{Session: "s1", Time: t0.Add(time.Minute), Tool: "Edit", File: "/ws/api/server.go", Intent: "wrap the error",
 			Text: "\tif err := ready(ctx); err != nil {\n\t\treturn fmt.Errorf(\"not ready: %w\", err)\n\t}"},
+		{Session: "s1", Time: t0.Add(2 * time.Minute), Tool: "Edit", File: "/ws/api/server.go", Intent: "no caching",
+			Sidechain: true, Text: "\tw.Header().Set(\"Cache-Control\", \"no-store\")"},
 		{Session: "s2", Time: t0, Tool: "Edit", File: "/ws/web/server.go", Text: "\tmodernCallSite(withOptions)"},
 	}
 	linkHunks(dir, files, edits)
 	h := files[0].Hunks
-	if h[0].Trace == nil || h[0].Trace.Intent != "wrap the error" || h[0].Trace.Edits != 2 {
-		t.Errorf("hunk 1 should go to the edit that left it as it is, with both edits counted: %+v", h[0].Trace)
+	if len(h[0].Traces) != 2 {
+		t.Fatalf("hunk 1 was written by two edits; traces: %+v", h[0].Traces)
 	}
-	if h[1].Trace != nil {
-		t.Errorf("an edit to the same name in another repo claimed a hunk: %+v", h[1].Trace)
+	if tr := h[0].Traces[0]; tr.Intent != "wrap the error" || tr.Lines != 2 {
+		t.Errorf("the lines both edits wrote go to the later one, which left them as they are: %+v", tr)
 	}
-	if h[2].Trace != nil {
-		t.Errorf("a hunk of braces was attributed: %+v", h[2].Trace)
+	if tr := h[0].Traces[1]; tr.Intent != "no caching" || tr.Lines != 1 || !tr.Sidechain {
+		t.Errorf("the subagent's line: %+v", tr)
+	}
+	if h[0].Unattributed != 1 {
+		t.Errorf("one line came from no edit; unattributed = %d", h[0].Unattributed)
+	}
+	if h[1].Traces != nil {
+		t.Errorf("an edit to the same name in another repo claimed a hunk: %+v", h[1].Traces)
+	}
+	if h[2].Traces != nil {
+		t.Errorf("a hunk of braces was attributed: %+v", h[2].Traces)
 	}
 }
 

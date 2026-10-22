@@ -2,13 +2,14 @@ package review
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
 )
 
-// Trace is the agent edit a hunk is attributed to.
+// Trace is one agent edit that wrote some of a hunk's lines.
 type Trace struct {
 	Session   string    `json:"session"`
 	Time      time.Time `json:"time"`
@@ -16,9 +17,8 @@ type Trace struct {
 	Intent    string    `json:"intent,omitempty"`
 	Prompt    string    `json:"prompt,omitempty"`
 	Sidechain bool      `json:"sidechain,omitempty"`
-	// Edits counts every agent edit that wrote some of the hunk's lines. More
-	// than one means the agent came back to it.
-	Edits int `json:"edits"`
+	// Lines counts the hunk's distinctive added lines credited to this edit.
+	Lines int `json:"lines"`
 }
 
 // significant drops lines too generic to tell one edit from another: a lone
@@ -33,16 +33,17 @@ func significant(s string) bool {
 	})
 }
 
-// linkHunks attributes each hunk with added lines to the agent edit that
-// wrote most of them.
+// linkHunks credits each hunk's added lines to the agent edits that wrote them.
 //
-// This is a text match after the fact, not recorded provenance. An edit
-// claims a hunk only if at least half of the hunk's distinctive added lines
-// appear verbatim (whitespace trimmed) in the edit's new text. Among edits
-// that qualify, the one with the most matching lines wins, and the later one
-// on a tie, because it is the edit that left the text as it is now. A line
-// the agent wrote through a shell command (sed, a generator) matches nothing,
-// so its hunk stays unattributed rather than being credited to a guess.
+// This is a text match after the fact, not recorded provenance. Each
+// distinctive added line (whitespace trimmed) goes to the latest edit of the
+// same file whose new text contains it: that is the edit that left the line as
+// it is now. A hunk then lists every edit that got at least one of its lines,
+// most lines first, and how many of its lines no edit accounts for. One hunk
+// is often the work of several edits (a change, then a fix of it, or a
+// subagent's addition next to it), so crediting only one would misreport it.
+// A line written through a shell command (sed, a generator) matches nothing
+// and stays unaccounted, rather than being credited to a guess.
 func linkHunks(dir string, files []File, edits []agent.Edit) {
 	if len(edits) == 0 {
 		return
@@ -76,38 +77,41 @@ func linkHunks(dir string, files []File, edits []agent.Edit) {
 		}
 		for hi := range f.Hunks {
 			h := &f.Hunks[hi]
-			var want []string
+			credit := map[int]int{}
+			wanted := 0
 			for _, l := range h.Lines {
-				if strings.HasPrefix(l, "+") && significant(l[1:]) {
-					want = append(want, strings.TrimSpace(l[1:]))
-				}
-			}
-			if len(want) == 0 {
-				continue
-			}
-			best, bestN, touching := -1, 0, 0
-			for _, ci := range cands {
-				set := lineSet(ci)
-				n := 0
-				for _, w := range want {
-					if set[w] {
-						n++
-					}
-				}
-				if n == 0 {
+				if !strings.HasPrefix(l, "+") || !significant(l[1:]) {
 					continue
 				}
-				touching++
-				if n*2 >= len(want) && n >= bestN {
-					best, bestN = ci, n
+				wanted++
+				w := strings.TrimSpace(l[1:])
+				best := -1
+				for _, ci := range cands {
+					if lineSet(ci)[w] && (best < 0 || !edits[ci].Time.Before(edits[best].Time)) {
+						best = ci
+					}
+				}
+				if best >= 0 {
+					credit[best]++
 				}
 			}
-			if best < 0 {
-				continue
+			got := 0
+			for ei, n := range credit {
+				e := edits[ei]
+				h.Traces = append(h.Traces, Trace{Session: e.Session, Time: e.Time, Tool: e.Tool,
+					Intent: e.Intent, Prompt: e.Prompt, Sidechain: e.Sidechain, Lines: n})
+				got += n
 			}
-			e := edits[best]
-			h.Trace = &Trace{Session: e.Session, Time: e.Time, Tool: e.Tool, Intent: e.Intent,
-				Prompt: e.Prompt, Sidechain: e.Sidechain, Edits: touching}
+			sort.Slice(h.Traces, func(i, j int) bool {
+				a, b := h.Traces[i], h.Traces[j]
+				if a.Lines != b.Lines {
+					return a.Lines > b.Lines
+				}
+				return a.Time.Before(b.Time)
+			})
+			if len(h.Traces) > 0 {
+				h.Unattributed = wanted - got
+			}
 		}
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Icewater1337/fride/internal/files"
 )
 
 // The diff of one task is read in full on every refresh of the Review tab, and
@@ -47,6 +49,9 @@ type File struct {
 	NoiseWhy  string `json:"noiseWhy,omitempty"`
 	Hunks     []Hunk `json:"hunks"`
 	Truncated bool   `json:"truncated,omitempty"`
+	// Withheld marks a file that holds credentials (.env, keys): its lines are
+	// not served, for the reason files.Secretish gives.
+	Withheld bool `json:"withheld,omitempty"`
 	// Viewed is filled in from the reviewer's marks: "" (not yet), "viewed",
 	// or "changed" (viewed once, changed since).
 	Viewed string `json:"viewed,omitempty"`
@@ -69,7 +74,11 @@ type Hunk struct {
 	// Mechanical marks a hunk that changes nothing a reader needs to check:
 	// "whitespace" when every change is whitespace only.
 	Mechanical string `json:"mechanical,omitempty"`
-	Trace      *Trace `json:"trace,omitempty"`
+	// Traces are the agent edits that wrote the hunk's added lines, most
+	// lines first; see linkHunks. Unattributed counts the distinctive added
+	// lines none of them accounts for, and is only set when Traces is not empty.
+	Traces       []Trace `json:"traces,omitempty"`
+	Unattributed int     `json:"unattributed,omitempty"`
 }
 
 // RepoChanges is everything one repository of the task changed since its base.
@@ -139,6 +148,7 @@ func Diff(dir, repo, base string, budget *lineBudget) RepoChanges {
 		f := File{Path: e.path, OldPath: e.oldPath, Status: e.status}
 		parseSection(&f, sections[i], budget)
 		f.Hash = hashOf(sections[i])
+		withhold(&f)
 		classifyNoise(&f, attrs[f.Path])
 		rc.Files = append(rc.Files, f)
 	}
@@ -156,6 +166,7 @@ func Diff(dir, repo, base string, budget *lineBudget) RepoChanges {
 		attrs := noiseAttrs(dir, news)
 		for _, e := range news {
 			f := untrackedFile(dir, e.path, budget)
+			withhold(&f)
 			classifyNoise(&f, attrs[f.Path])
 			rc.Files = append(rc.Files, f)
 		}
@@ -164,6 +175,18 @@ func Diff(dir, repo, base string, budget *lineBudget) RepoChanges {
 }
 
 type nameStatus struct{ status, path, oldPath string }
+
+// withhold drops the lines of a file that holds credentials, keeping its
+// counts. The API is unauthenticated on loopback, and a diff of a new .env is
+// the whole file: the file browser refuses to serve it, so the review must
+// not serve it either.
+func withhold(f *File) {
+	if !files.Secretish(f.Path) {
+		return
+	}
+	f.Withheld = true
+	f.Hunks = []Hunk{}
+}
 
 // parseNameStatus reads `git diff --name-status -z`: a status field, then one
 // path, or two for a rename or copy (old, then new). R and C carry a score
