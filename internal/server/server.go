@@ -703,6 +703,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = stack.FreeK(s.cfg, slug)
+		review.RemoveViewed(s.cfg, slug)
 		if err := s.st.Delete(slug); err != nil {
 			writeErr(w, 500, err)
 			return
@@ -1022,6 +1023,30 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 201, sess)
+
+	case action == "changes" && r.Method == http.MethodGet:
+		writeJSON(w, 200, s.changes(t))
+
+	case action == "changes/viewed" && r.Method == http.MethodPut:
+		var req struct {
+			Repo   string `json:"repo"`
+			Path   string `json:"path"`
+			Hash   string `json:"hash"`
+			Viewed bool   `json:"viewed"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		if !hasRepo(t, req.Repo) || req.Path == "" || (req.Viewed && req.Hash == "") {
+			writeErr(w, 400, fmt.Errorf("name a repo of this task, a path and, to mark it viewed, the hash you saw"))
+			return
+		}
+		if err := review.SetViewed(s.cfg, slug, req.Repo, req.Path, req.Hash, req.Viewed); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"repo": req.Repo, "path": req.Path, "viewed": req.Viewed})
 
 	case action == "usage" && r.Method == http.MethodGet:
 		u, err := usage.ForWorkspace(filepath.Join(s.cfg.Home, ".claude"), s.cfg.WorkspaceDir(slug))
