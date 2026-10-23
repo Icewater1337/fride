@@ -103,3 +103,28 @@ func TestTheLookSaysAnAPIErrorIsHandled(t *testing.T) {
 		t.Fatalf("look = %q", got)
 	}
 }
+
+// An answer to a multiple-choice question goes through to the host, which
+// closes the dialog and types it; a permission dialog is still refused.
+func TestAnAnswerReachesAQuestionButNotAConfirmation(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	send := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "option 2"}}}
+	o.mu.Lock()
+	o.mem.tasks["t1"] = taskState{blocked: agent.QuestionTool}
+	o.mu.Unlock()
+	o.apply(send, user)
+	if _, sent, _ := h.counts(); sent != 1 {
+		t.Fatalf("the answer to a question was refused: %q", lastText(o))
+	}
+	o.mu.Lock()
+	o.mem.tasks["t1"] = taskState{blocked: "Bash"}
+	o.mu.Unlock()
+	o.apply(send, user)
+	if _, sent, _ := h.counts(); sent != 1 {
+		t.Fatal("typed at a permission dialog")
+	}
+	if got := renderObservation(Observation{Running: true, Waiting: true, Blocked: agent.QuestionTool}); !strings.Contains(got, "MULTIPLE-CHOICE") {
+		t.Fatalf("look = %q", got)
+	}
+}

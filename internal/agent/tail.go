@@ -330,6 +330,13 @@ func flatten(kind string, raw json.RawMessage) (Turn, bool) {
 	return t, true
 }
 
+// QuestionTool is Claude Code's multiple-choice question. Unlike a permission
+// dialog it asks for an answer, not an approval, and Esc closes it ("User
+// declined to answer questions") and leaves the agent at its prompt, where the
+// answer can be typed as a message. Typed straight at the dialog, text is lost
+// and its Enter picks whichever option is highlighted — the first.
+const QuestionTool = "AskUserQuestion"
+
 // Failure is a Claude Code turn that ended on an API error instead of an
 // answer: the CLI writes the error as a synthetic assistant message and goes
 // back to its prompt, where it waits for someone to say "continue". Nothing

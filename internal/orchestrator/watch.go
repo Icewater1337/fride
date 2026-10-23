@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/agent"
 )
 
 // run is the monitor loop. It ticks whether or not orchestrate mode is on,
@@ -293,6 +295,13 @@ func renderObservation(ob Observation) string {
 			"Tell the user to answer it in the task's tab, and that trusting FrIDE's workspace "+
 			"folder once (run `claude` in it and choose \"Yes, I trust this folder\") spares "+
 			"the tasks after this one the question.\n", round(ob.Idle)))
+	case ob.Blocked == agent.QuestionTool:
+		b.WriteString(fmt.Sprintf("The agent is ASKING A MULTIPLE-CHOICE QUESTION and waits for "+
+			"the answer (quiet for %s); its options are in its last turn or on its screen. "+
+			"send_to_agent answers it: FrIDE closes the dialog and types your text as the answer, "+
+			"so say the chosen option by its label, with anything else that was said about it. "+
+			"Pass on the user's answer; answer it yourself only where you would decide it anyway.\n",
+			round(ob.Idle)))
 	case ob.Blocked != "":
 		b.WriteString(fmt.Sprintf("The agent has STOPPED ON A CONFIRMATION: it asked to "+
 			"use %s and is showing a permission dialog (quiet for %s). Nothing can be "+

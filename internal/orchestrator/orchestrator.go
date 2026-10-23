@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/agent"
 )
 
 // The two modes. Chat is a conversation: the orchestrator only ever acts when
@@ -726,7 +728,11 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 		// a confirmation is not showing one. The keystrokes would move a
 		// selection and the Enter would confirm it, which is a decision nobody
 		// took. Answering it is a job for the task's own tab.
-		if tool := ts.blocked; tool != "" {
+		//
+		// A multiple-choice question is the exception: it asks for an answer,
+		// and the host closes it and types the answer as a message (see
+		// agent.QuestionTool), so an answer to it is passed on.
+		if tool := ts.blocked; tool != "" && tool != agent.QuestionTool {
 			o.mem.awaiting = true
 			o.mu.Unlock()
 			return fmt.Errorf("%s is waiting on a %s confirmation in its terminal, "+
