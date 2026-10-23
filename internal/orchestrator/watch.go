@@ -80,6 +80,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		all = append(all, ob)
 	}
 	o.deliverHeld(all)
+	o.recoverFailed(all)
 	obs := all[:0:0]
 	for _, ob := range all {
 		if contains(shown, ob.Task.Slug) {
@@ -297,6 +298,11 @@ func renderObservation(ob Observation) string {
 			"typed at it — a dialog reads keystrokes as a selection, so send_to_agent is "+
 			"refused here. Only the user can answer it, in the task's own tab. Tell them "+
 			"what is being asked and leave it.\n", ob.Blocked, round(ob.Idle)))
+	case ob.Waiting && ob.Failed != nil:
+		b.WriteString(fmt.Sprintf("The agent's turn ENDED ON AN API ERROR (%s) and it is at its "+
+			"prompt (quiet for %s); its work was cut off, not finished. FrIDE tells it to continue "+
+			"on its own, up to %d times, and tells the user if that runs out. Do not ask the user "+
+			"whether to continue it.\n", clip(ob.Failed.Text, 200), round(ob.Idle), maxRecoveries))
 	case ob.Waiting:
 		b.WriteString(fmt.Sprintf("The agent is WAITING at its prompt (quiet for %s).\n",
 			round(ob.Idle)))

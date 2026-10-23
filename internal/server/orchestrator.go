@@ -316,6 +316,11 @@ func (h orchHost) Observe(slug, cursor string) (orchestrator.Observation, error)
 					tool = "a tool (its transcript could not be read: " + err.Error() + ")"
 				}
 				ob.Blocked = tool
+				if tool == "" {
+					// An error here only costs the automatic "continue"; the
+					// look still reports the agent as waiting.
+					ob.Failed, _ = agent.Failed(kind, h.s.cfg.Home, dir, id, sess.Created)
+				}
 			}
 		}
 	}

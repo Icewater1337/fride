@@ -328,3 +328,45 @@ func TestATitleAloneDoesNotAdoptAnotherWorkspace(t *testing.T) {
 		t.Fatalf("adopted a transcript recorded elsewhere: %+v", got)
 	}
 }
+
+// An API error ends a turn with a synthetic assistant line and leaves the CLI
+// at its prompt. Failed finds it while it is the latest turn, and only then.
+func TestFailedSpotsATurnThatEndedOnAnAPIError(t *testing.T) {
+	home := t.TempDir()
+	apiErr := func(uuid string) map[string]any {
+		l := assistant(uuid, "API Error: The response stopped arriving. The response above may be incomplete.")
+		l["isApiErrorMessage"] = true
+		l["error"] = "server_error"
+		return l
+	}
+	system := map[string]any{"type": "system", "subtype": "turn_duration", "uuid": "s1"}
+	failed := func(session string, since time.Time) *Failure {
+		t.Helper()
+		f, err := Failed(Claude, home, "/ws", session, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	writeTurns(t, home, "/ws", "stopped", []map[string]any{
+		toolUse("a1", "t1", "Bash"), toolResult("u1", "t1"), apiErr("e1"), system,
+	})
+	f := failed("stopped", time.Time{})
+	if f == nil || f.UUID != "e1" || !strings.Contains(f.Text, "stopped arriving") {
+		t.Fatalf("Failed = %+v, want the API error e1", f)
+	}
+
+	writeTurns(t, home, "/ws", "recovered", []map[string]any{
+		apiErr("e1"), {"type": "user", "uuid": "p1", "message": map[string]any{"role": "user", "content": "continue"}},
+		assistant("a2", "picking up again"),
+	})
+	if f := failed("recovered", time.Time{}); f != nil {
+		t.Fatalf("Failed = %+v, want nil: the agent carried on", f)
+	}
+
+	writeTurns(t, home, "/ws", "fine", []map[string]any{assistant("a1", "done")})
+	if f := failed("fine", time.Time{}); f != nil {
+		t.Fatalf("Failed = %+v for a turn that ended normally", f)
+	}
+}

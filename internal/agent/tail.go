@@ -329,3 +329,65 @@ func flatten(kind string, raw json.RawMessage) (Turn, bool) {
 	}
 	return t, true
 }
+
+// Failure is a Claude Code turn that ended on an API error instead of an
+// answer: the CLI writes the error as a synthetic assistant message and goes
+// back to its prompt, where it waits for someone to say "continue". Nothing
+// else will — to everything watching, it looks like an agent that finished.
+type Failure struct {
+	UUID string    `json:"uuid"`
+	Text string    `json:"text"`
+	Time time.Time `json:"time"`
+}
+
+// Failed reports the API error the conversation's latest turn ended on, or
+// nil when it ended any other way. Only errors written since the process now
+// running started count, like Pending: an old one is history, not the state
+// of what is on the screen.
+func Failed(k Kind, home, workspaceDir, sessionID string, since time.Time) (*Failure, error) {
+	if !Tailable(k) || sessionID == "" {
+		return nil, nil
+	}
+	path := transcriptPath(home, workspaceDir, sessionID)
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var last *Failure
+	err = jsonl.Scan(f, func(line []byte) bool {
+		var e struct {
+			Type              string          `json:"type"`
+			UUID              string          `json:"uuid"`
+			IsSidechain       bool            `json:"isSidechain"`
+			IsMeta            bool            `json:"isMeta"`
+			IsAPIErrorMessage bool            `json:"isApiErrorMessage"`
+			Timestamp         time.Time       `json:"timestamp"`
+			Message           json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.IsMeta {
+			return true
+		}
+		if e.Type != "assistant" && e.Type != "user" {
+			return true // system lines (turn durations), attachments, bookkeeping
+		}
+		last = nil
+		if e.Type == "assistant" && e.IsAPIErrorMessage &&
+			(e.Timestamp.IsZero() || !e.Timestamp.Before(since)) {
+			t, _ := flatten(e.Type, e.Message)
+			text := t.Text
+			if text == "" {
+				text = "API Error"
+			}
+			last = &Failure{UUID: e.UUID, Text: text, Time: e.Timestamp}
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return last, nil
+}

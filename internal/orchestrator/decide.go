@@ -64,6 +64,14 @@ type taskState struct {
 	sent       int
 	unanswered int
 	sends      []time.Time
+
+	// Recovery from API errors (recover.go): how many times in a row it has
+	// been told to continue, the error last dealt with, and when it may be
+	// told again; gaveUp once the person has been told FrIDE stopped trying.
+	recoveries int
+	gaveUp     bool
+	failedSeen string
+	recoverAt  time.Time
 }
 
 // glance is what the brain was shown of one task. A round that would show it
@@ -147,6 +155,10 @@ func (m memory) worthATurn(obs []Observation, now time.Time) bool {
 			if !ts.reportedGone {
 				return true
 			}
+		case ob.Waiting && ob.Failed != nil && ob.Blocked == "" && ts.recoveries < maxRecoveries:
+			// Stopped on an API error: recoverFailed gets it going without
+			// a turn, and a turn would only ask the user whether to.
+			continue
 		case ob.Waiting:
 			if ts.shown != nil && *ts.shown == glanceOf(ob, ts) {
 				continue // looked at exactly this already
