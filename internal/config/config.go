@@ -150,6 +150,13 @@ func (c *Config) RunDir(slug string) string {
 func (c *Config) AgentArgv(kind agent.Kind, o agent.Options) []string {
 	if kind == agent.Claude {
 		o.Bin, o.PermissionMode = c.ClaudeBin, c.ClaudePermissionMode
+		// A plugin folder that is gone is left out rather than handed to the
+		// CLI; `fride config check` warns about it.
+		for _, d := range c.Settings.ClaudePluginDirs() {
+			if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+				o.PluginDirs = append(o.PluginDirs, d)
+			}
+		}
 	}
 	return agent.Argv(kind, o)
 }

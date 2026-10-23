@@ -55,6 +55,9 @@ type Options struct {
 	// Prompt is the first message of a new session, which then stays open
 	// for the person to follow and answer. Ignored when ResumeID is set.
 	Prompt string
+	// PluginDirs are Claude Code plugin folders loaded for this session only,
+	// each as --plugin-dir. The other agents ignore them.
+	PluginDirs []string
 }
 
 type spec struct {
@@ -128,6 +131,9 @@ func claudeArgv(o Options) []string {
 	}
 	if o.Effort != "" {
 		argv = append(argv, "--effort", o.Effort)
+	}
+	for _, d := range o.PluginDirs {
+		argv = append(argv, "--plugin-dir", d)
 	}
 	if o.ResumeID != "" {
 		// Resume one specific conversation. --continue would only ever reopen the

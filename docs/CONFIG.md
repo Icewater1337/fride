@@ -384,6 +384,7 @@ with a token it was paired with. See [COMPANION.md](COMPANION.md).
 |---|---|
 | `enabled` | Start `fride serve` in companion mode, as `--under-fridolin` or `FRIDE_UNDER_FRIDOLIN=1` do. Fleet mode then stays off. |
 | `webhookUrl` | Where thread news is POSTed, signed. Loopback only (`127.0.0.1`, `[::1]`, `localhost`); `fride config check` refuses anything else. Default: the URL the companion gave when it paired. |
+| `claudePlugins` | Claude Code plugin folders every Claude Code task agent loads, each passed as `--plugin-dir` (a plugin, or a folder of plugins), new and resumed sessions alike. `~` is expanded; a relative path is relative to FrIDE's home. Nothing is installed into `~/.claude`, and no prompt asks. A folder that is missing is left out and `fride config check` warns. Remove an entry (or the field) to opt out; it applies to agents started after the next reload. See [plugins for task agents](COMPANION.md#plugins-for-task-agents). |
 
 ## requirements
 

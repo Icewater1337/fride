@@ -255,6 +255,26 @@ then dropped and logged; any other answer is not retried. The orchestrator
 never waits for any of it: news is queued (up to 256 events) and FrIDE carries
 on. `inbox.notify` keeps working beside the webhook.
 
+## Plugins for task agents
+
+`companion.claudePlugins` in config.json lists Claude Code plugin folders that
+every Claude Code task agent of this FrIDE loads, as `--plugin-dir`:
+
+```json
+"companion": { "enabled": true, "claudePlugins": ["~/fride-companion/plugins/ponytail"] }
+```
+
+Each folder is a checkout the companion's setup made, pinned to one commit, so
+an upstream change cannot alter what agents run until someone moves the pin.
+The plugin loads for that session only: nothing is installed into
+`~/.claude`, no marketplace is added, the person's own sessions are untouched,
+and no trust or install prompt appears, which a project-level `enabledPlugins`
+would bring. Plugin hooks run as you, like any hook, so only list plugins you
+have read. A missing folder is left out (`fride config check` warns). Remove
+the entry to stop loading it; agents started after the next reload of
+config.json go without it. The orchestrator's own Claude Code process does not
+load them.
+
 ## Moving a task with files
 
 `fride task export <task> <file>` writes the task as one file (a gzip'd tar):
