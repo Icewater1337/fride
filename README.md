@@ -264,3 +264,5 @@ and an end-to-end test that builds the binary and runs a two-service stack
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+Set up by FrIDE on icebase
