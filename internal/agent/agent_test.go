@@ -25,6 +25,9 @@ func TestClaudeArgvUnchanged(t *testing.T) {
 		// be rejected, and asking for both is a caller bug rather than a choice.
 		{"resume wins", Options{PermissionMode: "auto", ResumeID: "abc", SessionID: "u1"},
 			"claude --permission-mode auto --resume abc"},
+		// Plugins load on resume too, or a reopened session would lose them.
+		{"plugins", Options{PermissionMode: "auto", ResumeID: "abc", PluginDirs: []string{"/p/a", "/p/b"}},
+			"claude --permission-mode auto --plugin-dir /p/a --plugin-dir /p/b --resume abc"},
 	}
 	for _, c := range cases {
 		if got := strings.Join(Argv(Claude, c.o), " "); got != c.want {

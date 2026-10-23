@@ -129,6 +129,11 @@ func (s *Settings) Check() []Problem {
 			add(true, "companion.webhookUrl", "%v", err)
 		}
 	}
+	for _, d := range s.ClaudePluginDirs() {
+		if fi, err := os.Stat(d); err != nil || !fi.IsDir() {
+			add(false, "companion.claudePlugins", "%s is not a directory, so task agents start without it", d)
+		}
+	}
 
 	if l := s.Ledger; l != nil {
 		if strings.TrimSpace(l.Remote) == "" {

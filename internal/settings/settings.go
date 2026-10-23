@@ -307,6 +307,30 @@ type Companion struct {
 	// http://localhost:<port>/…. Default: the URL the companion gave when it
 	// paired, if any.
 	WebhookURL string `json:"webhookUrl,omitempty"`
+	// ClaudePlugins are Claude Code plugin folders every Claude Code task
+	// agent loads, each passed as --plugin-dir: a plugin, or a folder of
+	// plugins. A leading ~ is expanded; a relative path is relative to FrIDE's
+	// home. Nothing is installed into ~/.claude. Remove an entry to opt out.
+	ClaudePlugins []string `json:"claudePlugins,omitempty"`
+}
+
+// ClaudePluginDirs is companion.claudePlugins as absolute paths.
+func (s *Settings) ClaudePluginDirs() []string {
+	if s == nil || s.Companion == nil {
+		return nil
+	}
+	var out []string
+	for _, p := range s.Companion.ClaudePlugins {
+		p = ExpandHome(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(filepath.Dir(s.path), p)
+		}
+		out = append(out, filepath.Clean(p))
+	}
+	return out
 }
 
 // CompanionEnabled reports whether config.json turns companion mode on.
