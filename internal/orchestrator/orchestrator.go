@@ -574,7 +574,12 @@ func (o *Orchestrator) apply(r Reply, tr turn) {
 		o.mu.Lock()
 		propose := tr.origin == fromLoop &&
 			(o.st.Autonomy == AutonomyAsk || o.st.Mode != ModeOrchestrate)
-		later := !propose && a.Kind == ActSendToAgent && started[a.Task]
+		// An instruction still held for the task, from an earlier turn, goes
+		// first: typing this one now would overtake it, and the held one would
+		// then land after it, out of order and usually stale. So this one
+		// joins it and both go together once the agent is at its prompt.
+		_, waiting := o.st.Held[a.Task]
+		later := !propose && a.Kind == ActSendToAgent && (started[a.Task] || waiting)
 		switch {
 		case propose:
 			o.add(RoleEvent, a.Task, "proposed: "+describe(a))

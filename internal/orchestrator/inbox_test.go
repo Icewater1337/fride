@@ -321,6 +321,61 @@ func TestHeldInstructionGivesUpOnAnAgentThatNeverStarts(t *testing.T) {
 	}
 }
 
+// A busy agent is not given up on: the instruction waits for its prompt, how
+// long its turn takes notwithstanding. Dropping it after ten minutes lost the
+// instruction of an agent that went on to finish its work.
+func TestHeldInstructionWaitsForABusyAgent(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.st.Held = map[string]held{"t1": {Text: "go", Since: time.Now().Add(-5 * heldTimeout)}}
+	o.mu.Unlock()
+	busy := Observation{Task: TaskInfo{Slug: "t1"}, Running: true}
+	o.deliverHeld([]Observation{busy})
+	o.mu.Lock()
+	_, still := o.st.Held["t1"]
+	o.mu.Unlock()
+	if !still {
+		t.Fatalf("an instruction for a working agent was dropped: %q", lastText(o))
+	}
+	// It exits: the clock starts now, not when the instruction was held.
+	gone := Observation{Task: TaskInfo{Slug: "t1"}}
+	o.deliverHeld([]Observation{gone})
+	o.mu.Lock()
+	h1, still := o.st.Held["t1"]
+	o.mu.Unlock()
+	if !still || h1.Gone.IsZero() {
+		t.Fatalf("an agent that just exited lost its instruction at once: %+v", h1)
+	}
+	// Back at its prompt: delivered.
+	busy.Waiting = true
+	o.deliverHeld([]Observation{busy})
+	if _, sent, _ := h.counts(); sent != 1 {
+		t.Fatalf("sent %v, want the held instruction once the agent is ready", h.sent)
+	}
+}
+
+// A send in a later turn, while an earlier instruction is still held, does not
+// overtake it: it joins it, in order.
+func TestSendWhileAnInstructionIsHeldJoinsIt(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.st.Held = map[string]held{"t1": {Text: "write the design", Since: time.Now()}}
+	o.mu.Unlock()
+	o.apply(Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "then build it"}}},
+		turn{origin: fromInbox})
+	if _, sent, _ := h.counts(); sent != 0 {
+		t.Fatalf("the later instruction overtook the held one: %v", h.sent)
+	}
+	o.deliverHeld([]Observation{{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true}})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.sent) != 1 || h.sent[0] != "t1: write the design Then: then build it" {
+		t.Fatalf("sent %q", h.sent)
+	}
+}
+
 func TestClosingAThreadWithdrawsWhatIsQueued(t *testing.T) {
 	o := newTestOrch(t, newFakeHost())
 	o.mu.Lock()

@@ -45,9 +45,12 @@ const (
 	maxInboxAttempts = 3
 	// keepThreads bounds the stored threads. Only finished ones are dropped.
 	keepThreads = 200
-	// heldTimeout is how long an instruction waits for its agent to reach its
-	// prompt. Past it, something went wrong starting the agent, and saying so
-	// beats typing a stale instruction into whatever is there by then.
+	// heldTimeout is how long an instruction waits for an agent that is not
+	// running at all. Past it, something went wrong starting the agent, and
+	// saying so beats typing a stale instruction into whatever is there by
+	// then. An agent that is running and busy is not timed out: it reaches its
+	// prompt when its turn ends, however long that takes, and dropping the
+	// instruction meanwhile lost work nobody would have known to resend.
 	heldTimeout = 10 * time.Minute
 )
 
@@ -112,6 +115,12 @@ type inboxItem struct {
 type held struct {
 	Text  string    `json:"text"`
 	Since time.Time `json:"since"`
+	// Ran is whether its agent has been seen running since, and Gone when it
+	// was then last seen not running, zero while it runs. The give-up clock
+	// counts from Gone once the agent ran, so one that worked for an hour and
+	// then exited still gets its full heldTimeout to come back.
+	Ran  bool      `json:"ran,omitempty"`
+	Gone time.Time `json:"gone,omitempty"`
 	// Threads are the threads the instruction came from, so what becomes of
 	// it is reported there.
 	Threads []int `json:"threads,omitempty"`
@@ -612,14 +621,9 @@ func (o *Orchestrator) deliverHeld(obs []Observation) {
 		}
 		ready := ob.Running && ob.Waiting && ob.Blocked == ""
 		if !ready {
-			if now.Sub(h.Since) > heldTimeout {
-				o.mu.Lock()
-				delete(o.st.Held, slug)
-				o.addTo(RoleError, slug, fmt.Sprintf("%s's agent did not reach its prompt within %s, "+
-					"so this instruction was not sent: %s", slug, heldTimeout, h.Text), h.Threads...)
-				o.save()
-				o.mu.Unlock()
-			}
+			o.mu.Lock()
+			o.waitHeld(slug, h, ob, now)
+			o.mu.Unlock()
 			continue
 		}
 		err := o.host.Send(slug, h.Text)
@@ -634,6 +638,37 @@ func (o *Orchestrator) deliverHeld(obs []Observation) {
 		o.save()
 		o.mu.Unlock()
 	}
+}
+
+// waitHeld is one look at an instruction whose agent is not ready yet. Only an
+// agent that is not running at all is given up on, and only once it has been
+// gone for heldTimeout: one that is working, or stopped on a dialog, comes back
+// to its prompt, and the instruction is typed then. Called with the lock held.
+func (o *Orchestrator) waitHeld(slug string, h held, ob Observation, now time.Time) {
+	if ob.Running {
+		if !h.Ran || !h.Gone.IsZero() {
+			h.Ran, h.Gone = true, time.Time{}
+			o.st.Held[slug] = h
+			o.save()
+		}
+		return
+	}
+	from := h.Since
+	if h.Ran {
+		if h.Gone.IsZero() {
+			h.Gone = now
+			o.st.Held[slug] = h
+			o.save()
+		}
+		from = h.Gone
+	}
+	if now.Sub(from) <= heldTimeout {
+		return
+	}
+	delete(o.st.Held, slug)
+	o.addTo(RoleError, slug, fmt.Sprintf("%s has had no agent running for %s, so this instruction "+
+		"was not sent: %s", slug, heldTimeout, h.Text), h.Threads...)
+	o.save()
 }
 
 // trimThreads keeps the stored threads bounded, dropping the oldest finished
