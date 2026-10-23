@@ -117,6 +117,11 @@ type Observation struct {
 	// Nothing may be typed at it in that state — see agent.Pending. It is
 	// BlockedTrust while a fresh agent waits at its folder-trust question.
 	Blocked string `json:"blocked,omitempty"`
+	// Failed is the API error the agent's latest turn ended on, nil when it
+	// ended any other way. Only looked for while it is waiting and not
+	// blocked: then it is sitting at its prompt with its work cut off, which
+	// from the outside looks exactly like an agent that has finished.
+	Failed *agent.Failure `json:"failed,omitempty"`
 	// Turns is what the agent has said since the cursor. Empty means it has been
 	// quiet, which is itself worth reporting.
 	Turns []agent.Turn `json:"turns,omitempty"`

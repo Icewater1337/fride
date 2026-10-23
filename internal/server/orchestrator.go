@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/orchestrator"
@@ -240,8 +241,62 @@ func (h orchHost) Send(slug, text string) error {
 		return fmt.Errorf("%s's agent is asking whether to trust its folder, so nothing can be "+
 			"typed at it; %s", slug, h.trustFix())
 	}
+	if h.s.taskAgent(slug) == agent.Claude {
+		if id := sess.Claimed(); id != "" {
+			dir := h.s.cfg.WorkspaceDir(slug)
+			tool, err := agent.Pending(agent.Claude, h.s.cfg.Home, dir, id, sess.Created)
+			switch {
+			case err != nil && sess.Waiting():
+				return fmt.Errorf("%s's agent is stopped and its transcript could not be read (%v), "+
+					"so it could be showing a dialog; nothing was typed", slug, err)
+			case tool == agent.QuestionTool:
+				return h.answerQuestion(slug, sess, dir, id, text)
+			case tool != "" && sess.Waiting():
+				// Checked here, at the moment of typing, and not only from the
+				// last look: a look taken while the screen repainted can miss
+				// the dialog, and the keystrokes would then pick an option.
+				return fmt.Errorf("%s's agent is waiting on a %s confirmation, so nothing can be "+
+					"typed at it; answer it in the task's tab", slug, tool)
+			}
+		}
+	}
 	return sess.SendLine(text)
 }
+
+// answerQuestion delivers text as the answer to the multiple-choice question
+// the agent is showing. Typed at the dialog itself it would be lost and its
+// Enter would pick the highlighted option, whatever the answer said. So the
+// dialog is closed with one Esc — the agent records the question as declined
+// and returns to its prompt — and the answer is typed there as a message,
+// with everything the person said, which an option number could not carry.
+func (h orchHost) answerQuestion(slug string, sess *term.Session, dir, id, text string) error {
+	if err := sess.Write([]byte{0x1b}); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(questionCloseWait)
+	for {
+		tool, err := agent.Pending(agent.Claude, h.s.cfg.Home, dir, id, sess.Created)
+		if err == nil && tool != agent.QuestionTool {
+			break
+		}
+		if time.Now().After(deadline) {
+			// One Esc only: a second one at the prompt opens the rewind menu.
+			return fmt.Errorf("%s's agent is asking a question, and closing it to type the answer "+
+				"did not work; answer it in the task's tab", slug)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// The prompt is drawn after the transcript is written.
+	time.Sleep(questionSettle)
+	return sess.SendLine("Answer to your question: " + text)
+}
+
+// How long answerQuestion waits for the dialog to close, and then for the
+// prompt to be drawn. Variables so that a test does not wait out the real ones.
+var (
+	questionCloseWait = 5 * time.Second
+	questionSettle    = 400 * time.Millisecond
+)
 
 // atTrustDialog reports whether a task's Claude Code agent is stopped at its
 // folder-trust question. The screen alone would keep saying so after someone
@@ -316,6 +371,11 @@ func (h orchHost) Observe(slug, cursor string) (orchestrator.Observation, error)
 					tool = "a tool (its transcript could not be read: " + err.Error() + ")"
 				}
 				ob.Blocked = tool
+				if tool == "" {
+					// An error here only costs the automatic "continue"; the
+					// look still reports the agent as waiting.
+					ob.Failed, _ = agent.Failed(kind, h.s.cfg.Home, dir, id, sess.Created)
+				}
 			}
 		}
 	}

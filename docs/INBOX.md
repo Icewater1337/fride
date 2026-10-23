@@ -97,10 +97,26 @@ back with `fride in reply`.
 - **A failing orchestrator is retried.** If a turn fails (not signed in, no
   network), the message is put back and offered again after the usual
   backoff, three times in all.
-- **First instructions wait for the agent.** A new or resumed agent is still
+- **Instructions wait for the agent.** A new or resumed agent is still
   starting when the orchestrator decides what to tell it. So the instruction
-  is held and typed in once the agent is at its prompt, or reported as not
-  sent if it gets nowhere within ten minutes.
+  is held and typed in once the agent is at its prompt, however long the
+  agent stays busy. Another instruction for the same task meanwhile joins it,
+  in order, instead of overtaking it. Only an agent that is not running at
+  all is given up on, after ten minutes, and the sender is told.
+- **An agent stopped on an API error is told to continue.** Claude Code ends
+  a turn cut off by an API error ("The response stopped arriving") at its
+  prompt, where it would sit idle. The orchestrator types "continue" for it,
+  in any mode, up to three times with a growing pause, and tells the sender
+  once; if it keeps failing, it says so and leaves it to them.
+- **Long work sends progress notes.** When a thread's agent has been working
+  for 15 minutes with no news in the thread, the sender gets a short note:
+  what the agent last said, and how long ago. An agent whose conversation has
+  not moved for 20 minutes is reported as possibly stuck.
+- **Questions are answered as messages.** An answer to Claude Code's
+  multiple-choice question (AskUserQuestion) is not typed at the dialog,
+  whose Enter would pick the highlighted option. The dialog is closed with
+  Esc and the answer typed at the prompt, with everything the sender said.
+  A permission dialog is still answered only in the task's own tab.
 - **A folder Claude Code does not trust stops a new agent.** Claude Code
   asks once per folder whether to trust it, with "No, exit" preselected, so
   typing an instruction there would end the session. The orchestrator types

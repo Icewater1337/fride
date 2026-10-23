@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/agent"
 )
 
 // The two modes. Chat is a conversation: the orchestrator only ever acts when
@@ -574,7 +576,12 @@ func (o *Orchestrator) apply(r Reply, tr turn) {
 		o.mu.Lock()
 		propose := tr.origin == fromLoop &&
 			(o.st.Autonomy == AutonomyAsk || o.st.Mode != ModeOrchestrate)
-		later := !propose && a.Kind == ActSendToAgent && started[a.Task]
+		// An instruction still held for the task, from an earlier turn, goes
+		// first: typing this one now would overtake it, and the held one would
+		// then land after it, out of order and usually stale. So this one
+		// joins it and both go together once the agent is at its prompt.
+		_, waiting := o.st.Held[a.Task]
+		later := !propose && a.Kind == ActSendToAgent && (started[a.Task] || waiting)
 		switch {
 		case propose:
 			o.add(RoleEvent, a.Task, "proposed: "+describe(a))
@@ -721,7 +728,11 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 		// a confirmation is not showing one. The keystrokes would move a
 		// selection and the Enter would confirm it, which is a decision nobody
 		// took. Answering it is a job for the task's own tab.
-		if tool := ts.blocked; tool != "" {
+		//
+		// A multiple-choice question is the exception: it asks for an answer,
+		// and the host closes it and types the answer as a message (see
+		// agent.QuestionTool), so an answer to it is passed on.
+		if tool := ts.blocked; tool != "" && tool != agent.QuestionTool {
 			o.mem.awaiting = true
 			o.mu.Unlock()
 			return fmt.Errorf("%s is waiting on a %s confirmation in its terminal, "+

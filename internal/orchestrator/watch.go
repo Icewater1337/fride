@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/agent"
 )
 
 // run is the monitor loop. It ticks whether or not orchestrate mode is on,
@@ -80,6 +82,8 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		all = append(all, ob)
 	}
 	o.deliverHeld(all)
+	o.recoverFailed(all)
+	o.heartbeat(all)
 	obs := all[:0:0]
 	for _, ob := range all {
 		if contains(shown, ob.Task.Slug) {
@@ -291,12 +295,24 @@ func renderObservation(ob Observation) string {
 			"Tell the user to answer it in the task's tab, and that trusting FrIDE's workspace "+
 			"folder once (run `claude` in it and choose \"Yes, I trust this folder\") spares "+
 			"the tasks after this one the question.\n", round(ob.Idle)))
+	case ob.Blocked == agent.QuestionTool:
+		b.WriteString(fmt.Sprintf("The agent is ASKING A MULTIPLE-CHOICE QUESTION and waits for "+
+			"the answer (quiet for %s); its options are in its last turn or on its screen. "+
+			"send_to_agent answers it: FrIDE closes the dialog and types your text as the answer, "+
+			"so say the chosen option by its label, with anything else that was said about it. "+
+			"Pass on the user's answer; answer it yourself only where you would decide it anyway.\n",
+			round(ob.Idle)))
 	case ob.Blocked != "":
 		b.WriteString(fmt.Sprintf("The agent has STOPPED ON A CONFIRMATION: it asked to "+
 			"use %s and is showing a permission dialog (quiet for %s). Nothing can be "+
 			"typed at it — a dialog reads keystrokes as a selection, so send_to_agent is "+
 			"refused here. Only the user can answer it, in the task's own tab. Tell them "+
 			"what is being asked and leave it.\n", ob.Blocked, round(ob.Idle)))
+	case ob.Waiting && ob.Failed != nil:
+		b.WriteString(fmt.Sprintf("The agent's turn ENDED ON AN API ERROR (%s) and it is at its "+
+			"prompt (quiet for %s); its work was cut off, not finished. FrIDE tells it to continue "+
+			"on its own, up to %d times, and tells the user if that runs out. Do not ask the user "+
+			"whether to continue it.\n", clip(ob.Failed.Text, 200), round(ob.Idle), maxRecoveries))
 	case ob.Waiting:
 		b.WriteString(fmt.Sprintf("The agent is WAITING at its prompt (quiet for %s).\n",
 			round(ob.Idle)))
