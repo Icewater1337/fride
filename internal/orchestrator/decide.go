@@ -70,6 +70,11 @@ type taskState struct {
 	// told again; gaveUp once the person has been told FrIDE stopped trying.
 	recoveries int
 	gaveUp     bool
+
+	// For progress notes (heartbeat.go): when its agent last wrote a turn,
+	// and the text of the latest one that said something.
+	lastActive time.Time
+	lastWords  string
 	failedSeen string
 	recoverAt  time.Time
 }

@@ -81,6 +81,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	}
 	o.deliverHeld(all)
 	o.recoverFailed(all)
+	o.heartbeat(all)
 	obs := all[:0:0]
 	for _, ob := range all {
 		if contains(shown, ob.Task.Slug) {
