@@ -30,6 +30,7 @@ Layout:
 main.go                  CLI; every UI action is also a subcommand
 orch_cli.go, fleet_cli.go `fride orch …` / `fride fleet`, clients of the running server
 in_cli.go                `fride in …`: the inbox, a client of the running server
+update_cli.go            `fride update`: install the latest GitHub release
 companion_cli.go         `serve` modes, `fride pair-companion`, `fride task export|import`
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories

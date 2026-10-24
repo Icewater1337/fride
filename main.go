@@ -134,6 +134,7 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   in close <id>                         stop following it (its tasks are left alone)
 
   version
+  update                                replace this binary with the latest release
 
 [task] may be omitted when the working directory is inside a task workspace,
 and any unique prefix of a task name works. FRIDE_HOME moves the state folder
@@ -162,6 +163,9 @@ func main() {
 		return
 	case "version", "--version":
 		fmt.Println("fride " + version)
+		return
+	case "update":
+		cmdUpdate()
 		return
 	case "doctor":
 		cmdDoctor(cfg)

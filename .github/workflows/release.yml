@@ -1,0 +1,54 @@
+name: release
+
+# Once a day, if main has moved since the last release: run CI on it, then
+# publish vYYYY.MM.DD with one binary per platform, which `fride update`
+# installs. Run it by hand (Actions → release → Run workflow) to release now.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: tag
+        run: |
+          if [ -n "$(git tag --points-at HEAD)" ]; then echo "main is released already"; exit 0; fi
+          # A second release on the same day (a manual run) gets .2, .3, …
+          tag=v$(date -u +%Y.%m.%d); n=1
+          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null; do n=$((n+1)); tag=v$(date -u +%Y.%m.%d).$n; done
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: check
+    if: needs.check.outputs.tag != ''
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [check, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Without cgo, so one Linux runner builds every platform. `fride update`
+      # looks for exactly these names: fride_<GOOS>_<GOARCH>.
+      - run: |
+          for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath \
+              -ldflags "-s -w -X main.version=$TAG" -o "dist/fride_${t%/*}_${t#*/}" .
+          done
+      - run: gh release create "$TAG" dist/* --target "$GITHUB_SHA" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

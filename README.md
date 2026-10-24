@@ -45,6 +45,9 @@ writes `~/.fride/config.json` and proves that it works. When it is done:
 ./fride serve            # http://127.0.0.1:7777
 ```
 
+To update later, run `fride update`. It installs the latest release; a new
+one is published every day on which `main` changed.
+
 Requirements: Go 1.27+, git, lsof (macOS and Linux), and at least one agent
 CLI. Docker only if your stack uses containers.
 
