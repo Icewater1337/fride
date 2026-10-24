@@ -1,10 +1,6 @@
 package review
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
@@ -15,6 +11,10 @@ import (
 type Mark struct {
 	Hash string    `json:"hash"`
 	At   time.Time `json:"at"`
+	// Hunks are the ids of the hunks on screen when the mark was made. Once
+	// the file changes, they tell the hunks already read from the new ones,
+	// so a second look starts where the change moved.
+	Hunks []string `json:"hunks,omitempty"`
 }
 
 // Viewed is the reviewer's marks for one task, keyed by "<repo>/<path>".
@@ -27,30 +27,19 @@ type Viewed struct {
 	Files map[string]Mark `json:"files"`
 }
 
-// The server is the only writer, so a process-wide lock is enough. The file
-// lives outside the worktrees, like the journal, so marking a file never
-// dirties git status.
-var viewedMu sync.Mutex
+const viewedFile = "viewed.json"
 
-func viewedPath(cfg *config.Config, slug string) string {
-	return filepath.Join(cfg.StateDir, "review", slug, "viewed.json")
-}
-
-// LoadViewed reads a task's marks. A missing or unreadable file is no marks:
-// the worst outcome is reading a file twice.
+// LoadViewed reads a task's marks.
 func LoadViewed(cfg *config.Config, slug string) Viewed {
-	viewedMu.Lock()
-	defer viewedMu.Unlock()
+	stateMu.Lock()
+	defer stateMu.Unlock()
 	return loadViewed(cfg, slug)
 }
 
 func loadViewed(cfg *config.Config, slug string) Viewed {
-	v := Viewed{Files: map[string]Mark{}}
-	b, err := os.ReadFile(viewedPath(cfg, slug))
-	if err != nil {
-		return v
-	}
-	if json.Unmarshal(b, &v) != nil || v.Files == nil {
+	var v Viewed
+	load(cfg, slug, viewedFile, &v)
+	if v.Files == nil {
 		v.Files = map[string]Mark{}
 	}
 	return v
@@ -59,43 +48,17 @@ func loadViewed(cfg *config.Config, slug string) Viewed {
 // SetViewed marks or unmarks one file. Marking records the hash the reviewer
 // was looking at, not the current one: if the file changed between drawing the
 // page and the click, the new version must still come up as unread.
-func SetViewed(cfg *config.Config, slug, repo, path, hash string, viewed bool) error {
-	viewedMu.Lock()
-	defer viewedMu.Unlock()
+func SetViewed(cfg *config.Config, slug, repo, path, hash string, hunks []string, viewed bool) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
 	v := loadViewed(cfg, slug)
 	key := repo + "/" + path
 	if viewed {
-		v.Files[key] = Mark{Hash: hash, At: time.Now()}
+		v.Files[key] = Mark{Hash: hash, At: time.Now(), Hunks: hunks}
 	} else {
 		delete(v.Files, key)
 	}
-	p := viewedPath(cfg, slug)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Written whole and renamed into place, so a crash cannot leave half a file
-	// that then reads as "nothing viewed".
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
-}
-
-// RemoveViewed forgets a deleted task's marks.
-func RemoveViewed(cfg *config.Config, slug string) {
-	// An empty or path-like slug would aim the RemoveAll at review/ itself,
-	// or outside it.
-	if slug == "" || slug != filepath.Base(slug) || slug == "." || slug == ".." {
-		return
-	}
-	viewedMu.Lock()
-	defer viewedMu.Unlock()
-	_ = os.RemoveAll(filepath.Dir(viewedPath(cfg, slug)))
+	return save(cfg, slug, viewedFile, v)
 }
 
 // state reports a file's review state against the marks.
@@ -108,5 +71,21 @@ func (v Viewed) state(repo string, f File) string {
 		return "viewed"
 	default:
 		return "changed"
+	}
+}
+
+// markSeen flags the hunks of a changed file that the reviewer already read
+// in an earlier version: the same content, so the same id.
+func (v Viewed) markSeen(repo string, f *File) {
+	m, ok := v.Files[repo+"/"+f.Path]
+	if !ok || f.Viewed != "changed" {
+		return
+	}
+	seen := map[string]bool{}
+	for _, id := range m.Hunks {
+		seen[id] = true
+	}
+	for i := range f.Hunks {
+		f.Hunks[i].Seen = seen[f.Hunks[i].ID]
 	}
 }

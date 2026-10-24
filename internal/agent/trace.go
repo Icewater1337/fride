@@ -194,7 +194,7 @@ func parseTrace(path string) ([]Edit, []Command, error) {
 					}
 				}
 			case "tool_use":
-				if ed, ok := editOf(b.Name, b.Input); ok {
+				if ed, ok := ParseEdit(b.Name, b.Input); ok {
 					ed.Session, ed.Time, ed.Sidechain = e.SessionID, e.Timestamp, e.IsSidechain
 					ed.Intent, ed.Prompt = v.intent, v.prompt
 					editAt[b.ID] = len(edits)
@@ -230,8 +230,9 @@ func parseTrace(path string) ([]Edit, []Command, error) {
 	return kept, cmds, err
 }
 
-// editOf reads the input of an edit tool. The shapes are Claude Code's.
-func editOf(name string, input json.RawMessage) (Edit, bool) {
+// ParseEdit reads the input of an edit tool. The shapes are Claude Code's: the
+// transcript and the PostToolUse hook carry the same tool input.
+func ParseEdit(name string, input json.RawMessage) (Edit, bool) {
 	var in struct {
 		FilePath     string `json:"file_path"`
 		NotebookPath string `json:"notebook_path"`

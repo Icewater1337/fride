@@ -214,7 +214,7 @@ func TestViewedExpiresWhenTheFileChanges(t *testing.T) {
 	if s := LoadViewed(cfg, "t1").state("api", f); s != "" {
 		t.Fatalf("fresh state %q", s)
 	}
-	if err := SetViewed(cfg, "t1", "api", "a.go", "one", true); err != nil {
+	if err := SetViewed(cfg, "t1", "api", "a.go", "one", nil, true); err != nil {
 		t.Fatal(err)
 	}
 	v := LoadViewed(cfg, "t1")
@@ -228,18 +228,18 @@ func TestViewedExpiresWhenTheFileChanges(t *testing.T) {
 	if s := v.state("api", f); s != "changed" {
 		t.Errorf("a file changed after viewing reads %q, want changed", s)
 	}
-	if err := SetViewed(cfg, "t1", "api", "a.go", "", false); err != nil {
+	if err := SetViewed(cfg, "t1", "api", "a.go", "", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if s := LoadViewed(cfg, "t1").state("api", f); s != "" {
 		t.Errorf("unmarked file reads %q", s)
 	}
-	RemoveViewed(cfg, "t1")
+	RemoveState(cfg, "t1")
 	if _, err := os.Stat(filepath.Join(cfg.StateDir, "review", "t1")); !os.IsNotExist(err) {
 		t.Errorf("marks of a deleted task left behind: %v", err)
 	}
-	RemoveViewed(cfg, "") // must not take review/ with it
-	RemoveViewed(cfg, "../state")
+	RemoveState(cfg, "") // must not take review/ with it
+	RemoveState(cfg, "../state")
 	if _, err := os.Stat(cfg.StateDir); err != nil {
 		t.Errorf("a bad slug removed more than its own folder: %v", err)
 	}

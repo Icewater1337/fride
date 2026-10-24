@@ -45,8 +45,10 @@ type File struct {
 	// Noise says why a file is folded away by default: "generated", "vendored"
 	// or "lockfile". It is never hidden, only folded, and NoiseWhy is shown
 	// so the reviewer can disagree.
-	Noise     string `json:"noise,omitempty"`
-	NoiseWhy  string `json:"noiseWhy,omitempty"`
+	Noise    string `json:"noise,omitempty"`
+	NoiseWhy string `json:"noiseWhy,omitempty"`
+	// Layer is where the file sits in the tour: see Layers.
+	Layer     string `json:"layer"`
 	Hunks     []Hunk `json:"hunks"`
 	Truncated bool   `json:"truncated,omitempty"`
 	// Withheld marks a file that holds credentials (.env, keys): its lines are
@@ -72,8 +74,16 @@ type Hunk struct {
 	// at end of file" marker is dropped; it is not a line of the file.
 	Lines []string `json:"lines"`
 	// Mechanical marks a hunk that changes nothing a reader needs to check:
-	// "whitespace" when every change is whitespace only.
+	// "whitespace" when every change is whitespace only, "moved" when every
+	// changed line is code moved from or to elsewhere in the change.
 	Mechanical string `json:"mechanical,omitempty"`
+	// Moves are the runs of lines that moved; see detectMoves.
+	Moves []Move `json:"moves,omitempty"`
+	// Prov has one mark per line: who wrote each added line. See provenance.
+	Prov string `json:"prov,omitempty"`
+	// Seen marks a hunk of a changed file that the reviewer already read in
+	// the version they marked viewed.
+	Seen bool `json:"seen,omitempty"`
 	// Traces are the agent edits that wrote the hunk's added lines, most
 	// lines first; see linkHunks. Unattributed counts the distinctive added
 	// lines none of them accounts for, and is only set when Traces is not empty.

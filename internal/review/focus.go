@@ -192,7 +192,59 @@ func focus(repos []RepoChanges, dirs map[string]string, tr agent.Trace, ev Evide
 		}
 	}
 
-	sort.SliceStable(out, func(i, j int) bool { return severityRank[out[i].Severity] < severityRank[out[j].Severity] })
+	bySeverity(out)
+	return out
+}
+
+func bySeverity(fs []Focus) {
+	sort.SliceStable(fs, func(i, j int) bool { return severityRank[fs[i].Severity] < severityRank[fs[j].Severity] })
+}
+
+// judged is the focus the checks that judge the change contribute: the AI
+// pass's verified findings and critical groups, and revert checks whose tests
+// pass without the change. Nothing stale or dismissed: it is about another
+// version, or the reviewer already said no.
+func judged(c Changes) []Focus {
+	var out []Focus
+	where := map[string]Focus{}
+	for _, rc := range c.Repos {
+		for _, f := range rc.Files {
+			for _, h := range f.Hunks {
+				where[h.ID] = Focus{Repo: rc.Repo, Path: f.Path, Hunk: h.ID}
+			}
+		}
+	}
+	for _, f := range c.AI.Findings {
+		if f.Dismissed || f.Stale || f.Grade == "gray" {
+			continue
+		}
+		fc := where[f.Hunk]
+		fc.Severity, fc.Kind, fc.Title, fc.Reason = "medium", "ai", f.Title, f.Path+": "+clipLine(f.Detail, 160)
+		if f.Grade == "red" {
+			fc.Severity = "high"
+		}
+		out = append(out, fc)
+	}
+	if !c.AI.Stale {
+		for _, g := range c.AI.Groups {
+			if g.Criticality < 4 || len(g.Hunks) == 0 {
+				continue
+			}
+			fc := where[g.Hunks[0]]
+			fc.Severity, fc.Kind, fc.Title, fc.Reason = "medium", "critical", "Critical: "+g.Title, orDash(g.Why)
+			if g.Criticality == 5 {
+				fc.Severity = "high"
+			}
+			out = append(out, fc)
+		}
+	}
+	for _, rc := range c.Repos {
+		if rv := c.Revert[rc.Repo]; rv.State == "done" && !rv.Caught && !rv.Stale {
+			out = append(out, Focus{Severity: "high", Kind: "revert", Repo: rv.Repo,
+				Title:  "The tests of " + rv.Repo + " pass without the change",
+				Reason: "Run against the merge-base with only the tests changed, they still pass: they do not test what changed."})
+		}
+	}
 	return out
 }
 

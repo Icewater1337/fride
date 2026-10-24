@@ -290,6 +290,7 @@ function showView(name) {
   $('#nav-board').classList.toggle('active', name === 'board' || name === 'task');
   $('#nav-orch').classList.toggle('active', name === 'orch');
   $('#nav-inbox').classList.toggle('active', name === 'inbox');
+  $('#nav-reviews').classList.toggle('active', name === 'reviews');
   $('#nav-instances').classList.toggle('active', name === 'instances');
   $('#nav-settings').classList.toggle('active', name === 'settings');
   $('#nav-computers').classList.toggle('active', name === 'computers');

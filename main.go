@@ -30,6 +30,7 @@ import (
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/doctor"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/scan"
 	"github.com/Icewater1337/fride/internal/server"
 	"github.com/Icewater1337/fride/internal/settings"
@@ -222,6 +223,10 @@ func main() {
 	case "hook":
 		if len(os.Args) > 2 && os.Args[2] == "precompact" {
 			journal.PreCompact(cfg, func(dir string) string { return slugForDir(cfg, dir) })
+			return
+		}
+		if len(os.Args) > 2 && os.Args[2] == "edit" {
+			review.RecordEdit(cfg, func(dir string) string { return slugForDir(cfg, dir) })
 			return
 		}
 		check(fmt.Errorf("unknown hook %q", strings.Join(os.Args[2:], " ")))
@@ -785,6 +790,9 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		if !store.ValidStatus(s) {
 			check(fmt.Errorf("invalid status %q", args[2]))
 		}
+		if s == store.StatusDone {
+			check(review.CheckDone(cfg, t.Slug))
+		}
 		_, err = st.Update(t.Slug, func(t *store.Task) error { t.Status = s; return nil })
 		check(err)
 		if s == store.StatusDone {
@@ -839,6 +847,7 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 			check(fmt.Errorf("workspace kept — %d repo(s) hold what --force does not discard (see above)", kept))
 		}
 		check(stack.FreeK(cfg, t.Slug))
+		review.RemoveState(cfg, t.Slug)
 		check(st.Delete(t.Slug))
 		fmt.Printf("task %s removed\n", t.Slug)
 

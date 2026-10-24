@@ -6,8 +6,9 @@ inside FrIDE. Its job is to make reading an agent's change fast. Its second job
 is to make that reading trustworthy: what to look at first, what proves the
 change works, and why each hunk exists.
 
-Status: the MVP below is implemented (the **Review** tab of a task). Everything
-under "Later phases" is a proposal.
+Status: the MVP, phase 2 and phase 3 are implemented: the **Review** tab of a
+task, and the **Reviews** view across tasks. Where the build differs from the
+first proposal, the phase sections below say how and why.
 
 ## What FrIDE already has, and why review belongs here
 
@@ -48,14 +49,14 @@ unit of work.
 | 1 | Evidence panel: commands run, with output; tests that fail on revert | Willison, Haystack | **MVP**: commands from the transcript. Revert check is phase 2 |
 | 2 | The agent's session linked to the hunks it produced | Entire, Agent Trace | **MVP**: FrIDE's unique advantage |
 | 3 | Review Focus: 3–7 risky spots, with the agent's own notes | Stage, Cursor | **MVP**, deterministic |
-| 4 | Tour ordered by dependency layer | CodeRabbit, Devin | Phase 2 |
-| 5 | AI findings, verified and graded, dismissable, voted on | Claude Code Review, Devin | Phase 2 (feeds the Focus list) |
-| 6 | Risk / merge-confidence score that weighs criticality | Greptile, Meta | Phase 2 (the prototype's two scales) |
-| 7 | Refuse oversized changes, or split them into a verified stack | Graphite, Bugbot | Phase 3 |
-| 8 | Per-line AI/human provenance gutter | Agent Trace | Phase 3 (the MVP's hunk links are its data) |
-| 9 | Review comments that become agent follow-ups; Blocking/Satisfied | Reviewable, Graphite | Phase 2 |
-| 10 | Attention-set inbox across tasks; re-tour since last review | Gerrit, Reviewable | Phase 3 |
-| 11 | Tree-sitter structural diff under the noise folding | difftastic | Phase 3 |
+| 4 | Tour ordered by dependency layer | CodeRabbit, Devin | Phase 2 (done) |
+| 5 | AI findings, verified and graded, dismissable, voted on | Claude Code Review, Devin | Phase 2 (done, feeds the Focus list) |
+| 6 | Risk / merge-confidence score that weighs criticality | Greptile, Meta | Phase 3 (done) |
+| 7 | Refuse oversized changes, or split them into a verified stack | Graphite, Bugbot | Phase 3 (done: warn and split) |
+| 8 | Per-line AI/human provenance gutter | Agent Trace | Phase 3 (done) |
+| 9 | Review comments that become agent follow-ups; Blocking/Satisfied | Reviewable, Graphite | Phase 2 (done) |
+| 10 | Attention-set inbox across tasks; re-tour since last review | Gerrit, Reviewable | Phase 3 (done) |
+| 11 | Tree-sitter structural diff under the noise folding | difftastic | Phase 3 (done as moved-block detection; see below) |
 
 ### What we take from the prototype, and what we do differently
 
@@ -162,36 +163,60 @@ tabs. Its badge counts the files not yet viewed.
 ### Data model
 
 Nothing new goes into the worktrees, so review never dirties `git status`.
+Everything the review keeps lives in one folder per task, which export and
+*Continue on…* carry whole:
 
 ```
-$FRIDE_HOME/review/<slug>/viewed.json
-{ "files": { "<repo>/<path>": { "hash": "<sha1 of the file's diff>", "at": "<time>" } } }
+$FRIDE_HOME/review/<slug>/
+  viewed.json    { "files": { "<repo>/<path>": { "hash", "at", "hunks": [ids seen] } } }
+  threads.json   [Thread]
+  ai.json        AI (the last pass, and the reviewer's marks on its findings)
+  revert.json    { "<repo>": RevertCheck }
+  edits.jsonl    Capture, one line per agent edit, appended by the hook
 ```
 
 Computed per request, not stored:
 
 ```
-Changes  { repos: [RepoChanges], focus: [Focus], evidence: Evidence, traced: bool }
+Changes  { repos: [RepoChanges], focus: [Focus], evidence: Evidence, traced: bool,
+           threads: [Thread], ai: AI, revert: {repo: RevertCheck}, size: Size,
+           risk: Risk, lastReview }
 RepoChanges { repo, base, mergeBase, head, branch, files: [File], err }
 File     { path, oldPath, status (A|M|D|R|T), added, deleted, binary, hash,
-           noise ("" | generated | vendored | lockfile), noiseWhy,
+           noise ("" | generated | vendored | lockfile), noiseWhy, layer,
            viewed ("" | viewed | changed), hunks: [Hunk], truncated, withheld }
 Hunk     { id (sha1 of path+content), header, oldStart, oldLines, newStart, newLines,
-           lines: ["+…", "-…", " …"], mechanical ("" | whitespace),
-           traces: [Trace], unattributed }
+           lines: ["+…", "-…", " …"], mechanical ("" | whitespace | moved),
+           moves: [{line, n, path, at}], prov ("a" | "m" | "h" | " " per line),
+           seen, traces: [Trace], unattributed }
 Trace    { session, time, tool, intent, prompt, sidechain, lines }
 Focus    { severity (high|medium|low), title, reason, repo, path, hunk }
 Evidence { commands: [Command], tests: [repo/path], lastEdit }
 Command  { session, time, command, kind (test|build|lint|typecheck),
            ok, output (tail), afterLastEdit }
+Thread   { id, repo, path, hunk, line, quote, blocking, satisfied, outdated,
+           comments: [{at, text, sent, sendErr}] }
+AI       { state (running|done|failed), started, finished, err, anchors: {repo: {head, hash}},
+           groups: [{title, intent, hunks, significance, criticality, why, check}],
+           findings: [{id, grade (red|yellow|gray), title, detail, repo, path, hunk,
+                       quote, verdict, dismissed, vote, stale}], unverified, stale }
+RevertCheck { repo, state, command, caught, exitCode, output, tests, err, anchor, stale }
+Risk     { score (0-100), level (low|medium|high), reasons }
 ```
 
 API, served under the existing task routes, so it works for fleet computers
 through the node proxy:
 
 ```
-GET /api/tasks/<slug>/changes               the whole review: diffs, focus, evidence
-PUT /api/tasks/<slug>/changes/viewed        {repo, path, hash, viewed: bool}
+GET  /api/tasks/<slug>/changes              the whole review
+PUT  /api/tasks/<slug>/changes/viewed       {repo, path, hash, hunks, viewed}
+POST /api/tasks/<slug>/changes/ai           start an AI pass (202; 409 while one runs)
+PUT  /api/tasks/<slug>/changes/ai/finding   {id, dismissed?, vote?: up|down|""}
+POST /api/tasks/<slug>/changes/threads      {repo, path, hunk, line, quote, text, blocking, send}
+PUT  /api/tasks/<slug>/changes/threads/<id> {text?, blocking?, satisfied?, send?}
+POST /api/tasks/<slug>/changes/revert       {repo}: start a revert check
+POST /api/tasks/<slug>/changes/split        {repo}: write the stack branch
+GET  /api/review/queue                      this computer's open tasks with something to review
 ```
 
 Transcript parsing is per agent, so it lives in `internal/agent`
@@ -214,41 +239,116 @@ tab's count current. When the change moved on, the review offers a refresh
   can be credited to the wrong one of them.
 - **Big diffs are capped**: 3,000 lines per file and 40,000 in total. The cap
   is stated in the UI, and the file can still be opened in full.
-- Evidence is what the agent *ran*. FrIDE does not re-run anything yet.
+- Evidence is what the agent *ran*. The revert check (phase 2) is the one
+  thing FrIDE runs itself, and only when asked.
 
-## Later phases
+## Phase 2: judgement
 
-**Phase 2 (≈ 1–1.5 weeks): judgement.**
-- AI review pass, along the lines of the prototype's two stages. A cheap model groups
-  hunks by intent, using hunk ids it must copy verbatim. A strong model rates
-  each group for significance and criticality (1–5, with a concrete reason)
-  and lists what to check. Findings are verified before they are shown (a
-  second pass must reproduce or cite them), graded red/yellow/gray,
-  dismissable, and voted helpful or not. They are anchored to the per-repo
-  head and diff hash, and shown as stale once either moves. They feed the
-  Focus list.
-- **Tour mode** next to the diff: the same viewed state, read in
-  dependency-layer order (schema → logic → API → consumers → tests).
-- **Comments that become work**: a comment on a hunk can be sent to the
-  task's agent as a follow-up prompt, through the same path the orchestrator
-  uses to type into a session. Threads carry Blocking or Satisfied, and the
-  task cannot reach Done while a Blocking thread is open.
-- **Revert-checked tests**: per repo, a configured test command
-  (`config.json`) is run in a scratch worktree with the non-test changes
-  reverted, to prove the new tests fail without the fix.
-- Viewed state travels with `fride task export` / *Continue on…*.
+**AI review pass** (`ai.go`). *Run AI review* in the tab runs three headless
+Claude Code turns in the workspace, the way the orchestrator thinks: read-only
+tools (Read, Grep, Glob), `--permission-mode dontAsk`, the prompt on stdin, the
+reply validated against a JSON schema by the CLI, and
+`--no-session-persistence`, so a pass never shows up among the conversations
+to resume.
 
-**Phase 3 (≈ 2 weeks): scale.**
-- Risk / merge-confidence score per task, weighted by criticality.
-- A size guard: warn when a change is too large, and offer to split it into a
-  stack of semantic commits, after checking that the stack's final tree is
-  identical to the original.
-- Per-line provenance gutter (AI / human / mixed). This needs edit capture at
-  write time, through a hook, rather than text matching after the fact.
-- An attention inbox across tasks: whose turn it is, and a re-tour of what
-  changed since your last review.
-- Structural diff (tree-sitter) under the noise folding, so a moved function
-  is shown as a move.
+1. *haiku* groups the hunks by intent, copying hunk ids verbatim. A reconciler
+   drops ids it made up, keeps a hunk claimed twice in its first group, and
+   puts the hunks it left out in a last group of their own, so every hunk is in
+   exactly one group.
+2. *opus* rates each group for significance (reading effort, 1–5) and
+   criticality (blast radius, 1–5, with a concrete reason), lists what to
+   check, and lists findings graded red, yellow or gray.
+3. Every finding has to name its hunk and quote one of its lines exactly; one
+   that does not is dropped without asking anyone. The rest go to *sonnet*,
+   which has to reproduce each from the code. Only confirmed findings are kept,
+   with the verifier's reason; the tab says how many were left out.
+
+The pass is anchored to each repo's head and diff hash. Once either moves it is
+marked stale, and a finding whose hunk is gone is marked on its own (hunk ids
+are content, so a finding on an untouched hunk stays valid). Findings can be
+dismissed and voted helpful or not; the marks are kept by finding id across
+runs. Red and yellow findings that are neither stale nor dismissed, and groups
+of criticality 4 or 5, join the Focus list. Neither prompts nor answers are
+logged, only the model and the error.
+
+**Tour** (`tour.go`). Each file gets a layer from its path: schema and data,
+logic, interface (handlers, routes, the API), callers (UI, CLI), tests, then
+docs and build files. *Tour* in the header lists the files in that order across
+repos, under a heading per layer, with the same viewed state; `j`/`k` follow it.
+It is a guess from naming, like the noise rules, not an import graph.
+
+**Comments that become work** (`threads.go`). A click on a line number opens a
+comment. *Comment and send to agent* types it into the task's agent as a
+one-line follow-up, through the orchestrator's `Send`: the same checks for a
+folder-trust question or a permission dialog apply, and a failed send is kept
+on the comment, so it can be sent again. A thread is *blocking* or not; a
+blocking thread that is not *satisfied* keeps the task out of Done on every
+path there: the status buttons, the board, `fride task status` and the
+orchestrator's `set_status`. A thread whose hunk changed stays, marked as on an
+earlier version, and still blocks.
+
+**Revert check** (`revert.go`). Per repo, the command in
+`repos.<name>.test` runs in a scratch worktree at the merge-base, with the
+change's test files copied in (and deleted ones removed). That is the working
+tree with every non-test change reverted. Tests that fail there depend on the
+change; tests that pass there do not test it, which is a high Focus item and
+adds to the risk. The worktree is removed afterwards whatever happened. The
+command has to install what it needs, since a fresh worktree has no
+`node_modules`.
+
+**Review state travels.** The task's review folder goes into `fride task
+export` and *Continue on…*, and lands under the slug the task arrives as.
+
+## Phase 3: scale
+
+**Risk** (`risk.go`). A score from 0 to 100, as a sum of named parts: focus
+items by severity, the highest criticality of a fresh AI pass, the size, revert
+checks that caught nothing, and open blocking threads. The header chip lists the
+parts, largest first, so the score always says what would bring it down.
+
+**Size guard and split** (`split.go`). Past 400 changed lines or 25 files
+(folded noise aside), the tab says so and offers *Split <repo>*. The split
+writes a stack of commits from the merge-base onto a new branch,
+`<branch>-stack`: by the AI pass's groups while it is fresh, by layer
+otherwise, a file going whole to the group that holds most of its hunks, the
+parts ordered schema first. It builds the trees in index files of its own, so
+neither the task's branch, its index nor its working tree is touched. The
+branch is only created once the stack's last tree is identical to the working
+tree as `git add -A` sees it. A change holding a credentials file is refused
+rather than committed, and an existing stack branch is never overwritten.
+Whole files per commit is the known limit: a file whose hunks serve two
+intents lands in one of them.
+
+**Provenance gutter** (`provenance.go`). A PostToolUse hook (`fride hook
+edit`, wired into the workspace's `.claude/settings.json` next to the
+PreCompact one) records every Edit, MultiEdit, Write and NotebookEdit as it
+lands, in `edits.jsonl`. Each added line gets a mark in a thin gutter: *agent*
+when an agent edit wrote it as it stands, *mixed* when an agent wrote a line
+like it that was changed since (same start and end around a small edit), and
+*none* when no agent edit accounts for it, written by hand or by a command.
+The transcripts' edits count too, so workspaces made before the hook still
+get a gutter. The capture is FrIDE's own record: Claude Code prunes its
+transcripts after a while, and the capture travels with export. With nothing
+recorded at all there is no gutter, rather than one that calls every line
+hand-written.
+
+**Re-tour and the Reviews view** (`queue.go`). A viewed mark now keeps the
+ids of the hunks on screen. When the file changes, the hunks already read fold
+as *read before*, so a second look starts where the change moved. The
+**Reviews** view lists every open task with something to review, on this
+computer and on fleet peers through the node proxy, with whose turn it is: the
+agent's while it is still changing the code, yours when files wait or a
+blocking comment came back from the agent. Opening one shows only what is left.
+
+**Moved code** (`moves.go`). The proposal was a tree-sitter structural diff.
+What was built instead finds runs of at least three lines (and 20
+alphanumerics, git's `--color-moved` floor) that one place of a repo lost and
+another gained, whitespace aside. Moved lines are tinted and say where they
+came from or went; a hunk that only moves code folds as a move. A block
+re-indented in place is not a move. Tree-sitter would need a C toolchain and a
+grammar per language in a binary that is otherwise self-contained; line runs
+catch the common case (a function moved to another file) and miss a function
+moved and edited in the middle, which shows as two moved runs around the edit.
 
 ## Effort
 
@@ -259,5 +359,5 @@ tab's count current. When the change moved on, the review offers a refresh
 | Review tab UI | 1–1.5 days |
 | Tests, docs | 0.5 day |
 | **MVP** | **≈ 3.5–4 days** of focused work |
-| Phase 2 | ≈ 1–1.5 weeks |
-| Phase 3 | ≈ 2 weeks |
+| Phase 2 | ≈ 1–1.5 weeks estimated; built |
+| Phase 3 | ≈ 2 weeks estimated; built |

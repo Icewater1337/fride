@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/journal"
 )
 
@@ -18,6 +19,36 @@ type Changes struct {
 	Traced bool `json:"traced"`
 	// Capped is true once the line budget ran out and some files show stats only.
 	Capped bool `json:"capped,omitempty"`
+
+	Threads []Thread               `json:"threads"`
+	AI      AI                     `json:"ai"`
+	Revert  map[string]RevertCheck `json:"revert"`
+	Size    Size                   `json:"size"`
+	Risk    Risk                   `json:"risk"`
+	// LastReview is when the reviewer last marked a file viewed.
+	LastReview time.Time `json:"lastReview,omitzero"`
+}
+
+// Kept is what the review stored for a task, as Build needs it.
+type Kept struct {
+	Viewed   Viewed
+	Threads  []Thread
+	AI       AI
+	Revert   map[string]RevertCheck
+	Captures []Capture
+}
+
+// LoadKept reads everything the review stored for a task.
+func LoadKept(cfg *config.Config, slug string) Kept {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return Kept{
+		Viewed:   loadViewed(cfg, slug),
+		Threads:  loadThreads(cfg, slug),
+		AI:       loadAI(cfg, slug),
+		Revert:   loadRevert(cfg, slug),
+		Captures: loadCaptures(cfg, slug),
+	}
 }
 
 // Evidence is what proves the change works: the checks the agent ran, and the
@@ -51,29 +82,75 @@ type RepoSpec struct {
 	Base string
 }
 
-// Build reads every repository's change, attributes hunks to the agent's
-// edits, and derives the evidence and the focus list.
-func Build(repos []RepoSpec, viewed Viewed, tr agent.Trace, entries []journal.Entry) Changes {
+// Build reads every repository's change, attributes its lines to the agent's
+// edits, and lays what the review kept (marks, threads, the AI pass, revert
+// checks) over it, with the focus list and the risk derived from all of it.
+func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry) Changes {
 	budget := newBudget()
 	out := Changes{Repos: []RepoChanges{}, Traced: tr.Sessions > 0}
 	dirs := map[string]string{}
 	for _, r := range repos {
 		rc := Diff(r.Dir, r.Name, r.Base, budget)
+		detectMoves(rc.Files)
 		linkHunks(r.Dir, rc.Files, tr.Edits)
+		provenance(r.Dir, rc.Files, tr.Edits, kept.Captures)
 		for i := range rc.Files {
-			rc.Files[i].Viewed = viewed.state(r.Name, rc.Files[i])
-			if rc.Files[i].Truncated {
+			f := &rc.Files[i]
+			f.Viewed = kept.Viewed.state(r.Name, *f)
+			kept.Viewed.markSeen(r.Name, f)
+			f.Layer = layerOf(f.Path)
+			if f.Truncated {
 				out.Capped = true
 			}
 		}
 		dirs[r.Name] = r.Dir
 		out.Repos = append(out.Repos, rc)
 	}
+	for _, m := range kept.Viewed.Files {
+		if m.At.After(out.LastReview) {
+			out.LastReview = m.At
+		}
+	}
+	hunks := map[string]bool{}
+	for _, rc := range out.Repos {
+		for _, f := range rc.Files {
+			for _, h := range f.Hunks {
+				hunks[h.ID] = true
+			}
+		}
+	}
+
+	out.Threads = kept.Threads
+	for i := range out.Threads {
+		out.Threads[i].Outdated = out.Threads[i].Hunk != "" && !hunks[out.Threads[i].Hunk]
+	}
+	out.AI = kept.AI
+	out.AI.Marks = nil // folded into the findings below
+	out.AI.Stale = out.AI.State == "done" && !fresh(out.AI.Anchors, out)
+	for i := range out.AI.Findings {
+		f := &out.AI.Findings[i]
+		m := kept.AI.Marks[f.ID]
+		f.Dismissed, f.Vote, f.Stale = m.Dismissed, m.Vote, !hunks[f.Hunk]
+	}
+	out.Revert = map[string]RevertCheck{}
+	for repo, rv := range kept.Revert {
+		for _, rc := range out.Repos {
+			if rc.Repo == repo {
+				rv.Stale = rv.State == "done" && rv.Anchor != (Anchor{Head: rc.Head, Hash: repoHash(rc)})
+				out.Revert[repo] = rv
+			}
+		}
+	}
+
+	out.Size = sizeOf(out.Repos)
 	out.Evidence = evidence(out.Repos, tr)
 	out.Focus = focus(out.Repos, dirs, tr, out.Evidence, entries)
+	out.Focus = append(out.Focus, judged(out)...)
+	bySeverity(out.Focus)
 	if out.Focus == nil {
 		out.Focus = []Focus{}
 	}
+	out.Risk = riskOf(out)
 	return out
 }
 

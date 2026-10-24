@@ -67,6 +67,7 @@
     <button id="nav-board" class="navbtn active" title="Board"><svg class="i"><use href="#i-board"/></svg><span class="lbl">Board</span></button>
     <button id="nav-orch" class="navbtn" title="Orchestrator"><svg class="i"><use href="#i-bot"/></svg><span class="lbl">Orchestrator</span></button>
     <button id="nav-inbox" class="navbtn" title="Inbox"><svg class="i"><use href="#i-inbox"/></svg><span class="lbl">Inbox</span></button>
+    <button id="nav-reviews" class="navbtn" title="Reviews: what is left to review in every task, and whose turn it is"><svg class="i"><use href="#i-diff"/></svg><span class="lbl">Reviews</span></button>
     <button id="nav-computers" class="navbtn hidden" title="Computers"><svg class="i"><use href="#i-monitor"/></svg><span class="lbl">Computers</span></button>
     <button id="nav-instances" class="navbtn" title="Port slots"><svg class="i"><use href="#i-server"/></svg><span class="lbl">Slots</span></button>
     <button id="nav-settings" class="navbtn" title="Settings"><svg class="i"><use href="#i-sliders"/></svg><span class="lbl">Settings</span></button>
@@ -207,6 +208,20 @@
         </div>
         <div id="inbox-error" class="error"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- reviews -->
+  <section id="reviews" class="view">
+    <div class="page">
+      <div class="page-h">
+        <h2>Reviews</h2>
+        <p class="lede">Every open task with something to review, and whose turn it is. A task
+          is yours when files wait to be read or the agent came back on a blocking comment, and
+          the agent&rsquo;s while it is still changing the code. Opening one shows only what is
+          left: new files, and files changed since you viewed them.</p>
+      </div>
+      <div id="reviews-list" class="rq-list"></div>
     </div>
   </section>
 
@@ -422,9 +437,11 @@
             <span id="rv-progress" class="rv-progress"></span>
             <span class="rv-bar"><span id="rv-bar-fill"></span></span>
             <label class="rv-toggle"><input type="checkbox" id="rv-hide-viewed"> Hide viewed</label>
+            <label class="rv-toggle" title="Read the files in dependency order: schema, logic, interface, callers, tests, then the rest"><input type="checkbox" id="rv-tour"> Tour</label>
+            <span id="rv-risk" class="rv-risk hidden"></span>
             <span id="rv-moved" class="rv-moved hidden"></span>
             <span class="spacer"></span>
-            <span class="rv-keys" title="Keyboard: j / k next and previous file, v viewed, n next unviewed, r refresh">j k · v · n · r</span>
+            <span class="rv-keys" title="Keyboard: j / k next and previous file, v viewed, n next unviewed, r refresh. Click a line number to comment.">j k · v · n · r</span>
             <button id="rv-refresh" class="iconbtn xs" title="Read the changes again (r)" aria-label="Refresh"><svg class="i"><use href="#i-refresh"/></svg></button>
           </div>
           <div class="rv-body">
