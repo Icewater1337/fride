@@ -81,7 +81,29 @@ keeps a page about it, written by its agent as the work happens, and
 *Publish idea* sends the page to the team's ideas repository (see `ideas` in
 docs/CONFIG.md).
 
-**Review.** *Review* in a task's header starts a reviewer in a tab of its
+**Review.** The *Review* tab, first in a task's tab bar, shows what the
+task changed in every repository against its base: committed, uncommitted and
+untracked files, in a file tree with a per-file *viewed* mark that comes back
+when the agent changes the file again. Above the diff, *Review focus* lists the
+spots to read first (sensitive areas, skipped tests, deleted files, missing
+tests, the agent's own assumptions), and *Evidence* lists the test, build and
+lint commands the agent ran, with their output and whether they ran after its
+last edit. Each hunk names the agent edit that wrote it, what the agent said it
+was doing, and what it was asked, and a gutter marks each added line as written
+by an agent edit, changed since, or by no agent edit. Moved code is folded as a
+move. *Run AI review* groups the hunks by intent, rates each group for reading
+effort and impact, and lists findings that quote their hunk exactly and that a
+second model confirmed; they can be dismissed and voted on. A click on a line
+number starts a comment, which can go to the task's agent as a follow-up; a
+*blocking* comment keeps the task out of Done until you mark it satisfied. The
+revert check runs a repository's tests (`repos.<name>.test`) against the
+merge-base to see whether they notice the change. *Tour* orders the files from
+schema to tests, a header chip scores the merge risk, and a change past about
+400 lines offers to split itself into a verified stack of commits on a new
+branch. The *Reviews* view lists every task with something to review, and whose
+turn it is. See [docs/REVIEW.md](docs/REVIEW.md).
+
+**Agent review.** *Agent review* in a task's header starts a reviewer in a tab of its
 own, with the agent, model and effort you pick. It finds the merge requests
 (or pull requests) of the task's branches and reviews them against each
 repository's own review rules (`.pr_agent.toml`, `AGENTS.md` and the like) plus
@@ -256,7 +278,7 @@ running as you can drive the API. Do not expose it beyond loopback. In
 companion mode, `/api/companion/*` also needs the companion's bearer token and
 refuses browsers (any `Origin`) and non-loopback callers.
 Secret-bearing local files (`.env*`, `.npmrc`, `*.pem`, `*.key`) are withheld
-from the file browser's API.
+from the file browser's API, and from the Review tab's diff.
 
 ## Development
 

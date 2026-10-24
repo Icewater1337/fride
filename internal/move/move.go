@@ -50,6 +50,7 @@ import (
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/store"
 )
 
@@ -337,6 +338,19 @@ func WriteArchive(w io.Writer, cfg *config.Config, m *Manifest, have map[string]
 			// A lock file is this computer's, and only while someone holds it.
 			if !e.IsDir() && !strings.HasSuffix(e.Name(), ".lock") {
 				if err := addFile(tw, "journal/"+e.Name(), filepath.Join(jdir, e.Name())); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	// The review: viewed marks, comment threads, the AI pass and captured
+	// edits. Hunk ids and file hashes are content, so they still match on the
+	// other computer once the work in progress is restored there.
+	rdir := review.Dir(cfg, m.Task.Slug)
+	if entries, err := os.ReadDir(rdir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && !strings.HasSuffix(e.Name(), ".tmp") {
+				if err := addFile(tw, "review/"+e.Name(), filepath.Join(rdir, e.Name())); err != nil {
 					return err
 				}
 			}
@@ -792,6 +806,14 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 		if err := os.MkdirAll(jdir, 0o755); err == nil {
 			for _, e := range entries {
 				_ = copyFile(filepath.Join(staging, "journal", e.Name()), filepath.Join(jdir, e.Name()))
+			}
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(staging, "review")); err == nil {
+		rdir := review.Dir(cfg, slug)
+		if err := os.MkdirAll(rdir, 0o755); err == nil {
+			for _, e := range entries {
+				_ = copyFile(filepath.Join(staging, "review", e.Name()), filepath.Join(rdir, e.Name()))
 			}
 		}
 	}

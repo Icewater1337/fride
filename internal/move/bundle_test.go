@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/store"
 )
 
@@ -128,11 +129,18 @@ func TestImportAsANewTask(t *testing.T) {
 	root := t.TempDir()
 	c, task := bundleTask(t, root)
 	head := run(t, c.cfg.RepoDir(task.Slug, "app"), "rev-parse", "HEAD")
+	if err := review.SetViewed(c.cfg, task.Slug, "app", "edit.txt", "h1", []string{"k1"}, true); err != nil {
+		t.Fatal(err)
+	}
 	bundle := exportFile(t, c, task)
 
 	m, notes, err := Import(c.cfg, c.st, bytes.NewReader(bundle), "proj-7-copy", noLanding)
 	if err != nil {
 		t.Fatalf("Import --as: %v (%v)", err, notes)
+	}
+	// The review travels: what was read on one computer stays read on the other.
+	if mk := review.LoadViewed(c.cfg, "proj-7-copy").Files["app/edit.txt"]; mk.Hash != "h1" || len(mk.Hunks) != 1 {
+		t.Errorf("viewed marks did not travel: %+v", mk)
 	}
 	if m.Task.Slug != "proj-7-copy" || m.Source != "proj-7" {
 		t.Fatalf("manifest = %+v", m)

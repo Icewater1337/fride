@@ -137,6 +137,7 @@ backend's compose file.
 | `copy` | Git-ignored local files copied from the main checkout into every new worktree, such as `.env` or `config/local.yml`. If you leave it out, the repo's own `.worktreeinclude` is used, which is the file `claude --worktree` reads too. Literal paths only. |
 | `ide` | The JetBrains launcher this repo opens in: `idea`, `pycharm`, `webstorm`, `goland` and so on. Empty means FrIDE detects it from the build files. |
 | `setup` | Steps that prepare a fresh worktree, such as dependency installs or code generation. They run in the background when a task is created. They run again before a service from this repo starts, if a step's `creates` path is missing. |
+| `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. |
 
 A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 

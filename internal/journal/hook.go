@@ -75,9 +75,13 @@ func PreCompact(cfg *config.Config, slugFor func(dir string) string) {
 	_ = json.NewEncoder(os.Stdout).Encode(resp)
 }
 
-// InstallHook writes a workspace-scoped settings file wiring the hook up. It is
+// InstallHook writes a workspace-scoped settings file wiring the hooks up. It is
 // scoped to the workspace rather than the user's global settings on purpose:
 // creating a task should not modify configuration that outlives it.
+//
+// Besides this package's PreCompact hook, the file wires the review's edit
+// capture: a PostToolUse hook that records each agent edit as it lands, which
+// the Review tab's provenance gutter reads (review.RecordEdit).
 func InstallHook(cfg *config.Config, slug, frideBin string) error {
 	dir := filepath.Join(cfg.WorkspaceDir(slug), ".claude")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -93,6 +97,14 @@ func InstallHook(cfg *config.Config, slug, frideBin string) error {
 							"command":       frideBin + " hook precompact",
 							"statusMessage": "Recording rationale before compaction",
 						},
+					},
+				},
+			},
+			"PostToolUse": []any{
+				map[string]any{
+					"matcher": "Edit|MultiEdit|Write|NotebookEdit",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": frideBin + " hook edit"},
 					},
 				},
 			},

@@ -86,6 +86,10 @@ type Repo struct {
 	// Runs in the background when a task is created, and again before a
 	// service from this repo starts if a step's Creates path is missing.
 	Setup []Step `json:"setup,omitempty"`
+	// Test runs this repo's tests from a fresh checkout, installs included
+	// ("npm ci && npm test"). The Review tab's revert check runs it with the
+	// change reverted, to see whether the tests notice.
+	Test string `json:"test,omitempty"`
 }
 
 // Step is one setup command.

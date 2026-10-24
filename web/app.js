@@ -290,6 +290,7 @@ function showView(name) {
   $('#nav-board').classList.toggle('active', name === 'board' || name === 'task');
   $('#nav-orch').classList.toggle('active', name === 'orch');
   $('#nav-inbox').classList.toggle('active', name === 'inbox');
+  $('#nav-reviews').classList.toggle('active', name === 'reviews');
   $('#nav-instances').classList.toggle('active', name === 'instances');
   $('#nav-settings').classList.toggle('active', name === 'settings');
   $('#nav-computers').classList.toggle('active', name === 'computers');
@@ -551,6 +552,7 @@ function clearTaskView(slug, node) {
   $('#term-empty').classList.add('hidden');
   $('#resume-list').classList.add('hidden');
   state.resumable = [];
+  if (typeof reviewReset === 'function') reviewReset();
 }
 
 async function openTask(slug, node) {
@@ -587,6 +589,7 @@ async function openTask(slug, node) {
   loadUsage(p).catch(e => console.error('usage:', e));
   loadJournal(p).catch(e => console.error('journal:', e));
   loadIdea(p).catch(e => console.error('idea:', e));
+  loadReview(p).catch(e => console.error('review:', e));
   try { await syncTerminals(p); } catch (e) { console.error('terminals:', e); }
   if (stale(p)) return;
   startPolling();
@@ -1161,7 +1164,7 @@ function disposeTerms() {
 }
 
 function updateTermEmpty() {
-  const fileOpen = !$('#file-view').classList.contains('hidden');
+  const fileOpen = !$('#file-view').classList.contains('hidden') || !$('#review-view').classList.contains('hidden');
   $('#term-empty').classList.toggle('hidden', state.terms.size > 0 || fileOpen);
 }
 
@@ -1180,7 +1183,8 @@ async function syncTerminals(p = pin()) {
       attachTerm(s, p);
     }
   }
-  if (!state.activeTerm && sessions.length && $('#file-view').classList.contains('hidden')) {
+  if (!state.activeTerm && sessions.length && $('#file-view').classList.contains('hidden') &&
+      $('#review-view').classList.contains('hidden')) {
     selectTerm(sessions[0].id);
   }
   updateTermEmpty();
@@ -1340,6 +1344,7 @@ function startRename(tab, sess, p = pin()) {
 function selectTerm(id) {
   state.activeTerm = id;
   $('#file-view').classList.add('hidden');
+  hideReview();
   $('#term-host').classList.remove('hidden');
   for (const [sid, e] of state.terms) {
     const on = sid === id;
@@ -1558,6 +1563,7 @@ async function openFile(path) {
     body.textContent = text;
   }
   $('#file-view').querySelector('.code').scrollTop = 0;
+  hideReview();
   $('#file-view').classList.remove('hidden');
   $('#term-host').classList.add('hidden');
   for (const [, e] of state.terms) if (e.tab) e.tab.classList.remove('active');
@@ -1567,6 +1573,8 @@ $('#file-close').addEventListener('click', () => {
   state.openFile = '';
   for (const r of document.querySelectorAll('#files-list .file-row.open')) r.classList.remove('open');
   $('#file-view').classList.add('hidden');
+  // A file opened from the review goes back to the review, not to a terminal.
+  if (state.fileFromReview) { state.fileFromReview = false; showReview(); return; }
   $('#term-host').classList.remove('hidden');
   if (state.activeTerm) selectTerm(state.activeTerm);
   else updateTermEmpty();
