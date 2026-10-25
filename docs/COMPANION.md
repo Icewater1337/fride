@@ -226,7 +226,7 @@ X-Fride-Signature: sha256=<hex>
 |---|---|
 | `started` | the thread was handed to a task; once per thread |
 | `update` | any other news: an instruction reached the agent, the agent reported, an attempt to read the message failed and will be retried |
-| `question` | the thread waits for its sender (`needs_reply`); answer with `/reply` |
+| `question` | the orchestrator asks its sender something and the thread waits (`needs_reply`); answer with `/reply`. News while it waits, such as a progress note, is an `update` whose `status` is still `needs_reply` |
 | `done` | the thread is finished: answered directly, or every task it went to was closed |
 | `failed` | the message could not be read, even after retrying; a reply tries again |
 

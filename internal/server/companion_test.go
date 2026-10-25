@@ -232,10 +232,13 @@ func TestCompanionWebhookOnThreadNews(t *testing.T) {
 			Thread:   orchestrator.Thread{ID: 3, Status: status, Tasks: []string{"feat-two"}},
 			Messages: []orchestrator.Message{{Role: orchestrator.RoleOrchestrator, Text: text, Task: "feat-two"}},
 			Text:     text,
+			Asks:     status == "needs_reply",
 		}
 	}
+	progress := note("needs_reply", "feat-two's agent is still working")
+	progress.Asks = false
 	start := time.Now()
-	for _, n := range []orchestrator.Note{note("active", "started feat-two"), note("needs_reply", "which one?"), note("done", "finished")} {
+	for _, n := range []orchestrator.Note{note("active", "started feat-two"), note("needs_reply", "which one?"), progress, note("done", "finished")} {
 		if err := (orchHost{s}).Notify(n); err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +246,7 @@ func TestCompanionWebhookOnThreadNews(t *testing.T) {
 	if time.Since(start) > time.Second {
 		t.Fatal("Notify waited for the webhook")
 	}
-	want := []string{companion.EventStarted, companion.EventQuestion, companion.EventDone}
+	want := []string{companion.EventStarted, companion.EventQuestion, companion.EventUpdate, companion.EventDone}
 	for i, ev := range want {
 		select {
 		case e := <-got:

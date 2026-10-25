@@ -538,10 +538,11 @@ func (o *Orchestrator) mentioned(text string) []int {
 }
 
 // asking marks threads as waiting on their sender. Only one that was simply
-// following: a thread with a reply queued is about to be answered anyway.
+// following, or already waiting — its Updated then dates the newest question:
+// a thread with a reply queued is about to be answered anyway.
 func (o *Orchestrator) asking(ids []int) {
 	for _, id := range ids {
-		if t := o.thread(id); t != nil && t.Status == ThreadActive {
+		if t := o.thread(id); t != nil && (t.Status == ThreadActive || t.Status == ThreadAsking) {
 			t.Status, t.Updated = ThreadAsking, time.Now()
 		}
 	}
@@ -736,8 +737,11 @@ func (o *Orchestrator) noteNews() {
 			th := *t
 			th.Tasks = append([]string(nil), t.Tasks...)
 			th.Finished = append([]string(nil), t.Finished...)
+			// The ask moves the thread to needs_reply after its messages, so
+			// a note holds the question only if that came after its oldest.
+			asks := t.Status == ThreadAsking && !t.Updated.Before(news[0].Time)
 			select {
-			case o.notes <- Note{Thread: th, Messages: news, Text: renderNote(th, news)}:
+			case o.notes <- Note{Thread: th, Messages: news, Text: renderNote(th, news), Asks: asks}:
 			default:
 				continue
 			}
