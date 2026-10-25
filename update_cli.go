@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,14 +54,40 @@ func selfUpdate(api, exe, current string) (string, error) {
 		return "", nil
 	}
 	want := "fride_" + runtime.GOOS + "_" + runtime.GOARCH
-	url := ""
+	url, sumsURL := "", ""
 	for _, a := range rel.Assets {
-		if a.Name == want {
+		switch a.Name {
+		case want:
 			url = a.URL
+		case "SHA256SUMS":
+			sumsURL = a.URL
 		}
 	}
 	if url == "" {
 		return "", fmt.Errorf("release %s has no %s", rel.Tag, want)
+	}
+	// Refuse a release without checksums rather than skip the check: every
+	// release the workflow publishes has them, and an asset that went missing
+	// must not switch verification off.
+	if sumsURL == "" {
+		return "", fmt.Errorf("release %s has no SHA256SUMS", rel.Tag)
+	}
+	sum := ""
+	err := httpGet(sumsURL, func(r io.Reader) error {
+		b, err := io.ReadAll(io.LimitReader(r, 1<<20))
+		for _, line := range bytes.Split(b, []byte("\n")) {
+			// sha256sum prints "<hex>  <name>", or "<hex> *<name>" in binary mode.
+			if f := strings.Fields(string(line)); len(f) == 2 && strings.TrimPrefix(f[1], "*") == want {
+				sum = f[0]
+			}
+		}
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	if sum == "" {
+		return "", fmt.Errorf("SHA256SUMS of release %s lists no %s", rel.Tag, want)
 	}
 
 	// Download next to exe and rename over it. The rename is atomic, so a
@@ -70,7 +99,11 @@ func selfUpdate(api, exe, current string) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tmp.Name()) // nothing left to remove after the rename
-	err = httpGet(url, func(r io.Reader) error { _, err := io.Copy(tmp, r); return err })
+	h := sha256.New()
+	err = httpGet(url, func(r io.Reader) error { _, err := io.Copy(io.MultiWriter(tmp, h), r); return err })
+	if got := hex.EncodeToString(h.Sum(nil)); err == nil && !strings.EqualFold(got, sum) {
+		err = fmt.Errorf("the downloaded %s does not match SHA256SUMS: %s, want %s", want, got, sum)
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}

@@ -8,15 +8,20 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+# Only the release job below may write, and only what it needs.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: tag
         run: |
           if [ -n "$(git tag --points-at HEAD)" ]; then echo "main is released already"; exit 0; fi
@@ -34,21 +39,32 @@ jobs:
     needs: [check, ci]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write     # gh release create
+      id-token: write     # attest-build-provenance signs with the workflow's identity
+      attestations: write
     env:
       TAG: ${{ needs.check.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      # The write token stays out of .git/config, so the build cannot read it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       # Without cgo, so one Linux runner builds every platform. `fride update`
-      # looks for exactly these names: fride_<GOOS>_<GOARCH>.
+      # looks for exactly these names: fride_<GOOS>_<GOARCH>, and checks each
+      # against SHA256SUMS before installing it.
       - run: |
           for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
             CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath \
               -ldflags "-s -w -X main.version=$TAG" -o "dist/fride_${t%/*}_${t#*/}" .
           done
+          cd dist && sha256sum fride_* > SHA256SUMS
+      # Check a download by hand: gh attestation verify fride_… -R <this repo>
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/fride_*
       - run: gh release create "$TAG" dist/* --target "$GITHUB_SHA" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
