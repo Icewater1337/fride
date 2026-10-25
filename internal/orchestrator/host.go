@@ -176,4 +176,8 @@ type Note struct {
 	// Text is the same, rendered for a person: what a command that only
 	// forwards it somewhere (a chat, a push service) would send.
 	Text string `json:"text"`
+	// Asks is set when this note carries the question the thread waits on. A
+	// thread stays needs_reply until its sender answers, and the progress
+	// notes that arrive meanwhile are news, not the question asked again.
+	Asks bool `json:"asks,omitempty"`
 }

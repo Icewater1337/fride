@@ -77,6 +77,9 @@ func (s *Server) companionNote(n orchestrator.Note) {
 	}
 	c.mu.Lock()
 	ev := companion.EventFor(n.Thread.Status, c.started[n.Thread.ID])
+	if ev == companion.EventQuestion && !n.Asks {
+		ev = companion.EventUpdate // news while the question waits, not the question again
+	}
 	if ev == companion.EventStarted {
 		c.started[n.Thread.ID] = true
 	}

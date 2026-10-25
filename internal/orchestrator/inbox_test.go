@@ -481,6 +481,27 @@ func TestInboxNewsIsToldToTheSender(t *testing.T) {
 	}
 }
 
+func TestProgressWhileWaitingIsNotTheQuestionAgain(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, Reply{Say: "Which branch?", NeedsUser: true})
+	v, _, _ := o.Receive("cli", "", "fix the filters")
+	settled(t, o, v.ID)
+	waitFor(t, func() bool { return len(h.noted()) == 1 })
+	if n := h.noted()[0]; n.Thread.Status != ThreadAsking || !n.Asks {
+		t.Fatalf("the question's note = %+v", n)
+	}
+
+	// A progress note while the question waits, as the heartbeat writes one.
+	o.mu.Lock()
+	o.addTo(RoleEvent, "", "new's agent is still working (last active 4m ago).", v.ID)
+	o.mu.Unlock()
+	o.noteNews()
+	waitFor(t, func() bool { return len(h.noted()) == 2 })
+	if n := h.noted()[1]; n.Thread.Status != ThreadAsking || n.Asks {
+		t.Fatalf("a progress note was sent as the question: %+v", n)
+	}
+}
+
 func TestNotesSurviveARestartWithoutRepeating(t *testing.T) {
 	dir := t.TempDir()
 	h := newFakeHost()
