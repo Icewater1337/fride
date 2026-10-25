@@ -258,66 +258,68 @@ func (h orchHost) Send(slug, text string) error {
 				return fmt.Errorf("%s's agent is waiting on a %s confirmation, so nothing can be "+
 					"typed at it; answer it in the task's tab", slug, tool)
 			}
-			return h.typeLine(slug, sess, dir, id, text)
+			if sess.Waiting() && !strings.HasPrefix(strings.TrimSpace(text), "/") {
+				return h.typeLine(slug, sess, dir, id, text)
+			}
 		}
 	}
 	return sess.SendLine(text)
 }
 
-// typeLine types text at a Claude Code agent's prompt and checks that it
-// arrived: a typed line that never becomes a user turn in the transcript was
-// eaten by the TUI. A fresh install showed this on its first task, with the
-// one-time auto-mode notice drawn just as the instruction was typed, and the
-// agent then sat at an empty prompt while the orchestrator reported it sent.
-// So a line that does not show up is retried: Enter alone first, which submits
-// a line left in the box and does nothing at an empty prompt, then the whole
-// line once. An agent still writing to its screen is left alone: it is busy,
-// most likely with this very line, and retyping would send it twice.
+// typeLine types text at a Claude Code agent sitting at its prompt, and makes
+// sure the agent took it. A fresh agent can drop keystrokes without a trace:
+// the first instruction to a new node's first task vanished, leaving an empty
+// prompt under Claude Code's one-time auto-mode notice (#4). That notice is a
+// line Claude Code appends shortly after it starts, not a dialog, so there is
+// no screen to wait out; the line itself is checked. When the agent goes quiet
+// without recording it as a user turn, Enter is pressed — which submits a line
+// left in the input box and does nothing at an empty prompt — and, failing
+// that, the line is typed once more. Not for a busy agent, which queues what is
+// typed, nor for a slash command, which records no prompt and would run twice.
 func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string) error {
 	_, last := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, "", 1)
-	arrived := func() bool {
-		deadline := time.Now().Add(typedWait)
-		for {
-			turns, _ := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, last, 1000)
-			for _, t := range turns {
-				if t.Role == "user" {
-					return true
-				}
-			}
-			if time.Now().After(deadline) {
-				return false
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	if err := sess.SendLine(text); err != nil {
-		return err
-	}
-	for _, retry := range []func() error{
+	for _, try := range []func() error{
+		func() error { return sess.SendLine(text) },
 		func() error { return sess.Write([]byte("\r")) },
 		func() error { return sess.SendLine(text) },
 	} {
-		if arrived() || sess.IdleFor() < typedQuiet {
-			return nil
-		}
-		if err := retry(); err != nil {
+		if err := try(); err != nil {
 			return err
 		}
-	}
-	if arrived() {
-		return nil
+		if h.tookLine(sess, dir, id, last) {
+			return nil
+		}
 	}
 	return fmt.Errorf("%s's agent did not take the instruction: it was typed twice and never showed "+
 		"up in its transcript; look at the task's tab", slug)
 }
 
-// How long typeLine waits for a typed line to show up in the transcript, and
-// how long the screen must have been still for a retry. Variables so that a
-// test does not wait out the real ones.
-var (
-	typedWait  = 5 * time.Second
-	typedQuiet = time.Second
-)
+// tookLine waits for the agent to record a user turn after the cursor last,
+// and reports false only once it has gone quiet without one. Typing cleared
+// its waiting flag, which comes back after a few quiet seconds. An agent still
+// busy at the deadline counts as having taken it: typing the line again at an
+// agent that has it would run it twice.
+func (h orchHost) tookLine(sess *term.Session, dir, id, last string) bool {
+	deadline := time.Now().Add(typedWait)
+	for {
+		turns, _ := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, last, 1000)
+		for _, t := range turns {
+			if t.Role == "user" {
+				return true
+			}
+		}
+		if !sess.Alive() || time.Now().After(deadline) {
+			return true
+		}
+		if sess.Waiting() {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// How long tookLine waits at most.
+const typedWait = 15 * time.Second
 
 // answerQuestion delivers text as the answer to the multiple-choice question
 // the agent is showing. Typed at the dialog itself it would be lost and its
