@@ -200,10 +200,22 @@ func (s *Store) reconcile(f *file) bool {
 		if !e.IsDir() || known[e.Name()] {
 			continue
 		}
-		if t := s.readSidecar(e.Name()); t != nil {
-			f.Tasks = append(f.Tasks, t)
-			changed = true
+		t := s.readSidecar(e.Name())
+		if t == nil {
+			continue
 		}
+		// A renamed or copied folder still carries the old slug: the folder's
+		// name is the task, otherwise it is re-adopted on every read.
+		if t.Slug != e.Name() {
+			if ValidateSlug(e.Name()) != nil {
+				continue
+			}
+			t.Slug = e.Name()
+			s.writeSidecar(t)
+		}
+		known[t.Slug] = true
+		f.Tasks = append(f.Tasks, t)
+		changed = true
 	}
 	return changed
 }
