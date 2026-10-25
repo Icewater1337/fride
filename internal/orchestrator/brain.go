@@ -116,6 +116,18 @@ type Reply struct {
 	// It is how "I cannot decide this one" is expressed.
 	NeedsUser bool     `json:"needsUser"`
 	Actions   []Action `json:"actions"`
+	// Reports are what the turn says about single tasks, each told only to
+	// the inbox threads following that task. One say about several tasks
+	// cannot be: it went to every thread it named, so each sender got the
+	// others' news and questions as well as their own.
+	Reports []Report `json:"reports,omitempty"`
+}
+
+// Report is what a turn says about one task.
+type Report struct {
+	Task      string `json:"task"`
+	Say       string `json:"say"`
+	NeedsUser bool   `json:"needsUser"`
 }
 
 // schema is the contract the CLI validates the reply against.
@@ -128,6 +140,20 @@ func schema() string {
   "properties": {
     "say": {"type": "string", "description": "Message for the user's chat. Empty string when there is nothing worth saying."},
     "needsUser": {"type": "boolean", "description": "True when you need an answer from the user before going further."},
+    "reports": {
+      "type": "array",
+      "description": "What you say about single tasks, one entry per task; each is told only to the inbox threads following that task.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task", "say", "needsUser"],
+        "properties": {
+          "task": {"type": "string", "description": "Task slug the report is about."},
+          "say": {"type": "string", "description": "What to tell that task's threads, a question for the user about it included."},
+          "needsUser": {"type": "boolean", "description": "True when the report asks the user something about this task."}
+        }
+      }
+    },
     "actions": {
       "type": "array",
       "items": {
@@ -247,6 +273,11 @@ Your three jobs:
    - Tasks an inbox thread is following are shown to you on a timer even in
      chat mode, so their sender hears what came of the message. Report when
      one finishes, stops on a question, or gets stuck; stay quiet otherwise.
+   - Each thread's sender cares about their own task only. Put what you have
+     to say about a task an inbox thread is following, a question about it
+     included, in reports: one entry per task, with needsUser on the entry
+     that asks. Keep it out of "say", which is for the rest; a "say" naming
+     several tasks reaches every one of their threads.
 
 Rules for what you say:
 - Write to a developer who is not watching. Lead with what changed.

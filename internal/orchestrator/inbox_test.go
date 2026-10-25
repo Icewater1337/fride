@@ -11,7 +11,7 @@ import (
 )
 
 // newStubOrch builds an orchestrator whose brain answers every turn with reply.
-func newStubOrch(t *testing.T, h Host, reply Reply) (*Orchestrator, stub) {
+func newStubOrch(t *testing.T, h Host, reply any) (*Orchestrator, stub) {
 	t.Helper()
 	st := stubClaude(t, reply)
 	o := New(t.TempDir(), t.TempDir(), st.bin, h)
@@ -540,5 +540,42 @@ func TestHeldInstructionWaitsOutTheFolderTrustQuestion(t *testing.T) {
 	}
 	if got := renderObservation(ob); !strings.Contains(got, "FOLDER-TRUST") || strings.Contains(got, "asked to use") {
 		t.Fatalf("the look does not say it is the trust question: %q", got)
+	}
+}
+
+// A look that has news about two followed tasks tells each thread only its
+// own, and a question about one task waits on that task's thread alone. The
+// reply is raw JSON, as the brain sends it.
+func TestAReportGoesOnlyToItsTasksThreads(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, map[string]any{
+		"say": "", "needsUser": false, "actions": []any{},
+		"reports": []any{
+			map[string]any{"task": "t1", "say": "t1 has finished.", "needsUser": false},
+			map[string]any{"task": "t2", "say": "t2 stopped. Should I tell it to go on?", "needsUser": true},
+		},
+	})
+	o.mu.Lock()
+	o.st.Threads = []Thread{
+		{ID: 1, Source: "chat", Status: ThreadActive, Tasks: []string{"t1"}},
+		{ID: 2, Source: "chat", Status: ThreadActive, Tasks: []string{"t2"}},
+	}
+	gen := o.gen
+	o.mu.Unlock()
+
+	if err := o.think(context.Background(), gen, "look", loop, nil); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int]string{1: "t1 has finished.", 2: "t2 stopped."} {
+		v := threadOf(t, o, id)
+		if len(v.Messages) != 1 || !strings.Contains(v.Messages[0].Text, want) {
+			t.Fatalf("thread #%d heard %+v, want only %q", id, v.Messages, want)
+		}
+	}
+	if s := threadOf(t, o, 1).Status; s != ThreadActive {
+		t.Fatalf("thread #1 was asked about another task's question: %s", s)
+	}
+	if s := threadOf(t, o, 2).Status; s != ThreadAsking {
+		t.Fatalf("thread #2 is %s, want asking", s)
 	}
 }
