@@ -529,6 +529,13 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 		about = o.mentioned(reply.Say)
 	}
 	o.addTo(RoleOrchestrator, "", reply.Say, about...)
+	var asked []int // the threads a report has a question for
+	for _, r := range reply.Reports {
+		o.addTo(RoleOrchestrator, r.Task, r.Say)
+		if r.NeedsUser && strings.TrimSpace(r.Say) != "" {
+			asked = append(asked, o.threadsFor(r.Task)...)
+		}
+	}
 	o.save()
 	o.mu.Unlock()
 
@@ -541,9 +548,13 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 		// question about one message is that thread's, answered there, and
 		// does not stop the loop from minding every other task.
 		o.settleInbox(tr, reply.NeedsUser)
-	case reply.NeedsUser && gen == o.gen:
+		o.asking(asked)
+	case (reply.NeedsUser || len(asked) > 0) && gen == o.gen:
 		o.mem.awaiting = true
-		o.asking(about)
+		if reply.NeedsUser {
+			o.asking(about)
+		}
+		o.asking(asked)
 	}
 	o.thinking = false
 	o.save()
