@@ -258,10 +258,66 @@ func (h orchHost) Send(slug, text string) error {
 				return fmt.Errorf("%s's agent is waiting on a %s confirmation, so nothing can be "+
 					"typed at it; answer it in the task's tab", slug, tool)
 			}
+			return h.typeLine(slug, sess, dir, id, text)
 		}
 	}
 	return sess.SendLine(text)
 }
+
+// typeLine types text at a Claude Code agent's prompt and checks that it
+// arrived: a typed line that never becomes a user turn in the transcript was
+// eaten by the TUI. A fresh install showed this on its first task, with the
+// one-time auto-mode notice drawn just as the instruction was typed, and the
+// agent then sat at an empty prompt while the orchestrator reported it sent.
+// So a line that does not show up is retried: Enter alone first, which submits
+// a line left in the box and does nothing at an empty prompt, then the whole
+// line once. An agent still writing to its screen is left alone: it is busy,
+// most likely with this very line, and retyping would send it twice.
+func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string) error {
+	_, last := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, "", 1)
+	arrived := func() bool {
+		deadline := time.Now().Add(typedWait)
+		for {
+			turns, _ := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, last, 1000)
+			for _, t := range turns {
+				if t.Role == "user" {
+					return true
+				}
+			}
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if err := sess.SendLine(text); err != nil {
+		return err
+	}
+	for _, retry := range []func() error{
+		func() error { return sess.Write([]byte("\r")) },
+		func() error { return sess.SendLine(text) },
+	} {
+		if arrived() || sess.IdleFor() < typedQuiet {
+			return nil
+		}
+		if err := retry(); err != nil {
+			return err
+		}
+	}
+	if arrived() {
+		return nil
+	}
+	return fmt.Errorf("%s's agent did not take the instruction: it was typed twice and never showed "+
+		"up in its transcript; look at the task's tab", slug)
+}
+
+// How long typeLine waits for a typed line to show up in the transcript, and
+// how long the screen must have been still for a retry. Variables so that a
+// test does not wait out the real ones.
+var (
+	typedWait  = 5 * time.Second
+	typedQuiet = time.Second
+)
 
 // answerQuestion delivers text as the answer to the multiple-choice question
 // the agent is showing. Typed at the dialog itself it would be lost and its
@@ -288,7 +344,7 @@ func (h orchHost) answerQuestion(slug string, sess *term.Session, dir, id, text 
 	}
 	// The prompt is drawn after the transcript is written.
 	time.Sleep(questionSettle)
-	return sess.SendLine("Answer to your question: " + text)
+	return h.typeLine(slug, sess, dir, id, "Answer to your question: "+text)
 }
 
 // How long answerQuestion waits for the dialog to close, and then for the

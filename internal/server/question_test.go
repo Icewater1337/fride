@@ -44,13 +44,22 @@ func TestAnAnswerToAQuestionClosesTheDialogFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The agent: on Esc, the question is recorded as declined.
+	// The agent: on Esc, the question is recorded as declined; the answer
+	// typed after it, once submitted, as a user turn.
 	go func() {
+		declined := false
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			if b, _ := os.ReadFile(typed); bytes.Contains(b, []byte{0x1b}) {
+			b, _ := os.ReadFile(typed)
+			switch {
+			case !declined && bytes.Contains(b, []byte{0x1b}):
+				declined = true
 				f, _ := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
 				_, _ = f.WriteString(`{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"User declined to answer questions","is_error":true}]}}` + "\n")
+				_ = f.Close()
+			case declined && bytes.HasSuffix(b, []byte("\r")):
+				f, _ := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
+				_, _ = f.WriteString(`{"type":"user","uuid":"u2","message":{"role":"user","content":"Answer to your question: ..."}}` + "\n")
 				_ = f.Close()
 				return
 			}
