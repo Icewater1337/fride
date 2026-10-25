@@ -145,11 +145,17 @@ func ensureClone(dir, remote, branch string) (string, error) {
 		return dir, nil
 	}
 	// Reset rather than pull: this clone is a publishing scratch area, and any
-	// local state in it is from a previous publish, not work worth keeping.
-	if _, err := run(dir, nil, "checkout", "--quiet", "-B", branch, "origin/"+branch); err != nil {
+	// local state in it is from a previous publish, not work worth keeping —
+	// including a rebase or merge a failed publish left half done.
+	_, _ = run(dir, nil, "rebase", "--abort")
+	_, _ = run(dir, nil, "merge", "--abort")
+	if _, err := run(dir, nil, "checkout", "--quiet", "-f", "-B", branch, "origin/"+branch); err != nil {
 		return "", err
 	}
 	if _, err := run(dir, nil, "reset", "--quiet", "--hard", "origin/"+branch); err != nil {
+		return "", err
+	}
+	if _, err := run(dir, nil, "clean", "--quiet", "-fdx"); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -319,6 +325,7 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 		// Someone else may have published meanwhile: rebase and retry once.
 		if _, err := run(dir, nil, "push", "--quiet", "origin", "HEAD:"+c.branch); err != nil {
 			if _, rerr := run(dir, c.env, "pull", "--quiet", "--rebase", "origin", c.branch); rerr != nil {
+				_, _ = run(dir, nil, "rebase", "--abort")
 				return nil, err
 			}
 			if _, err := run(dir, nil, "push", "--quiet", "origin", "HEAD:"+c.branch); err != nil {

@@ -118,6 +118,37 @@ func TestPublishDirectIntoAnEmptyLedger(t *testing.T) {
 	}
 }
 
+// A publish whose rebase conflicts must not leave the clone stuck mid-rebase
+// for every publish after it.
+func TestPublishDirectRecoversFromAConflictingRebase(t *testing.T) {
+	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, true)
+	if _, err := Publish(cfg, "proj-42", Options{}); err != nil {
+		t.Fatal(err)
+	}
+	// Another machine rewrites log.md between this clone's fetch and its push:
+	// a one-shot pre-push hook pushes that, then rejects this push.
+	other := filepath.Join(t.TempDir(), "other")
+	gitT(t, "", "clone", "-q", bare, other)
+	hook := "#!/bin/sh\n[ -f '" + other + ".done' ] && exit 0\ntouch '" + other + ".done'\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\n" +
+		"cd '" + other + "' && echo elsewhere > log.md && git -c user.name=t -c user.email=t@example.com commit -qam x && git push -q origin main\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(ledgerClone(cfg), ".git", "hooks", "pre-push"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Append(cfg, "proj-42", Entry{Kind: KindDecision, Text: "second", Why: "more", Time: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Publish(cfg, "proj-42", Options{}); err == nil {
+		t.Fatal("a conflicting rebase was reported as published")
+	}
+	if err := Append(cfg, "proj-42", Entry{Kind: KindDecision, Text: "third", Why: "more", Time: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Publish(cfg, "proj-42", Options{}); err != nil {
+		t.Fatalf("the publish after a failed rebase failed too: %v", err)
+	}
+}
+
 func TestWaitForMergeGivesUp(t *testing.T) {
 	cfg, _ := ledgerCfg(t, &settings.Ledger{WaitForMerge: 1, Author: "Jane Doe <jane@example.com>"}, true)
 	p, err := Publish(cfg, "proj-42", Options{})
