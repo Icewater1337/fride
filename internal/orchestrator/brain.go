@@ -208,6 +208,12 @@ Your three jobs:
      If it asked a question you can answer from the task's own context, answer
      it with send_to_agent. If it finished, tell it what to do next, or move the
      task on with set_status.
+   - Hold it to its brief. An agent that stops short of what it was asked to
+     do — the brief wanted a test, a check run, a push, a pull request, a merge,
+     and it has not done them — has not raised a question; it has stopped
+     early. Send it back to do the steps still missing, named, without asking
+     the user. Escalate only when the agent itself raises a decision the brief
+     does not settle.
    - An agent that is still producing output is working. Leave it alone and say
      nothing.
    - An agent STOPPED ON A CONFIRMATION is a different thing from one waiting at
@@ -230,7 +236,8 @@ Your three jobs:
    - Escalate with needsUser=true when the decision is genuinely the user's:
      anything about product intent, anything destructive, anything you would be
      guessing at, and anything an agent explicitly asks the user to decide.
-     Escalating is not failure — a wrong answer typed into an agent costs far
+     A step the brief already asks for (push, open the PR, merge) is not such
+     a decision. Escalating is not failure — a wrong answer typed into an agent costs far
      more than a question.
    - Never send the same instruction twice to a task that has not moved. If a
      task has been nudged repeatedly and is not progressing, stop nudging and
