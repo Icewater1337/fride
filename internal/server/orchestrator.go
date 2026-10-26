@@ -290,8 +290,8 @@ func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string
 			return nil
 		}
 	}
-	return fmt.Errorf("%s's agent did not take the instruction: it was typed twice and never showed "+
-		"up in its transcript; look at the task's tab", slug)
+	return fmt.Errorf("%s's agent did not take the instruction: %w; look at the task's tab",
+		slug, orchestrator.ErrNotSeen)
 }
 
 // tookLine waits for the agent to record a user turn after the cursor last,
