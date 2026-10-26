@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -80,8 +81,27 @@ func (o *Orchestrator) recoverFailed(obs []Observation) {
 		o.mu.Lock()
 		ts = o.mem.tasks[slug]
 		ts.failedSeen = ob.Failed.UUID
+		if errors.Is(err, ErrNotSeen) {
+			// Typed but not seen: an attempt all the same, so the backoff and
+			// maxRecoveries apply. The same error is tried again, and only the
+			// first failure of a run is said.
+			ts = ts.sentOne(now)
+			ts.failedSeen = ""
+			ts.recoveries++
+			ts.recoverAt = now.Add(recoverBase << (ts.recoveries - 1))
+			o.mem.tasks[slug] = ts
+			if ts.recoveries == 1 {
+				o.addTo(RoleError, slug, fmt.Sprintf("%s's agent stopped on an API error (%s), and "+
+					"telling it to continue failed: %v. FrIDE tries up to %d times and then tells you.",
+					slug, clip(ob.Failed.Text, 200), err, maxRecoveries))
+			}
+			o.save()
+			o.mu.Unlock()
+			continue
+		}
 		if err != nil {
-			// Not counted as an attempt; the same error is tried again later.
+			// Nothing was typed, so not counted as an attempt; the same error
+			// is tried again later.
 			ts.failedSeen, ts.recoverAt = "", now.Add(recoverBase)
 			o.mem.tasks[slug] = ts
 			o.addTo(RoleError, slug, fmt.Sprintf("%s's agent stopped on an API error (%s), and "+

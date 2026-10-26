@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -126,5 +127,46 @@ func TestAnAnswerReachesAQuestionButNotAConfirmation(t *testing.T) {
 	}
 	if got := renderObservation(Observation{Running: true, Waiting: true, Blocked: agent.QuestionTool}); !strings.Contains(got, "MULTIPLE-CHOICE") {
 		t.Fatalf("look = %q", got)
+	}
+}
+
+// A continue that was typed but never seen in the transcript is an attempt
+// all the same: the agent whose input is lost is given up on, not retyped at
+// forever, and the failure is said once (#24).
+func TestAnUnseenContinueCountsAsAnAttempt(t *testing.T) {
+	h := newFakeHost()
+	h.sendErr = fmt.Errorf("t1's agent did not take the instruction: %w", ErrNotSeen)
+	o := newTestOrch(t, h)
+	for i := 0; i < maxRecoveries+3; i++ {
+		o.recoverFailed([]Observation{failedAt("e1")})
+		o.mu.Lock()
+		ts := o.mem.tasks["t1"]
+		ts.recoverAt = time.Time{} // skip the pause
+		o.mem.tasks["t1"] = ts
+		o.mu.Unlock()
+	}
+	o.mu.Lock()
+	ts := o.mem.tasks["t1"]
+	o.mu.Unlock()
+	if !ts.gaveUp || ts.recoveries != maxRecoveries || ts.sent != maxRecoveries {
+		t.Fatalf("state = %+v, want it given up after %d counted sends", ts, maxRecoveries)
+	}
+	msgs := messagesOf(o)
+	if len(msgs) != 2 || msgs[0].Role != RoleError || !strings.Contains(msgs[1].Text, "leaving it now") {
+		t.Fatalf("messages = %+v, want one failure and one giving up", msgs)
+	}
+}
+
+// An instruction typed but not seen still counts against the send budget.
+func TestAnUnseenInstructionIsCounted(t *testing.T) {
+	h := newFakeHost()
+	h.sendErr = fmt.Errorf("t1's agent did not take the instruction: %w", ErrNotSeen)
+	o := newTestOrch(t, h)
+	o.apply(Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "go on"}}}, user)
+	o.mu.Lock()
+	ts := o.mem.tasks["t1"]
+	o.mu.Unlock()
+	if ts.sent != 1 || ts.unanswered != 1 {
+		t.Fatalf("state = %+v, want the unseen send counted", ts)
 	}
 }

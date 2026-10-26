@@ -564,6 +564,12 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 
 var errCleared = errors.New("the conversation was cleared during this turn")
 
+// ErrNotSeen is wrapped by a Host.Send that typed the line but never saw the
+// agent take it. The line may still have arrived, so callers count it as sent:
+// otherwise the runaway guards never see an agent whose input is lost, and the
+// same line is typed again on every round (#24).
+var ErrNotSeen = errors.New("it was typed twice and never showed up in its transcript")
+
 // apply carries out the actions of a reply.
 //
 // Every action is checked here rather than trusted, and every one leaves an
@@ -764,13 +770,14 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 			}
 		}
 		o.mu.Unlock()
-		if err := o.host.Send(a.Task, a.Text); err != nil {
+		err := o.host.Send(a.Task, a.Text)
+		if err != nil && !errors.Is(err, ErrNotSeen) {
 			return err
 		}
 		o.mu.Lock()
 		o.mem.tasks[a.Task] = o.mem.tasks[a.Task].sentOne(time.Now())
 		o.mu.Unlock()
-		return nil
+		return err
 
 	case ActStartAgent:
 		return o.host.StartAgent(a.Task)

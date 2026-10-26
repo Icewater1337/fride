@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -630,10 +631,12 @@ func (o *Orchestrator) deliverHeld(obs []Observation) {
 		err := o.host.Send(slug, h.Text)
 		o.mu.Lock()
 		delete(o.st.Held, slug)
+		if err == nil || errors.Is(err, ErrNotSeen) {
+			o.mem.tasks[slug] = o.mem.tasks[slug].sentOne(now)
+		}
 		if err != nil {
 			o.addTo(RoleError, slug, "→ "+slug+": "+h.Text+" — "+err.Error(), h.Threads...)
 		} else {
-			o.mem.tasks[slug] = o.mem.tasks[slug].sentOne(now)
 			o.addTo(RoleEvent, slug, "→ "+slug+": "+h.Text+" — its agent is ready now", h.Threads...)
 		}
 		o.save()
