@@ -36,7 +36,7 @@ import (
 	"github.com/Icewater1337/fride/internal/term"
 	"github.com/Icewater1337/fride/internal/usage"
 	"github.com/Icewater1337/fride/internal/workspace"
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 )
 
 type Server struct {
@@ -1432,29 +1432,40 @@ func (s *Server) handleInstances(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- terminal ws
 
-// upgrader is built per-server so CheckOrigin can consult the real port.
+// wsAllowed is the Origin/Host check of the terminal socket, a method so it can
+// consult the real port.
 //
 // This matters more than the HTTP case: a WebSocket handshake is NOT subject to
 // the same-origin policy, so without this check any page you visit could open a
 // socket to a terminal session and both read its output and inject keystrokes.
-func (s *Server) upgrader() websocket.Upgrader {
-	return websocket.Upgrader{
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
-		CheckOrigin: func(r *http.Request) bool {
-			o := r.Header.Get("Origin")
-			if o == "" {
-				// A non-browser client: the CLI here, or another node of the
-				// fleet. Being a fleet caller is not enough on its own: that
-				// is any device of the user's, browsers included (fleetGuard).
-				if _, ok := fleet.Caller(r); ok {
-					return r.Host == fleet.Host
-				}
-				return s.allowedHost(r.Host)
-			}
-			return s.allowedOrigin(o) && s.allowedHost(r.Host)
-		},
+func (s *Server) wsAllowed(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		// A non-browser client: the CLI here, or another node of the
+		// fleet. Being a fleet caller is not enough on its own: that
+		// is any device of the user's, browsers included (fleetGuard).
+		if _, ok := fleet.Caller(r); ok {
+			return r.Host == fleet.Host
+		}
+		return s.allowedHost(r.Host)
 	}
+	return s.allowedOrigin(o) && s.allowedHost(r.Host)
+}
+
+// acceptWS completes the handshake of a terminal socket wsAllowed admitted.
+func acceptWS(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	// The library's own origin check only compares Origin with Host, which a
+	// DNS-rebinding page passes: it names its own domain in both. wsAllowed has
+	// already made the real check, so the library's is switched off.
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	if err != nil {
+		return nil, err
+	}
+	// The library refuses a message over 32 KiB by default. A paste arrives as
+	// one "data" message, and a terminal's first message is its scrollback,
+	// up to 256 KiB, which the fleet relay reads like any other.
+	conn.SetReadLimit(-1)
+	return conn, nil
 }
 
 type wsIn struct {
@@ -1465,6 +1476,10 @@ type wsIn struct {
 }
 
 func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
+	if !s.wsAllowed(r) {
+		http.Error(w, "forbidden: unexpected Origin or Host", http.StatusForbidden)
+		return
+	}
 	if node := r.URL.Query().Get("node"); node != "" && node != s.selfName() && s.fleet != nil {
 		s.proxyTermWS(w, r, node)
 		return
@@ -1475,12 +1490,17 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such terminal session", 404)
 		return
 	}
-	up := s.upgrader()
-	conn, err := up.Upgrade(w, r, nil)
+	conn, err := acceptWS(w, r)
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	// Only a failed Read ends this handler, and a Read that met the browser's
+	// close frame has already answered it: no close handshake is left to do.
+	defer conn.CloseNow()
+	// The request's context stays valid after the hijack until this handler
+	// returns (http.Hijacker): the socket's lifetime. A Write still pending
+	// then is cancelled, which closes the connection.
+	ctx := r.Context()
 
 	out, cancel := sess.Subscribe()
 	defer cancel()
@@ -1497,14 +1517,14 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
 	go func() { // pty -> browser
 		defer close(done)
 		for chunk := range out {
-			if err := conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			if err := conn.Write(ctx, websocket.MessageBinary, chunk); err != nil {
 				return
 			}
 		}
 	}()
 
 	for { // browser -> pty
-		_, msg, err := conn.ReadMessage()
+		_, msg, err := conn.Read(ctx)
 		if err != nil {
 			break
 		}

@@ -3,8 +3,8 @@ module github.com/Icewater1337/fride
 go 1.27.2
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	golang.org/x/sys v0.49.0
 	tailscale.com v1.104.1
 )
@@ -13,7 +13,6 @@ require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/creachadair/msync v0.10.1 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20260526185140-fb298caac7ca // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
