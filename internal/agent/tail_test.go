@@ -266,6 +266,51 @@ func toolResult(uuid, id string) map[string]any {
 			map[string]any{"type": "tool_result", "tool_use_id": id}}}}
 }
 
+// A multiple-choice question is read from the call's input: the agent's turns
+// only say it "used AskUserQuestion", and the question and its options never
+// reached whoever had to answer it (#5).
+func TestPendingCallCarriesTheQuestion(t *testing.T) {
+	home := t.TempDir()
+	ask := toolUse("a2", "t2", QuestionTool)
+	ask["timestamp"] = "2026-10-25T05:00:00Z"
+	ask["message"].(map[string]any)["content"].([]any)[0].(map[string]any)["input"] = map[string]any{
+		"questions": []any{map[string]any{
+			"question": "Which identity should the commit use?", "header": "Git identity",
+			"multiSelect": false,
+			"options": []any{
+				map[string]any{"label": "Use the global one", "description": "as in ~/.gitconfig"},
+				map[string]any{"label": "Set one for this repo"},
+			},
+		}},
+	}
+	writeTurns(t, home, "/ws", "s1", []map[string]any{
+		toolUse("a1", "t1", "Bash"), toolResult("u1", "t1"), ask,
+	})
+	c, err := PendingCall(Claude, home, "/ws", "s1", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ID != "t2" || c.Name != QuestionTool || !c.Time.Equal(time.Date(2026, 10, 25, 5, 0, 0, 0, time.UTC)) {
+		t.Fatalf("call = %+v", c)
+	}
+	qs := c.Questions()
+	if len(qs) != 1 || qs[0].Text != "Which identity should the commit use?" || qs[0].Header != "Git identity" ||
+		len(qs[0].Options) != 2 || qs[0].Options[0].Label != "Use the global one" ||
+		qs[0].Options[0].Description != "as in ~/.gitconfig" || qs[0].Options[1].Label != "Set one for this repo" {
+		t.Fatalf("questions = %+v", qs)
+	}
+	if got := pending(t, home, "s1", time.Time{}); got != QuestionTool {
+		t.Fatalf("Pending = %q", got)
+	}
+	// Any other call asks nothing, and neither does an input of another shape.
+	if qs := (Call{Name: "Bash", Input: c.Input}).Questions(); qs != nil {
+		t.Fatalf("a Bash call asks %+v", qs)
+	}
+	if qs := (Call{Name: QuestionTool, Input: json.RawMessage(`{"question":"?"}`)}).Questions(); qs != nil {
+		t.Fatalf("an unknown shape asks %+v", qs)
+	}
+}
+
 // A line longer than the scanner's limit used to end the read there, silently:
 // the agent looked quiet from that tool result on, however much it said after.
 func TestTailReadsPastAnOversizedLine(t *testing.T) {

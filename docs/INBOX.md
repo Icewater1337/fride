@@ -10,7 +10,10 @@ The orchestrator reads it and does one of four things:
   agent, after resuming the agent if none is running;
 - **starts a task**: the message describes new work, so a task is created and
   the request becomes its agent's first instruction;
-- **answers**: the message is a question the board or the code answers;
+- **answers**: the message is a question the board, the code or a task's
+  git state answers (each worktree's branch, last commit, upstream, unpushed
+  commits and uncommitted files are given to it, so "is it pushed?" needs no
+  agent);
 - **asks back**: it cannot tell which task is meant, or what is wanted. It
   never guesses a task: an instruction typed into the wrong agent costs more
   than a question.
@@ -116,6 +119,12 @@ back with `fride in reply`.
   is told once to finish or say what it is stuck on. The sender is told it may
   be stuck once per stall, after that look, and again only if it moves and
   stalls anew.
+- **An agent's question reaches the thread.** When an agent stops on Claude
+  Code's multiple-choice question (AskUserQuestion), the question and its
+  options are passed on to the threads following its task, word for word,
+  once, and the thread waits on its sender (`needs_reply`). The reply is the
+  answer. If the question is answered in FrIDE instead, the thread is told
+  that no reply is needed and goes back to following.
 - **Questions are answered as messages.** An answer to Claude Code's
   multiple-choice question (AskUserQuestion) is not typed at the dialog,
   whose Enter would pick the highlighted option. The dialog is closed with

@@ -99,23 +99,40 @@ func Tail(k Kind, home, workspaceDir, sessionID, afterUUID string, max int) ([]T
 // repainted TUI and this decision is too consequential to take from a guess.
 // For the same reason a transcript that cannot be read is an error, not a "".
 func Pending(k Kind, home, workspaceDir, sessionID string, since time.Time) (string, error) {
+	c, err := PendingCall(k, home, workspaceDir, sessionID, since)
+	return c.Name, err
+}
+
+// Call is a tool call an agent has made and not had answered.
+type Call struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input,omitempty"`
+	Time  time.Time       `json:"time"`
+}
+
+// PendingCall is Pending with the whole call rather than its tool's name: for
+// a multiple-choice question its input is the question itself (see
+// Call.Questions), which the agent's turns carry only as "used
+// AskUserQuestion". The zero Call means nothing is pending.
+func PendingCall(k Kind, home, workspaceDir, sessionID string, since time.Time) (Call, error) {
 	if !Tailable(k) || sessionID == "" {
-		return "", nil
+		return Call{}, nil
 	}
 	path := transcriptPath(home, workspaceDir, sessionID)
 	if path == "" {
-		return "", nil // nothing written yet, so nothing asked
+		return Call{}, nil // nothing written yet, so nothing asked
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return Call{}, err
 	}
 	defer f.Close()
 
-	names := map[string]string{} // tool_use id -> tool name
+	calls := map[string]Call{} // tool_use id -> the call
 	var order []string
 	message := "" // the assistant message the open calls belong to
-	endTurn := func() { names, order = map[string]string{}, nil }
+	endTurn := func() { calls, order = map[string]Call{}, nil }
 	err = jsonl.Scan(f, func(line []byte) bool {
 		var e struct {
 			Type        string    `json:"type"`
@@ -135,10 +152,11 @@ func Pending(k Kind, home, workspaceDir, sessionID string, since time.Time) (str
 			return true
 		}
 		var blocks []struct {
-			Type      string `json:"type"`
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			ToolUseID string `json:"tool_use_id"`
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Name      string          `json:"name"`
+			Input     json.RawMessage `json:"input"`
+			ToolUseID string          `json:"tool_use_id"`
 		}
 		var prompt string
 		if json.Unmarshal(e.Message.Content, &prompt) != nil {
@@ -161,7 +179,7 @@ func Pending(k Kind, home, workspaceDir, sessionID string, since time.Time) (str
 			}
 			for _, b := range blocks {
 				if b.Type == "tool_use" && b.ID != "" {
-					names[b.ID] = b.Name
+					calls[b.ID] = Call{ID: b.ID, Name: b.Name, Input: b.Input, Time: e.Timestamp}
 					order = append(order, b.ID)
 				}
 			}
@@ -170,7 +188,7 @@ func Pending(k Kind, home, workspaceDir, sessionID string, since time.Time) (str
 			for _, b := range blocks {
 				switch b.Type {
 				case "tool_result":
-					delete(names, b.ToolUseID)
+					delete(calls, b.ToolUseID)
 					results = true
 				case "text":
 					typed = true
@@ -185,14 +203,14 @@ func Pending(k Kind, home, workspaceDir, sessionID string, since time.Time) (str
 		return true
 	})
 	if err != nil {
-		return "", err
+		return Call{}, err
 	}
 	for i := len(order) - 1; i >= 0; i-- {
-		if n, ok := names[order[i]]; ok {
-			return n, nil
+		if c, ok := calls[order[i]]; ok {
+			return c, nil
 		}
 	}
-	return "", nil
+	return Call{}, nil
 }
 
 // transcriptPath locates the JSONL a conversation is being written to. Claude
@@ -336,6 +354,43 @@ func flatten(kind string, raw json.RawMessage) (Turn, bool) {
 // answer can be typed as a message. Typed straight at the dialog, text is lost
 // and its Enter picks whichever option is highlighted — the first.
 const QuestionTool = "AskUserQuestion"
+
+// Question is one question of a QuestionTool call, with the options it offers.
+// The person answering may also pick none of them and say something else.
+type Question struct {
+	Header  string   `json:"header,omitempty"`
+	Text    string   `json:"question"`
+	Options []Option `json:"options,omitempty"`
+	Multi   bool     `json:"multiSelect,omitempty"`
+}
+
+// Option is one answer a Question offers.
+type Option struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// Questions is what a QuestionTool call asks: nil for any other call, and for
+// an input in a shape this version does not know, which leaves the caller
+// with the screen and the agent's own words, as before.
+func (c Call) Questions() []Question {
+	if c.Name != QuestionTool {
+		return nil
+	}
+	var in struct {
+		Questions []Question `json:"questions"`
+	}
+	if json.Unmarshal(c.Input, &in) != nil {
+		return nil
+	}
+	var out []Question
+	for _, q := range in.Questions {
+		if strings.TrimSpace(q.Text) != "" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
 
 // Failure is a Claude Code turn that ended on an API error instead of an
 // answer: the CLI writes the error as a synthetic assistant message and goes

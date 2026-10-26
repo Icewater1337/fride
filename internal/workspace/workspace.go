@@ -835,6 +835,41 @@ func Stats(cfg *config.Config, slug string, baseRefs map[string]string) []RepoSt
 	return out
 }
 
+// Head is where a worktree stands: the commit it has checked out, and how far
+// it is from the branch it tracks.
+type Head struct {
+	Commit  string `json:"commit,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// Upstream is the branch it tracks, "" when it tracks none — a branch that
+	// was never pushed, or a detached HEAD.
+	Upstream string `json:"upstream,omitempty"`
+	// Ahead counts the commits not on the upstream yet, and Behind those on it
+	// that are not here: both as of the last fetch, which this does not do.
+	Ahead  int `json:"ahead,omitempty"`
+	Behind int `json:"behind,omitempty"`
+}
+
+// HeadOf reads a worktree's Head. Whatever cannot be read is left empty: a
+// repository with no commits has no subject, a local branch no upstream.
+func HeadOf(dir string) Head {
+	var h Head
+	if out, err := git(dir, "log", "-1", "--format=%h%x09%s"); err == nil {
+		h.Commit, h.Subject, _ = strings.Cut(out, "\t")
+	}
+	up, err := git(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if err != nil || up == "" {
+		return h
+	}
+	h.Upstream = up
+	if out, err := git(dir, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"); err == nil {
+		if f := strings.Fields(out); len(f) == 2 {
+			h.Ahead, _ = strconv.Atoi(f[0])
+			h.Behind, _ = strconv.Atoi(f[1])
+		}
+	}
+	return h
+}
+
 func parseNumstat(s string) (added, deleted int) {
 	for _, l := range strings.Split(s, "\n") {
 		f := strings.Fields(l)

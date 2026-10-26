@@ -200,20 +200,10 @@ func (h orchHost) ResumeAgent(slug, id string) error {
 // for itself, and which conversations could be picked back up.
 func (h orchHost) Detail(slug string) orchestrator.Detail {
 	var d orchestrator.Detail
-	t, err := h.s.st.Get(slug)
-	if err != nil {
+	if _, err := h.s.st.Get(slug); err != nil {
 		return d
 	}
-	base := map[string]string{}
-	for _, r := range t.Repos {
-		base[r.Name] = r.BaseRef
-	}
-	for _, st := range workspace.Stats(h.s.cfg, slug, base) {
-		d.Repos = append(d.Repos, orchestrator.RepoState{
-			Name: st.Repo, Branch: st.Branch, Ahead: st.Ahead,
-			Dirty: st.DirtyFile, Added: st.Added, Deleted: st.Deleted,
-		})
-	}
+	d.Repos = h.GitState(slug)
 	// Only worth listing when there is nothing running: while an agent is live,
 	// resuming is not an option and the list is noise in every prompt.
 	if h.s.terms.AgentSession(slug) != nil {
@@ -228,6 +218,34 @@ func (h orchHost) Detail(slug string) orchestrator.Detail {
 		})
 	}
 	return d
+}
+
+// GitState reads where each worktree of the task stands, with the same git
+// commands the board's own view runs. It only reads.
+func (h orchHost) GitState(slug string) []orchestrator.RepoState {
+	t, err := h.s.st.Get(slug)
+	if err != nil {
+		return nil
+	}
+	base := map[string]string{}
+	for _, r := range t.Repos {
+		base[r.Name] = r.BaseRef
+	}
+	var out []orchestrator.RepoState
+	for _, st := range workspace.Stats(h.s.cfg, slug, base) {
+		head := workspace.HeadOf(h.s.cfg.RepoDir(slug, st.Repo))
+		rs := orchestrator.RepoState{
+			Name: st.Repo, Branch: st.Branch, Ahead: st.Ahead,
+			Dirty: st.DirtyFile, Added: st.Added, Deleted: st.Deleted,
+			Head: head.Commit, Subject: head.Subject,
+			Upstream: head.Upstream, Unpushed: head.Ahead, Behind: head.Behind,
+		}
+		for _, c := range st.Changed {
+			rs.Changes = append(rs.Changes, strings.TrimSpace(c.Status)+" "+c.Path)
+		}
+		out = append(out, rs)
+	}
+	return out
 }
 
 func (h orchHost) Send(slug, text string) error {
@@ -422,13 +440,17 @@ func (h orchHost) Observe(slug, cursor string) (orchestrator.Observation, error)
 				// stopped: a pending call in a working agent is just a tool
 				// that has not finished yet. Only calls made since this
 				// process started can be its dialog.
-				tool, err := agent.Pending(kind, h.s.cfg.Home, dir, id, sess.Created)
+				call, err := agent.PendingCall(kind, h.s.cfg.Home, dir, id, sess.Created)
+				tool := call.Name
 				if err != nil {
 					// Not knowing is not the same as knowing it is clear:
 					// typing at a dialog approves whatever it is showing.
 					tool = "a tool (its transcript could not be read: " + err.Error() + ")"
 				}
 				ob.Blocked = tool
+				if qs := call.Questions(); tool == agent.QuestionTool && len(qs) > 0 {
+					ob.Asked = &orchestrator.AgentQuestion{ID: call.ID, Time: call.Time, Questions: qs}
+				}
 				if tool == "" {
 					// An error here only costs the automatic "continue"; the
 					// look still reports the agent as waiting.

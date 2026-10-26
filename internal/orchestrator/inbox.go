@@ -309,7 +309,13 @@ func (o *Orchestrator) drain() {
 	t.Status, t.Error, t.Updated = ThreadRouting, "", time.Now()
 	// The recap is what came before this message, so it is taken before the
 	// message joins the trail.
-	lead := inboxLead(*t, it, o.trailLocked(t.ID, 12))
+	var questions []string // its tasks whose agent waits on a question passed on
+	for _, s := range t.open() {
+		if _, ok := o.st.Asked[s]; ok {
+			questions = append(questions, s)
+		}
+	}
+	lead := inboxLead(*t, it, o.trailLocked(t.ID, 12), questions)
 	if it.Attempts == 1 {
 		// On a retry the message is already in the trail.
 		o.addTo(RoleUser, "", it.Text, t.ID)
@@ -383,7 +389,9 @@ func (o *Orchestrator) requeue(it inboxItem, why string) {
 }
 
 // inboxLead is what an inbox turn opens with, in place of "THE USER SAYS".
-func inboxLead(t Thread, it inboxItem, trail []Message) string {
+// questions are the thread's tasks whose agent waits on a question that was
+// passed on to it.
+func inboxLead(t Thread, it inboxItem, trail []Message, questions []string) string {
 	var b strings.Builder
 	if !it.Reply {
 		fmt.Fprintf(&b, "A MESSAGE ARRIVED IN THE INBOX — thread #%d, from %s.\n", t.ID, t.Source)
@@ -418,6 +426,12 @@ Say in a line or two what you did with it.
 		}
 	}
 	b.WriteString("\nTHE REPLY:\n" + it.Text + "\n\n")
+	for _, s := range questions {
+		b.WriteString(s + "'s agent is waiting on the multiple-choice question passed on in " +
+			"this thread. Unless the reply is plainly about something else, it is the answer: " +
+			"pass it on with send_to_agent to " + s + ", in the sender's own words — FrIDE closes " +
+			"the question and types it in as the answer.\n\n")
+	}
 	b.WriteString("Act on it as you would on the user speaking in the chat. If it is " +
 		"meant for the thread's task, pass it to that task's agent. Say in a line or two " +
 		"what you did.\n\n")

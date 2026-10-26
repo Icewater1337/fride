@@ -198,6 +198,12 @@ agent's question turns on what the code actually says — reading the file beats
 guessing from a paraphrase, and beats asking the user something the repository
 already answers.
 
+A task's git state is given to you rather than read: each worktree's branch,
+last commit, upstream, unpushed commits and uncommitted files, under TASKS when
+someone asks you something, and in the observation on a scheduled look. A
+worktree's git data lives outside the workspaces, so Read cannot open it, and
+there is no need to ask a task's agent to run git status for you.
+
 Two rules about reading. Always start from a path you were given; the state
 below lists every task and its repositories, so you never need to search for
 them. And never glob broadly (no "*" or "**" at the root) — these are full
