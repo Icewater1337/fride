@@ -82,6 +82,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		all = append(all, ob)
 	}
 	o.deliverHeld(all)
+	o.relayQuestions(all)
 	o.recoverFailed(all)
 	o.heartbeat(all, shown)
 	obs := all[:0:0]
@@ -150,6 +151,7 @@ func (o *Orchestrator) dropWatch(slug string, err error) {
 			" — "+err.Error(), h.Threads...)
 	}
 	o.finish(slug, err)
+	delete(o.st.Asked, slug)
 	if contains(o.st.Watching, slug) {
 		out := []string{}
 		for _, s := range o.st.Watching {
@@ -243,6 +245,17 @@ func (o *Orchestrator) prompt(lead string, obs []Observation) string {
 	if len(tasks) == 0 {
 		b.WriteString("  (none yet)\n")
 	}
+	// A turn somebody asked for is often about where a task stands — "check
+	// the branch", "is it pushed?" — and the brain cannot run git, nor read a
+	// worktree's git data, which lives outside the workspaces. So it is given
+	// that, read-only, for the tasks the turn may be about; a scheduled look
+	// has it in its observations' detail instead.
+	git := map[string][]RepoState{}
+	if lead != "" {
+		for _, slug := range gitTasks(tasks, inbox) {
+			git[slug] = o.host.GitState(slug)
+		}
+	}
 	for _, t := range tasks {
 		b.WriteString("  " + t.Slug + " — " + t.Name + " [" + t.Status + "]")
 		if t.Branch != "" {
@@ -259,6 +272,12 @@ func (o *Orchestrator) prompt(lead string, obs []Observation) string {
 			b.WriteString(" (inbox " + strings.Join(ids, ", ") + ")")
 		}
 		b.WriteString("\n")
+		for _, r := range git[t.Slug] {
+			b.WriteString("    " + renderRepo(r) + "\n")
+		}
+	}
+	if lead != "" && len(tasks) > maxGitTasks {
+		b.WriteString(fmt.Sprintf("  (git state shown for %d of the %d tasks)\n", maxGitTasks, len(tasks)))
 	}
 
 	if len(threads) > 0 {
@@ -297,11 +316,24 @@ func renderObservation(ob Observation) string {
 			"the tasks after this one the question.\n", round(ob.Idle)))
 	case ob.Blocked == agent.QuestionTool:
 		b.WriteString(fmt.Sprintf("The agent is ASKING A MULTIPLE-CHOICE QUESTION and waits for "+
-			"the answer (quiet for %s); its options are in its last turn or on its screen. "+
-			"send_to_agent answers it: FrIDE closes the dialog and types your text as the answer, "+
-			"so say the chosen option by its label, with anything else that was said about it. "+
-			"Pass on the user's answer; answer it yourself only where you would decide it anyway.\n",
-			round(ob.Idle)))
+			"the answer (quiet for %s)", round(ob.Idle)))
+		if q := ob.Asked; q != nil {
+			b.WriteString(". It asks:\n")
+			for _, l := range strings.Split(strings.TrimRight(renderQuestions(q.Questions), "\n"), "\n") {
+				b.WriteString("  | " + l + "\n")
+			}
+		} else {
+			b.WriteString("; its options are in its last turn or on its screen.\n")
+		}
+		b.WriteString("send_to_agent answers it: FrIDE closes the dialog and types your text as the " +
+			"answer, so say the chosen option by its label, with anything else that was said about " +
+			"it. Pass on the user's answer; answer it yourself only where you would decide it " +
+			"anyway. If you put it to the user, quote it with its options.\n")
+		if q := ob.Asked; q != nil && len(q.Threads) > 0 {
+			b.WriteString("FrIDE has passed this question on, word for word with its options, to " +
+				threadList(q.Threads) + ", which now wait on their sender's reply: do not ask it " +
+				"there again. The reply comes to you in the thread; pass it on with send_to_agent.\n")
+		}
 	case ob.Blocked != "":
 		b.WriteString(fmt.Sprintf("The agent has STOPPED ON A CONFIRMATION: it asked to "+
 			"use %s and is showing a permission dialog (quiet for %s). Nothing can be "+
@@ -357,9 +389,7 @@ func renderObservation(ob Observation) string {
 	}
 	if d := ob.Detail; d != nil {
 		for _, r := range d.Repos {
-			b.WriteString(fmt.Sprintf("  %s on %s: %d commit(s) since base, "+
-				"%d uncommitted file(s), +%d/-%d lines\n",
-				r.Name, r.Branch, r.Ahead, r.Dirty, r.Added, r.Deleted))
+			b.WriteString("  " + renderRepo(r) + "\n")
 		}
 		if len(d.Resumable) > 0 {
 			b.WriteString("Conversations you could reopen with resume_agent:\n")
@@ -374,6 +404,72 @@ func renderObservation(ob Observation) string {
 		}
 	}
 	return b.String()
+}
+
+// maxGitTasks bounds the tasks a turn is given the git state of: a handful of
+// git commands each, and a line per repository in the prompt.
+const maxGitTasks = 12
+
+// gitTasks are the tasks a turn is given the git state of: those inbox threads
+// follow first, since a message from outside is about one of them, then the
+// rest in their order, up to maxGitTasks.
+func gitTasks(tasks []TaskInfo, inbox map[string][]string) []string {
+	var out []string
+	for _, t := range tasks {
+		if len(inbox[t.Slug]) > 0 {
+			out = append(out, t.Slug)
+		}
+	}
+	for _, t := range tasks {
+		if len(inbox[t.Slug]) == 0 {
+			out = append(out, t.Slug)
+		}
+	}
+	if len(out) > maxGitTasks {
+		out = out[:maxGitTasks]
+	}
+	return out
+}
+
+// renderRepo is one worktree's git state, on one line.
+func renderRepo(r RepoState) string {
+	var b strings.Builder
+	b.WriteString(r.Name + " on " + r.Branch)
+	if r.Head != "" {
+		b.WriteString(" at " + r.Head + " \"" + clip(r.Subject, 120) + "\"")
+	}
+	fmt.Fprintf(&b, ": %d commit(s) since base, %d uncommitted file(s)", r.Ahead, r.Dirty)
+	if len(r.Changes) > 0 {
+		shown := r.Changes
+		if len(shown) > 8 {
+			shown = shown[:8]
+		}
+		b.WriteString(" (" + strings.Join(shown, ", "))
+		if n := len(r.Changes) - len(shown); n > 0 {
+			fmt.Fprintf(&b, ", %d more", n)
+		}
+		b.WriteString(")")
+	}
+	fmt.Fprintf(&b, ", +%d/-%d lines", r.Added, r.Deleted)
+	switch {
+	case r.Head == "":
+		// Nothing could be read of where it stands, so nothing is said.
+	case r.Upstream == "":
+		b.WriteString("; tracks no upstream branch: not pushed")
+	default:
+		fmt.Fprintf(&b, "; tracks %s, %d commit(s) unpushed, %d behind (as of its last fetch)",
+			r.Upstream, r.Unpushed, r.Behind)
+	}
+	return b.String()
+}
+
+// threadList names inbox threads the way the prompt does: "inbox #3, #7".
+func threadList(ids []int) string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = fmt.Sprintf("#%d", id)
+	}
+	return "inbox " + strings.Join(out, ", ")
 }
 
 func clip(s string, n int) string {

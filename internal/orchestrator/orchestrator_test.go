@@ -27,6 +27,7 @@ type fakeHost struct {
 	// Observe reports what follows the cursor the way agent.Tail does.
 	turns     map[string][]agent.Turn
 	detail    map[string]Detail
+	git       map[string][]RepoState
 	sendErr   error
 	resumeErr error
 	notes     []Note
@@ -85,6 +86,12 @@ func (f *fakeHost) Detail(slug string) Detail {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.detail[slug]
+}
+
+func (f *fakeHost) GitState(slug string) []RepoState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.git[slug]
 }
 
 func (f *fakeHost) Send(slug, text string) error {

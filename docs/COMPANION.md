@@ -107,7 +107,9 @@ GET /api/companion/threads/<thread_id>
   "status": "queued|routing|active|needs_reply|answered|done|closed|failed",
   "task_id": "proj-42",                the thread's latest task, "" for none
   "tasks": [ <task>, … ],              every task it went to, as below
-  "question": "…",                     what it asks, when status is needs_reply
+  "question": "…",                     what it asks, when status is needs_reply: the
+                                       orchestrator's question, or a task agent's own
+                                       multiple-choice question with its options
   "error": "…",                        why the last attempt to read it failed
   "position": 0,                       its place in the queue, 0 when not waiting
   "messages": [{"role": "user|orchestrator|event|error", "text": "…", "task_id": "…", "ts": "…"}]
@@ -226,7 +228,7 @@ X-Fride-Signature: sha256=<hex>
 |---|---|
 | `started` | the thread was handed to a task; once per thread |
 | `update` | any other news: an instruction reached the agent, the agent reported, an attempt to read the message failed and will be retried |
-| `question` | the orchestrator asks its sender something and the thread waits (`needs_reply`); answer with `/reply`. News while it waits, such as a progress note, is an `update` whose `status` is still `needs_reply` |
+| `question` | the orchestrator asks its sender something, or passes on the multiple-choice question a task's agent stopped on (with its options), and the thread waits (`needs_reply`); answer with `/reply`. News while it waits, such as a progress note, is an `update` whose `status` is still `needs_reply` |
 | `done` | the thread is finished: answered directly, or every task it went to was closed |
 | `failed` | the message could not be read, even after retrying; a reply tries again |
 

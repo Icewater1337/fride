@@ -101,6 +101,9 @@ type state struct {
 	Held      map[string]held `json:"held,omitempty"`
 	// Noted is, per thread, the last message its sender has been told about.
 	Noted map[int]int `json:"noted,omitempty"`
+	// Asked is, per task, the agent's question last passed on to the threads
+	// following it (ask.go).
+	Asked map[string]asked `json:"asked,omitempty"`
 }
 
 // origin is who a brain turn is for. It decides whether the turn's actions

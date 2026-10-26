@@ -74,14 +74,29 @@ type Conversation struct {
 
 // RepoState is what one repository of a task has to show for itself. It is the
 // answer to "has this agent actually done anything", which is otherwise only
-// available by running git — so it is handed over rather than dug for.
+// available by running git — so it is handed over rather than dug for. The
+// brain cannot dig for it anyway: a worktree's git data lives in its main
+// checkout, outside the workspaces root its read tools are confined to, and
+// asking the task's agent to run `git status` for it was the only way left.
 type RepoState struct {
-	Name    string `json:"name"`
-	Branch  string `json:"branch,omitempty"`
-	Ahead   int    `json:"ahead"`
-	Dirty   int    `json:"dirty"`
-	Added   int    `json:"added"`
-	Deleted int    `json:"deleted"`
+	Name   string `json:"name"`
+	Branch string `json:"branch,omitempty"`
+	// Ahead counts the commits since the task's base.
+	Ahead   int `json:"ahead"`
+	Dirty   int `json:"dirty"`
+	Added   int `json:"added"`
+	Deleted int `json:"deleted"`
+	// Head is the commit checked out, and Subject its first line.
+	Head    string `json:"head,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// Upstream is the branch it tracks, "" when it tracks none — it was never
+	// pushed. Unpushed and Behind count the commits on either side, as of the
+	// worktree's last fetch.
+	Upstream string `json:"upstream,omitempty"`
+	Unpushed int    `json:"unpushed,omitempty"`
+	Behind   int    `json:"behind,omitempty"`
+	// Changes are its uncommitted files, as `git status --short` lines.
+	Changes []string `json:"changes,omitempty"`
 }
 
 // Detail is the expensive half of looking at a task: several git commands per
@@ -98,6 +113,18 @@ type Detail struct {
 // BlockedTrust is Observation.Blocked while a Claude Code agent waits at its
 // folder-trust question rather than on a tool.
 const BlockedTrust = "Claude Code's folder-trust question"
+
+// AgentQuestion is the multiple-choice question an agent waits on.
+type AgentQuestion struct {
+	// ID is the tool call's, which tells one question from the next, and Time
+	// is when the agent asked it.
+	ID        string           `json:"id"`
+	Time      time.Time        `json:"time"`
+	Questions []agent.Question `json:"questions"`
+	// Threads are the inbox threads it has been passed on to. Set by the
+	// monitor (ask.go), not the host.
+	Threads []int `json:"threads,omitempty"`
+}
 
 // Observation is one look at a supervised task: what its agent has said since
 // the last look, and whether it is waiting for anybody.
@@ -125,6 +152,10 @@ type Observation struct {
 	// Nothing may be typed at it in that state — see agent.Pending. It is
 	// BlockedTrust while a fresh agent waits at its folder-trust question.
 	Blocked string `json:"blocked,omitempty"`
+	// Asked is, while Blocked is agent.QuestionTool, what the question asks:
+	// its text and its options, which the agent's turns do not carry. Nil when
+	// the call could not be read as a question.
+	Asked *AgentQuestion `json:"asked,omitempty"`
 	// Failed is the API error the agent's latest turn ended on, nil when it
 	// ended any other way. Only looked for while it is waiting and not
 	// blocked: then it is sitting at its prompt with its work cut off, which
@@ -170,6 +201,10 @@ type Host interface {
 	Observe(slug, cursor string) (Observation, error)
 	// Detail is the expensive half, fetched only for a turn being taken.
 	Detail(slug string) Detail
+	// GitState is where each of the task's worktrees stands: branch, last
+	// commit, upstream, uncommitted files. Read-only, and the part of Detail
+	// a turn without observations is given too.
+	GitState(slug string) []RepoState
 	// Notify tells whoever sent an inbox message that its thread has news.
 	// What that means — a command, nothing at all — is the host's to decide.
 	Notify(Note) error
