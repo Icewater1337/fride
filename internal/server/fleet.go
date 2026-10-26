@@ -20,7 +20,7 @@ import (
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
 	"github.com/Icewater1337/fride/internal/task"
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 )
 
 // fleetState is this server's membership in the user's fleet of computers.
@@ -325,7 +325,8 @@ func (s *Server) handleNodeProxy(w http.ResponseWriter, r *http.Request) {
 	rp.ServeHTTP(w, r)
 }
 
-// proxyTermWS connects the browser to a terminal of another computer.
+// proxyTermWS connects the browser to a terminal of another computer. The
+// caller, handleTermWS, has checked the browser's Origin and Host.
 func (s *Server) proxyTermWS(w http.ResponseWriter, r *http.Request, node string) {
 	p, err := s.fleet.peer(node)
 	if err != nil {
@@ -334,28 +335,41 @@ func (s *Server) proxyTermWS(w http.ResponseWriter, r *http.Request, node string
 	}
 	q := r.URL.Query()
 	q.Del("node")
-	d := websocket.Dialer{NetDialContext: s.fleet.net.DialContext, HandshakeTimeout: 10 * time.Second}
-	remote, _, err := d.Dial("ws://"+p.Addr+"/ws/term?"+q.Encode(), http.Header{"Host": {fleet.Host}})
+	// As in handleTermWS, the request's context is the sockets' lifetime.
+	ctx := r.Context()
+	// The timeout bounds the handshake only; the connection outlives it.
+	// The stream client dials over the fleet network, and its transport closes
+	// the connection of a refused handshake once it has been idle a while. One
+	// made just for this socket would not: it has no idle timeout and is never
+	// used again. Dial sends no Origin, which the other node would refuse.
+	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	remote, _, err := websocket.Dial(dctx, "ws://"+p.Addr+"/ws/term?"+q.Encode(), &websocket.DialOptions{
+		HTTPClient: s.fleet.stream,
+		Host:       fleet.Host,
+	})
+	cancel()
 	if err != nil {
 		http.Error(w, node+": "+err.Error(), 502)
 		return
 	}
-	defer remote.Close()
-	up := s.upgrader()
-	conn, err := up.Upgrade(w, r, nil)
+	remote.SetReadLimit(-1) // the other side's scrollback comes as one message
+	// One side going away ends the relay; closing with a handshake tells the
+	// other, and so also ends the relay goroutine still reading it.
+	defer remote.Close(websocket.StatusNormalClosure, "")
+	conn, err := acceptWS(w, r)
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer conn.Close(websocket.StatusNormalClosure, "")
 	done := make(chan struct{}, 2)
 	relay := func(from, to *websocket.Conn) {
 		defer func() { done <- struct{}{} }()
 		for {
-			t, msg, err := from.ReadMessage()
+			t, msg, err := from.Read(ctx)
 			if err != nil {
 				return
 			}
-			if err := to.WriteMessage(t, msg); err != nil {
+			if err := to.Write(ctx, t, msg); err != nil {
 				return
 			}
 		}

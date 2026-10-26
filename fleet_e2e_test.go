@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 // TestFleetEndToEnd runs two FrIDE computers — alpha and beta — as two real
@@ -197,20 +199,37 @@ func TestFleetEndToEnd(t *testing.T) {
 		ID string `json:"id"`
 	}
 	call(alpha, "POST", "/api/node/beta/tasks/proj-7-travel/terminals", map[string]string{"kind": "shell"}, &sess)
-	hdr := http.Header{"Origin": {fmt.Sprintf("http://127.0.0.1:%d", alpha.port)}}
-	ws, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://127.0.0.1:%d/ws/term?node=beta&id=%s", alpha.port, sess.ID), hdr)
-	if err != nil {
-		t.Fatalf("terminal through alpha: %v%s", err, logs())
-	}
-	defer ws.Close()
-	_ = ws.WriteJSON(map[string]string{"type": "data", "data": "echo fride-$((40+2))\n"})
-	var seen strings.Builder
-	_ = ws.SetReadDeadline(time.Now().Add(15 * time.Second))
-	for !strings.Contains(seen.String(), "fride-42") {
-		_, msg, err := ws.ReadMessage()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	open := func() *websocket.Conn {
+		hdr := http.Header{"Origin": {fmt.Sprintf("http://127.0.0.1:%d", alpha.port)}}
+		ws, _, err := websocket.Dial(ctx, fmt.Sprintf("ws://127.0.0.1:%d/ws/term?node=beta&id=%s", alpha.port, sess.ID),
+			&websocket.DialOptions{HTTPHeader: hdr})
 		if err != nil {
-			t.Fatalf("terminal output never showed the command's result: %v\n%q", err, seen.String())
+			t.Fatalf("terminal through alpha: %v%s", err, logs())
 		}
-		seen.Write(msg)
+		t.Cleanup(func() { _ = ws.CloseNow() })
+		ws.SetReadLimit(-1) // a browser takes messages of any size
+		return ws
 	}
+	readUntil := func(ws *websocket.Conn, want string) {
+		var seen strings.Builder
+		for !strings.Contains(seen.String(), want) {
+			_, msg, err := ws.Read(ctx)
+			if err != nil {
+				t.Fatalf("terminal output never showed %q: %v\n%q", want, err, seen.String())
+			}
+			seen.Write(msg)
+		}
+	}
+	ws := open()
+	_ = wsjson.Write(ctx, ws, map[string]string{"type": "data", "data": "echo fride-$((40+2))\n"})
+	readUntil(ws, "fride-42")
+
+	// A terminal opened again first sends its scrollback, as one message,
+	// here over the 32 KiB a WebSocket library reads by default. The relay on
+	// alpha has to pass it on.
+	_ = wsjson.Write(ctx, ws, map[string]string{"type": "data", "data": "head -c 40000 /dev/zero | tr '\\0' x; echo big-$((1+1))\n"})
+	readUntil(ws, "big-2")
+	readUntil(open(), "big-2")
 }

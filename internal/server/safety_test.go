@@ -229,7 +229,7 @@ func TestTerminalOriginIsCheckedForFleetCallers(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(fleet.Guard(n, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.upgrader().CheckOrigin(r) {
+		if s.wsAllowed(r) {
 			w.WriteHeader(200)
 		} else {
 			w.WriteHeader(403)
