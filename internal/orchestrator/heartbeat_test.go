@@ -74,3 +74,71 @@ func TestNoProgressNoteWhenNotDue(t *testing.T) {
 		t.Fatalf("notes = %+v", got)
 	}
 }
+
+// A stall is told once, not on every heartbeat it lasts — an agent that never
+// went back to its prompt was reported "stuck" every half hour all night — and
+// told again only once the agent has moved and stalled anew.
+func TestAStallIsReportedOnce(t *testing.T) {
+	o := newTestOrch(t, newFakeHost())
+	following(o, time.Hour)
+	stalledAt := func(at time.Time) Observation {
+		return Observation{Task: TaskInfo{Slug: "t1"}, Running: true,
+			Turns: []agent.Turn{{UUID: at.String(), Role: "assistant", Text: "Done.", Time: at}}}
+	}
+	// Each look comes a heartbeat gap after the last: the thread has heard
+	// nothing for long, every time.
+	look := func(ob Observation) {
+		o.mu.Lock()
+		for i := range o.st.Messages {
+			o.st.Messages[i].Time = o.st.Messages[i].Time.Add(-2 * heartbeatEvery)
+		}
+		o.mu.Unlock()
+		o.heartbeat([]Observation{ob})
+	}
+	first := stalledAt(time.Now().Add(-stallAfter - time.Minute))
+	for i := 0; i < 3; i++ {
+		look(first)
+	}
+	if n := len(heartbeats(o)); n != 1 {
+		t.Fatalf("%d notes for one stall, want 1", n)
+	}
+	look(stalledAt(time.Now().Add(-stallAfter / 2))) // it moved
+	o.mu.Lock()
+	ts := o.mem.tasks["t1"]
+	ts.lastActive = time.Now().Add(-stallAfter - time.Second) // it has stalled again since
+	o.mem.tasks["t1"] = ts
+	o.mu.Unlock()
+	look(Observation{Task: TaskInfo{Slug: "t1"}, Running: true})
+	stuck := 0
+	for _, m := range heartbeats(o) {
+		if strings.Contains(m.Text, "may be stuck") {
+			stuck++
+		}
+	}
+	if stuck != 2 {
+		t.Fatalf("%d stall notes, want 2: one per stall; notes = %+v", stuck, heartbeats(o))
+	}
+}
+
+// The brain is shown a stall once, so it can wind a finished task down or
+// nudge a hung one, and the stall is marked on the observation it is shown.
+func TestAStallIsWorthOneTurn(t *testing.T) {
+	o := newTestOrch(t, newFakeHost())
+	old := Observation{Task: TaskInfo{Slug: "t1"}, Running: true,
+		Turns: []agent.Turn{{UUID: "a1", Role: "assistant", Text: "Merged.",
+			Time: time.Now().Add(-stallAfter - time.Minute)}}}
+	obs := []Observation{old}
+	o.heartbeat(obs)
+	if obs[0].Stalled == 0 || !strings.Contains(renderObservation(obs[0]), "NOT MOVED") {
+		t.Fatalf("stall not marked: %+v", obs[0])
+	}
+	obs[0].Turns = nil // seen
+	m, consult := decide(o.mem, obs, time.Now())
+	if !consult {
+		t.Fatal("a fresh stall was not worth a turn")
+	}
+	m = m.saw(obs, time.Now())
+	if _, consult = decide(m, obs, time.Now()); consult {
+		t.Fatal("the same stall was worth a second turn")
+	}
+}

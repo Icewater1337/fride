@@ -316,6 +316,14 @@ func renderObservation(ob Observation) string {
 	case ob.Waiting:
 		b.WriteString(fmt.Sprintf("The agent is WAITING at its prompt (quiet for %s).\n",
 			round(ob.Idle)))
+	case ob.Stalled > 0:
+		b.WriteString(fmt.Sprintf("The agent is still running, but its conversation has NOT MOVED "+
+			"for %s: it is hung, stuck on a long command, or finished without going back to its "+
+			"prompt. If its work is done (its pull request merged, its issue closed, nothing left "+
+			"of its brief), move the task on with set_status done and report it done. Otherwise "+
+			"send it one instruction to finish or to say what it is stuck on; if it was already "+
+			"sent one and has not moved, escalate instead. You are shown this once per stall.\n",
+			round(ob.Stalled)))
 	default:
 		b.WriteString("The agent is working.\n")
 	}

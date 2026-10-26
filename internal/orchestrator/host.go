@@ -112,6 +112,10 @@ type Observation struct {
 	// Idle is how long it has been quiet, which separates "just finished" from
 	// "has been sitting there for ten minutes".
 	Idle time.Duration `json:"idle"`
+	// Stalled is how long a running agent, not at its prompt, has written no
+	// turn, once that is past stallAfter; zero otherwise. Set by the monitor
+	// (heartbeat.go), not the host.
+	Stalled time.Duration `json:"stalled,omitempty"`
 	// Blocked names a tool the agent asked to use and has not had answered,
 	// meaning it has stopped on a confirmation dialog rather than at its prompt.
 	// Nothing may be typed at it in that state — see agent.Pending. It is

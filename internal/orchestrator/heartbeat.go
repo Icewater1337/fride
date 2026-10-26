@@ -14,7 +14,11 @@ import (
 // to tell "working" from "stuck" was to ask. So the monitor writes a short note
 // itself when a thread following a working agent has had no news for
 // heartbeatEvery: what the agent last said, and how long ago. An agent whose
-// transcript has not moved for stallAfter is said to be possibly stuck.
+// transcript has not moved for stallAfter is said to be possibly stuck — once
+// per stall, not on every heartbeat after it: an agent that finished without
+// going back to its prompt stays "stalled" all night, and saying so every half
+// hour told nobody anything new. The stall is also put on its observation, so
+// the brain gets one look at it and can wind the task down or nudge it.
 
 const (
 	heartbeatEvery = 15 * time.Minute
@@ -22,13 +26,13 @@ const (
 )
 
 // heartbeat writes a progress note for every working agent whose threads have
-// heard nothing for heartbeatEvery.
+// heard nothing for heartbeatEvery, and marks the stalled ones in obs.
 func (o *Orchestrator) heartbeat(obs []Observation) {
 	now := time.Now()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	changed := false
-	for _, ob := range obs {
+	for i, ob := range obs {
 		slug := ob.Task.Slug
 		ts := o.mem.tasks[slug]
 		// What it last said, and when it last did anything, from whatever this
@@ -46,9 +50,18 @@ func (o *Orchestrator) heartbeat(obs []Observation) {
 		if ts.lastActive.IsZero() {
 			ts.lastActive = now // the first look: count from here
 		}
+		quiet := now.Sub(ts.lastActive)
+		stalled := ob.Running && !ob.Waiting && ob.Blocked == "" && quiet > stallAfter
+		if stalled {
+			obs[i].Stalled = quiet
+		}
 		o.mem.tasks[slug] = ts
 		threads := o.threadsFor(slug)
 		if len(threads) == 0 || !ob.Running || ob.Waiting {
+			continue
+		}
+		// This stall has been reported; the next note is for when it moves.
+		if stalled && ts.stallNoted.Equal(ts.lastActive) {
 			continue
 		}
 		var last time.Time
@@ -67,11 +80,12 @@ func (o *Orchestrator) heartbeat(obs []Observation) {
 		if now.Sub(last) < heartbeatEvery {
 			continue
 		}
-		quiet := now.Sub(ts.lastActive)
 		var text string
-		if quiet > stallAfter {
+		if stalled {
 			text = fmt.Sprintf("%s's agent is still running, but its conversation has not moved for "+
 				"%s: it may be stuck on a long command, or hung. ", slug, round(quiet))
+			ts.stallNoted = ts.lastActive
+			o.mem.tasks[slug] = ts
 		} else {
 			text = fmt.Sprintf("%s's agent is still working (last active %s ago). ", slug, round(quiet))
 		}
