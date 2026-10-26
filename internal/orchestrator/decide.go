@@ -75,6 +75,11 @@ type taskState struct {
 	// and the text of the latest one that said something.
 	lastActive time.Time
 	lastWords  string
+	// stallNoted and stallShown are the lastActive of the stall last reported
+	// to its threads and last shown to the brain: a stall is told once, and
+	// again only after the agent has moved and stalled anew.
+	stallNoted time.Time
+	stallShown time.Time
 	failedSeen string
 	recoverAt  time.Time
 }
@@ -174,6 +179,12 @@ func (m memory) worthATurn(obs []Observation, now time.Time) bool {
 				now.Sub(ts.lastSend) > sendCooldown {
 				return true
 			}
+		case ob.Stalled > 0:
+			// Running but not moving: worth one look, so the brain can wind
+			// down a task whose work is done or nudge one that is hung.
+			if !ts.stallShown.Equal(ts.lastActive) {
+				return true
+			}
 		case len(ob.Turns) > 0:
 			progress = true
 		}
@@ -196,6 +207,9 @@ func (m memory) saw(obs []Observation, now time.Time) memory {
 		ts.shown = &g
 		if !ob.Running {
 			ts.reportedGone = true
+		}
+		if ob.Stalled > 0 {
+			ts.stallShown = ts.lastActive
 		}
 		next.tasks[ob.Task.Slug] = ts
 	}
