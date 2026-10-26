@@ -18,7 +18,10 @@ import (
 // per stall, not on every heartbeat after it: an agent that finished without
 // going back to its prompt stays "stalled" all night, and saying so every half
 // hour told nobody anything new. The stall is also put on its observation, so
-// the brain gets one look at it and can wind the task down or nudge it.
+// the brain gets one look at it and can wind the task down or nudge it — and
+// it gets that look first: a sender told "may be stuck" and then, a minute
+// later, "done, closed" was told the wrong thing first. The note waits for the
+// brain's look, unless the brain cannot look (see brainWillLook).
 
 const (
 	heartbeatEvery = 15 * time.Minute
@@ -26,8 +29,9 @@ const (
 )
 
 // heartbeat writes a progress note for every working agent whose threads have
-// heard nothing for heartbeatEvery, and marks the stalled ones in obs.
-func (o *Orchestrator) heartbeat(obs []Observation) {
+// heard nothing for heartbeatEvery, and marks the stalled ones in obs. shown
+// are the tasks this round may show the brain.
+func (o *Orchestrator) heartbeat(obs []Observation, shown []string) {
 	now := time.Now()
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -53,7 +57,7 @@ func (o *Orchestrator) heartbeat(obs []Observation) {
 		quiet := now.Sub(ts.lastActive)
 		stalled := ob.Running && !ob.Waiting && ob.Blocked == "" && quiet > stallAfter
 		if stalled {
-			obs[i].Stalled = quiet
+			obs[i].Stalled, obs[i].LastWords = quiet, ts.lastWords
 		}
 		o.mem.tasks[slug] = ts
 		threads := o.threadsFor(slug)
@@ -62,6 +66,10 @@ func (o *Orchestrator) heartbeat(obs []Observation) {
 		}
 		// This stall has been reported; the next note is for when it moves.
 		if stalled && ts.stallNoted.Equal(ts.lastActive) {
+			continue
+		}
+		// The brain has not had its look at this stall yet, and is about to.
+		if stalled && !ts.stallShown.Equal(ts.lastActive) && o.brainWillLook(slug, shown, now) {
 			continue
 		}
 		var last time.Time
@@ -98,6 +106,13 @@ func (o *Orchestrator) heartbeat(obs []Observation) {
 	if changed {
 		o.save()
 	}
+}
+
+// brainWillLook is whether a stall of this task can be shown to the brain this
+// round: the task is one it supervises, and the loop is not held back by a
+// question to the user or by failed turns. Called with the lock held.
+func (o *Orchestrator) brainWillLook(slug string, shown []string, now time.Time) bool {
+	return contains(shown, slug) && !o.mem.awaiting && !now.Before(o.mem.retryAt)
 }
 
 func overlaps(a, b []int) bool {

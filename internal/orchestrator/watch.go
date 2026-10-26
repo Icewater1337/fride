@@ -83,7 +83,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	}
 	o.deliverHeld(all)
 	o.recoverFailed(all)
-	o.heartbeat(all)
+	o.heartbeat(all, shown)
 	obs := all[:0:0]
 	for _, ob := range all {
 		if contains(shown, ob.Task.Slug) {
@@ -322,8 +322,12 @@ func renderObservation(ob Observation) string {
 			"prompt. If its work is done (its pull request merged, its issue closed, nothing left "+
 			"of its brief), move the task on with set_status done and report it done. Otherwise "+
 			"send it one instruction to finish or to say what it is stuck on; if it was already "+
-			"sent one and has not moved, escalate instead. You are shown this once per stall.\n",
+			"sent one and has not moved, escalate instead. You are shown this once per stall, and "+
+			"its threads hear of it after you: report what you did about it.\n",
 			round(ob.Stalled)))
+		if ob.LastWords != "" {
+			b.WriteString("Its last words: " + clip(ob.LastWords, 1200) + "\n")
+		}
 	default:
 		b.WriteString("The agent is working.\n")
 	}

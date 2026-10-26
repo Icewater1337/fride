@@ -111,7 +111,11 @@ back with `fride in reply`.
 - **Long work sends progress notes.** When a thread's agent has been working
   for 15 minutes with no news in the thread, the sender gets a short note:
   what the agent last said, and how long ago. An agent whose conversation has
-  not moved for 20 minutes is reported as possibly stuck.
+  not moved for 20 minutes is stalled. The orchestrator looks at a stall
+  first: a task whose work is done is closed and reported done, a hung agent
+  is told once to finish or say what it is stuck on. The sender is told it may
+  be stuck once per stall, after that look, and again only if it moves and
+  stalls anew.
 - **Questions are answered as messages.** An answer to Claude Code's
   multiple-choice question (AskUserQuestion) is not typed at the dialog,
   whose Enter would pick the highlighted option. The dialog is closed with

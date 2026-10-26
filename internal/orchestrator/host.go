@@ -116,6 +116,10 @@ type Observation struct {
 	// turn, once that is past stallAfter; zero otherwise. Set by the monitor
 	// (heartbeat.go), not the host.
 	Stalled time.Duration `json:"stalled,omitempty"`
+	// LastWords is, with Stalled, the last thing the agent said: whether it
+	// finished or hung is read from it, and the turns that said it have
+	// usually been shown already.
+	LastWords string `json:"lastWords,omitempty"`
 	// Blocked names a tool the agent asked to use and has not had answered,
 	// meaning it has stopped on a confirmation dialog rather than at its prompt.
 	// Nothing may be typed at it in that state — see agent.Pending. It is
