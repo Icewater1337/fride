@@ -16,7 +16,6 @@
 package journal
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/jsonl"
 	"golang.org/x/sys/unix"
 )
 
@@ -97,6 +97,18 @@ func Append(cfg *config.Config, slug string, e Entry) error {
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	// jsonl.Scan counts the line ending toward its limit. Keep the record
+	// readable by reserving one byte for the newline Append writes.
+	if len(b) >= jsonl.MaxLine {
+		return fmt.Errorf(
+			"entry is too large for the journal (maximum line size is %d bytes)",
+			jsonl.MaxLine,
+		)
+	}
 	if err := os.MkdirAll(dir(cfg, slug), 0o755); err != nil {
 		return err
 	}
@@ -116,10 +128,6 @@ func Append(cfg *config.Config, slug string, e Entry) error {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
 	_, err = f.Write(append(b, '\n'))
 	return err
 }
@@ -136,22 +144,16 @@ func Read(cfg *config.Config, slug string) ([]Entry, error) {
 	defer f.Close()
 
 	var out []Entry
-	sc := bufio.NewScanner(f)
-	// A plan can be a whole document pasted in one entry.
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+	scanErr := jsonl.Scan(f, func(line []byte) bool {
 		var e Entry
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue // a corrupt line must not lose the rest of the record
+		if json.Unmarshal(line, &e) != nil {
+			return true // a corrupt line must not lose the rest of the record
 		}
 		out = append(out, e)
-	}
+		return true
+	})
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
-	return out, nil
+	return out, scanErr
 }
 
 // Count summarises the record for the UI.
