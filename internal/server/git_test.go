@@ -12,7 +12,7 @@ import (
 	"github.com/Icewater1337/fride/internal/gitid"
 )
 
-const testToken = "glpat-SECRET-0123456789"
+const testToken = "tok-SECRET-0123456789"
 
 // withIdentities adds git identities to the test server's config.json and
 // gives its api repository an origin on the work host.
