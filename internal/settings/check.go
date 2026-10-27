@@ -155,6 +155,8 @@ func (s *Settings) Check() []Problem {
 		}
 	}
 
+	out = append(out, s.checkGit()...)
+
 	for i, r := range s.Requirements {
 		where := fmt.Sprintf("requirements[%d]", i)
 		if r.Name == "" {
