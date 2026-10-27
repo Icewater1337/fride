@@ -76,6 +76,10 @@ const state = {
   fleet: { enabled: false, self: '', peers: [], mirrors: [], state: {} },
   currentNode: '',     // the computer the open task lives on ('' = this one)
   newNode: '',         // the computer chosen in the New task modal
+  gitIds: {},          // API base -> the git identities of that computer
+  gitDefaults: {},     // API base -> its git.default
+  newGit: null,        // /git/identities of the computer in the New task modal
+  gitEdited: false,    // the identity in the New task modal was picked by hand
   resumable: [],
   dragging: false,
   boardKey: '',
@@ -573,6 +577,8 @@ async function openTask(slug, node) {
   state.taskConfig = isLocal(p.node) ? null
     : await api.get(p.base + '/config').catch(() => null);
   if (stale(p)) return;
+  await loadGitIds(p.base);
+  if (stale(p)) return;
   try {
     if (!(await refreshTask(p))) return;
   } catch (e) {
@@ -642,6 +648,7 @@ async function refreshTask(p = pin()) {
     });
   };
 
+  renderGitBadge(t, p);
   renderNodeBadge(t);
 
   const perm = $('#task-perm-badge');
@@ -2032,6 +2039,82 @@ async function loadConfig() {
   return c;
 }
 
+/* ---------------------------------------------------------------- git identities */
+
+// A computer's git identities, kept per API base: the task view draws its
+// badge on every refresh, and the list only changes when config.json or the
+// companion does. A computer whose FrIDE predates identities has none.
+async function loadGitIds(base) {
+  let d = null;
+  try { d = await api.get(base + '/git/identities'); } catch { /* none */ }
+  state.gitIds[base] = (d && d.identities) || [];
+  state.gitDefaults[base] = (d && d.default) || '';
+  return state.gitIds[base];
+}
+
+// The badge names who the task commits and pushes as. A switch applies to
+// sessions started after it: a running one keeps the environment it got.
+function renderGitBadge(t, p) {
+  const badge = $('#task-git-badge');
+  const ids = state.gitIds[p.base] || [];
+  const cur = t.gitIdentity || '';
+  const g = ids.find(x => x.id === cur);
+  badge.classList.toggle('hidden', !cur && !ids.length);
+  badge.classList.toggle('missing', !!cur && !g);
+  setLabel(badge, cur ? (g ? g.label : cur + ' (gone)') : 'no git identity');
+  badge.onclick = async () => {
+    const fresh = await loadGitIds(p.base);
+    if (stale(p)) return;
+    const pick = async (id) => {
+      if (id === cur || stale(p)) return;
+      try { await api.put(`${p.base}/tasks/${p.slug}/git-identity`, { gitIdentity: id || 'none' }); }
+      catch (e) { toast(e.message); return; }
+      await refreshTask(p);
+      if ((t.terminals || []).length) {
+        toast('Sessions started from now on use it. Open ones keep the identity they started with.', 'info', 8000);
+      }
+    };
+    showMenu(badge, {
+      title: 'Commit and push as',
+      items: fresh.map(x => ({
+        label: x.label, checked: x.id === cur, onSelect: () => pick(x.id),
+        detail: x.host + (x.name || x.email ? ' · ' + [x.name, x.email].filter(Boolean).join(' ') : '')
+          + (x.has_token ? '' : ' · no token'),
+      })).concat([{ label: 'None', detail: "git's own config", checked: !cur, onSelect: () => pick('') }]),
+    });
+  };
+}
+
+// The identity a new task gets unless another is picked: the server names,
+// per repository, the one its origin's host picks (else the default), and
+// the first selected repository decides, as it does on the server. Picking
+// one by hand stops the suggestion from following the repositories.
+function renderGitPicker() {
+  const ids = (state.newGit && state.newGit.identities) || [];
+  $('#git-line').classList.toggle('hidden', ids.length === 0);
+  const sel = $('#new-git');
+  sel.innerHTML = '';
+  for (const g of ids) {
+    const o = el('option', null, `${g.label} — ${g.host}${g.has_token ? '' : ' (no token yet)'}`);
+    o.value = g.id;
+    sel.appendChild(o);
+  }
+  const none = el('option', null, "None — git's own config");
+  none.value = 'none';
+  sel.appendChild(none);
+  suggestGit();
+}
+
+function suggestGit() {
+  if (state.gitEdited || !state.newGit) return;
+  const first = [...$('#repo-picker').querySelectorAll('input[type=checkbox]')].find(cb => cb.checked);
+  const repo = first && state.repos.find(r => r.name === first.dataset.repo);
+  const want = repo ? repo.gitIdentity : state.newGit.default;
+  $('#new-git').value = want || 'none';
+}
+
+$('#new-git').addEventListener('change', () => { state.gitEdited = true; });
+
 function renderModePicker() {
   const host = $('#mode-picker');
   if (!host) return;
@@ -2128,7 +2211,7 @@ async function fillNewTask() {
     const cb = el('input'); cb.type = 'checkbox'; cb.dataset.repo = r.name;
     cb.disabled = !r.exists;
     cb.checked = on;
-    cb.addEventListener('change', () => row.classList.toggle('off', !cb.checked));
+    cb.addEventListener('change', () => { row.classList.toggle('off', !cb.checked); suggestGit(); });
     row.appendChild(cb);
 
     const nm = el('div', 'nm');
@@ -2161,6 +2244,7 @@ async function fillNewTask() {
       if (cb.disabled) return;
       cb.checked = !cb.checked;
       row.classList.toggle('off', !cb.checked);
+      suggestGit();
     });
     picker.appendChild(row);
   }
@@ -2173,6 +2257,10 @@ async function fillNewTask() {
     if (first) state.newAgent = first.kind;
   }
   renderAgentPicker();
+  try { state.newGit = await api.get(base + '/git/identities'); }
+  catch { state.newGit = { identities: [], default: '' }; }
+  state.gitEdited = false;
+  renderGitPicker();
 }
 
 // Agents that are not installed stay visible but disabled, with the reason:
@@ -2302,6 +2390,7 @@ $('#modal-create').addEventListener('click', async () => {
       agent: state.newAgent,
       branch: $('#new-branch').value.trim(),
       profile: state.newProfile,
+      gitIdentity: $('#git-line').classList.contains('hidden') ? '' : $('#new-git').value,
       startAgent: $('#new-start').checked,
       dangerous: $('#new-dangerous').checked,
     });
@@ -2388,7 +2477,80 @@ state.settings = null;
 async function loadSettings() {
   state.settings = await api.get('/api/settings');
   await loadConfig();
+  await loadGitIds('/api');
   renderSettings();
+}
+
+// Each identity with its token's state, and a field to set one. The token
+// goes to this computer's server and is never shown again, here or anywhere.
+function renderGitSettings() {
+  const body = $('#git-table').querySelector('tbody');
+  body.innerHTML = '';
+  const def = state.gitDefaults['/api'] || '';
+  for (const g of state.gitIds['/api'] || []) {
+    const tr = el('tr');
+    const name = el('td');
+    const head = el('div', null, g.label);
+    if (g.id === def) head.appendChild(el('span', 'tag', 'default'));
+    if (g.managed) {
+      const m = el('span', 'tag muted', 'companion');
+      m.title = 'Set by the companion program that runs this FrIDE, not by config.json';
+      head.appendChild(m);
+    }
+    name.appendChild(head);
+    name.appendChild(el('div', 'path', g.id + ' · ' + g.kind));
+    tr.appendChild(name);
+    tr.appendChild(el('td', null, g.host));
+    tr.appendChild(el('td', g.name || g.email ? null : 'hint',
+      g.name || g.email ? [g.name, g.email && '<' + g.email + '>'].filter(Boolean).join(' ') : "git's own config"));
+
+    const tok = el('td');
+    const cell = el('div', 'copycell');
+    cell.appendChild(el('span', 'tag' + (g.has_token ? ' green' : ' muted'), g.has_token ? 'set' : 'none'));
+    const inp = el('input');
+    inp.type = 'password';
+    inp.autocomplete = 'new-password';
+    inp.spellcheck = false;
+    inp.placeholder = g.has_token ? 'replace it' : 'paste the token';
+    inp.setAttribute('aria-label', 'Token for ' + g.label);
+    const save = el('button', 'mini', 'Save');
+    const store = async () => {
+      if (!inp.value.trim()) { inp.focus(); return; }
+      try { await api.put(`/api/git/identities/${encodeURIComponent(g.id)}/token`, { token: inp.value }); }
+      catch (e) { toast(e.message); return; }
+      inp.value = '';
+      toast(`Token for ${g.label} saved. Sessions started from now on use it.`, 'ok');
+      await loadGitIds('/api');
+      renderGitSettings();
+    };
+    save.addEventListener('click', store);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') store(); });
+    cell.appendChild(inp);
+    cell.appendChild(save);
+    if (g.has_token) {
+      const rm = el('button', 'mini', 'Remove');
+      rm.addEventListener('click', async () => {
+        if (!await ask({ title: `Remove the token for ${g.label}?`,
+                         body: `Tasks with this identity can no longer push to ${g.host} until a new one is set.`,
+                         ok: 'Remove token', danger: true })) return;
+        try { await api.del(`/api/git/identities/${encodeURIComponent(g.id)}/token`); }
+        catch (e) { toast(e.message); return; }
+        await loadGitIds('/api');
+        renderGitSettings();
+      });
+      cell.appendChild(rm);
+    }
+    tok.appendChild(cell);
+    tr.appendChild(tok);
+    body.appendChild(tr);
+  }
+  if (!(state.gitIds['/api'] || []).length) {
+    const tr = el('tr');
+    const td = el('td', 'empty', 'No git identities. List them in config.json under git.identities (docs/GIT.md).');
+    td.colSpan = 4;
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
 }
 
 function renderConfig() {
@@ -2441,6 +2603,7 @@ function renderSettings() {
   const d = state.settings;
   if (!d) return;
   renderConfig();
+  renderGitSettings();
 
   const bl = $('#base-list');
   bl.innerHTML = '';
