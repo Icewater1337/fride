@@ -29,6 +29,7 @@ import (
 	"github.com/Icewater1337/fride/internal/companion"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/doctor"
+	"github.com/Icewater1337/fride/internal/gitid"
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/scan"
@@ -75,7 +76,10 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
        [--profile <name>]               how the stack boots (default: defaultProfile)
        [--agent claude|antigravity|codex]
        [--branch <name>]
+       [--git-identity <id|none>]       who it commits and pushes as (default: the
+                                        identity of the first repo's host, else git.default)
   task ls                               list tasks
+  task git-identity <task> <id|none>    switch identity; applies to sessions started after
   task profile <task> <name>            switch profile; applies at the next stack up
   task service <task> <svc> <shared|task|off|default>
                                         how a container-backed service is provided
@@ -134,6 +138,12 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   in reply <id> "<message>" [--wait]    answer its question, or send more for its task
   in close <id>                         stop following it (its tasks are left alone)
 
+  git ls                                the git identities a task can run as (docs/GIT.md)
+  git token set <id>                    store an identity's token, read from stdin
+  git token rm <id>                     forget it
+  git credential <id> get               git's credential helper for an identity; set by
+                                        FrIDE in a task's environment, not run by hand
+
   version
   update                                replace this binary with the latest release
 
@@ -188,6 +198,9 @@ func main() {
 		return
 	case "pair-companion":
 		cmdPairCompanion(cfg, os.Args[2:])
+		return
+	case "git":
+		cmdGit(cfg, os.Args[2:])
 		return
 	}
 	requireConfig(cfg, os.Args[1])
@@ -608,11 +621,12 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 	switch args[0] {
 	case "new":
 		if len(args) < 2 {
-			check(fmt.Errorf("usage: fride task new <name> [<repo>[:<baseref>]...] [--profile <name>] [--agent claude|antigravity|codex] [--branch <name>]"))
+			check(fmt.Errorf("usage: fride task new <name> [<repo>[:<baseref>]...] [--profile <name>] [--agent claude|antigravity|codex] [--branch <name>] [--git-identity <id|none>]"))
 		}
 		name := args[1]
 		rest := args[2:]
 		profile, rest := flagValue(rest, "--profile")
+		identity, rest := flagValue(rest, "--git-identity")
 		chosen, rest := flagValue(rest, "--agent")
 		branch, rest := flagValue(rest, "--branch")
 		if chosen == "" {
@@ -648,9 +662,12 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		// The setup steps (dependency installs) start detached, so they carry
 		// on after this command returns; `stack up` waits for them if needed.
 		t, created, err := task.Create(cfg, st, task.Request{Name: name, Repos: specs,
-			Agent: kind, Branch: branch, Profile: profile})
+			Agent: kind, Branch: branch, Profile: profile, GitIdentity: identity})
 		check(err)
 		slug := t.Slug
+		if t.GitIdentity != "" {
+			fmt.Printf("git identity: %s\n", t.GitIdentity)
+		}
 		for _, c := range created {
 			fmt.Printf("%s: from %s\n", c.Repo, c.BaseRef)
 			if len(c.Copied) > 0 {
@@ -663,6 +680,24 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		fmt.Printf("\nworkspace ready: %s\n", cfg.WorkspaceDir(slug))
 		fmt.Printf("  open it with:   cd %s && %s\n", cfg.WorkspaceDir(slug), agent.Bin(kind))
 		fmt.Printf("  start it with:  fride stack up %s --wait\n", slug)
+
+	case "git-identity":
+		if len(args) < 3 {
+			check(fmt.Errorf("usage: fride task git-identity <task> <id|none>   (`fride git ls` lists them)"))
+		}
+		t := resolveTask(cfg, st, args[1:2])
+		want := args[2]
+		if want == settings.NoGitIdentity {
+			want = ""
+		} else if _, ok := cfg.Settings.GitIdentity(want); !ok {
+			check(fmt.Errorf("no git identity %q — `fride git ls` lists them", want))
+		}
+		_, err := st.Update(t.Slug, func(u *store.Task) error { u.GitIdentity = want; return nil })
+		check(err)
+		if want == "" {
+			want = "none (git's own config)"
+		}
+		fmt.Printf("%s: git identity %s — sessions started from now on use it\n", t.Slug, want)
 
 	case "move":
 		cmdTaskMove(cfg, st, args[1:])
@@ -1336,6 +1371,10 @@ func cmdRationale(cfg *config.Config, st *store.Store, args []string) {
 		for _, c := range [][]string{{"add", rel}, {"commit", "-m", "docs: record design rationale for " + t.Slug}} {
 			cmd := exec.Command("git", c...)
 			cmd.Dir = wt
+			// Committed as the task's identity, like the agent's own commits.
+			if env, err := gitid.ForID(cfg.Settings, cfg.StateDir, t.GitIdentity); err == nil && env != nil {
+				cmd.Env = append(os.Environ(), env...)
+			}
 			if out, err := cmd.CombinedOutput(); err != nil {
 				check(fmt.Errorf("git %s: %s", c[0], strings.TrimSpace(string(out))))
 			}
