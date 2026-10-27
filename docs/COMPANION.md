@@ -84,7 +84,8 @@ workspace.
 
 ```
 POST /api/companion/tasks
-{"message": "add a health endpoint to the api", "repos": ["api"], "ref": "chat-4711", "source": "chat"}
+{"message": "add a health endpoint to the api", "repos": ["api"], "ref": "chat-4711", "source": "chat",
+ "git_identity": "work"}
 → 202 (200 when that ref was sent before) and the thread, as below, plus "existing": true|false
 ```
 
@@ -97,6 +98,11 @@ under this computer's base folders, and the orchestrator is told to use them.
 `ref` is the sender's own id: sending the same `ref` from the same `source`
 again returns the existing thread instead of starting the work twice.
 `source` defaults to `companion`. A message is up to 64 KiB.
+`git_identity` (optional) is the [git identity](#git-identities) the tasks
+for this message commit and push as: an id, or `none`. Without it, FrIDE
+picks by the first repository's host, then `git.default`
+([GIT.md](GIT.md#which-identity-a-task-gets)). An id that does not exist is
+refused with `400` before the message is queued.
 
 ### A thread
 
@@ -138,6 +144,7 @@ GET /api/companion/tasks/<task_id>
   "agent_running": true, "agent_waiting": false,
   "stack_up": false, "entry_url": "",
   "workspace": "/…/fride-workspaces/proj-42",
+  "git_identity": "work",              "" when it has none
   "rationale_path": "/…/docs/rationale/proj-42.md"     once it exists
 }
 ```
@@ -196,10 +203,58 @@ body: the bundle
 ```
 GET /api/companion/info
 → 200 {"mode": "companion", "configured": true, "repos": ["api", "web"], "profiles": ["local"],
-       "webhook_url": "http://127.0.0.1:8770/fride", "orchestrator": true}
+       "webhook_url": "http://127.0.0.1:8770/fride", "orchestrator": true, "git_identities": true}
 ```
 
-A cheap call to tell that FrIDE is running and paired.
+A cheap call to tell that FrIDE is running and paired. `git_identities`
+says that this FrIDE takes the git identity routes below; an older one
+leaves it out.
+
+### Git identities
+
+The companion can give FrIDE the forge accounts it holds, so a task commits
+and pushes as the right one ([GIT.md](GIT.md)). What it sets is kept in
+`$FRIDE_HOME/git-identities.companion.json`, never in config.json, and its
+tokens in `$FRIDE_HOME/secrets/git/<id>.token` (0600). The user's own
+identities in config.json are listed too; one with the same id wins over
+the companion's.
+
+```
+GET /api/companion/git/identities
+→ 200 {"identities": [{"id": "work", "label": "Work GitLab", "kind": "gitlab", "host": "gitlab.example.com",
+                       "name": "Jane Doe", "email": "jane@work.example.com",
+                       "managed": true, "has_token": true}, …],
+       "default": "github"}
+```
+
+`managed` is true for the companion's own identities. No answer ever
+carries a token, only `has_token`.
+
+```
+PUT /api/companion/git/identities/<id>
+{"label": "Work GitLab", "kind": "gitlab", "host": "gitlab.example.com",
+ "name": "Jane Doe", "email": "jane@work.example.com", "token": "…"}
+→ 200 the identity, as in GET
+```
+
+Creates or replaces the companion's identity `<id>`. The fields are those
+of [`git.identities`](CONFIG.md#git): `kind` is `github`, `gitlab` or
+`generic`, `host` a hostname with an optional port, `name` and `email`
+optional. A blank or absent `token` keeps the stored one, so a change of
+email does not need the token again. A field that is not valid is `400`, and
+nothing is written. If the user's config.json has an identity with the same
+id, the answer shows that one: it wins. The token file is shared, so the
+companion's token replaces the user's.
+
+```
+DELETE /api/companion/git/identities/<id>
+→ 204
+```
+
+Removes the companion's identity and its token. An id the companion did not
+set is `404`, and nothing is touched: it may be the user's own. Tasks
+created with a removed identity run with git's own configuration from their
+next session on.
 
 ## The webhook
 
@@ -314,3 +369,6 @@ Companion mode adds one credential and keeps everything else as it was.
 - The token is stored hashed; the pairing code is single-use, short-lived and
   burnt after five wrong guesses.
 - Thread news only ever goes to a loopback URL, signed.
+- Git tokens are stored readable by you alone, and only `has_token` is ever
+  answered. The credential helper hands a token only to its own host, over
+  HTTPS.

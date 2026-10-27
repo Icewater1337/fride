@@ -600,3 +600,43 @@ func TestAReportGoesOnlyToItsTasksThreads(t *testing.T) {
 		t.Fatalf("thread #2 is %s, want asking", s)
 	}
 }
+
+// A message that comes with a git identity gets it on the task it starts,
+// unless the orchestrator names another; the brain is told the identities.
+func TestInboxGitIdentityReachesTheTask(t *testing.T) {
+	h := newFakeHost()
+	o, st := newStubOrch(t, h, Reply{
+		Actions: []Action{{Kind: ActCreateTask, Name: "Search filters", Repos: []NewRepo{{Name: "backend"}}}},
+	})
+	v, _, err := o.ReceiveAs("chat", "m-1", "fix the search filters", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.GitIdentity != "work" {
+		t.Fatalf("thread identity = %q", v.GitIdentity)
+	}
+	settled(t, o, v.ID)
+	h.mu.Lock()
+	created := append([]NewTask(nil), h.created...)
+	h.mu.Unlock()
+	if len(created) != 1 || created[0].GitIdentity != "work" {
+		t.Fatalf("created %+v, want the thread's identity", created)
+	}
+	in, _ := os.ReadFile(st.stdin)
+	if !strings.Contains(string(in), "GIT IDENTITIES") || !strings.Contains(string(in), "work — gitlab.example.com (Work GitLab)") {
+		t.Fatalf("the brain was not told the identities:\n%s", in)
+	}
+
+	// The orchestrator's own choice wins over the thread's.
+	h2 := newFakeHost()
+	o2, _ := newStubOrch(t, h2, Reply{
+		Actions: []Action{{Kind: ActCreateTask, Name: "X", Repos: []NewRepo{{Name: "backend"}}, GitIdentity: "github"}},
+	})
+	v2, _, _ := o2.ReceiveAs("chat", "m-2", "do x as github", "work")
+	settled(t, o2, v2.ID)
+	h2.mu.Lock()
+	defer h2.mu.Unlock()
+	if len(h2.created) != 1 || h2.created[0].GitIdentity != "github" {
+		t.Fatalf("created %+v, want the named identity", h2.created)
+	}
+}

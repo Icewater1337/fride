@@ -73,6 +73,9 @@ type Thread struct {
 	Error    string    `json:"error,omitempty"`
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
+	// GitIdentity is the identity the sender asked for: a task created for
+	// the thread gets it, unless the orchestrator names another.
+	GitIdentity string `json:"gitIdentity,omitempty"`
 }
 
 // following is whether the thread still has tasks whose news belongs to it:
@@ -142,6 +145,13 @@ type ThreadView struct {
 // source has sent before returns that thread instead, with existing=true: a
 // relay that retries after a timeout must not start the same work twice.
 func (o *Orchestrator) Receive(source, ref, text string) (v ThreadView, existing bool, err error) {
+	return o.ReceiveAs(source, ref, text, "")
+}
+
+// ReceiveAs is Receive with the git identity the work belongs to (an id,
+// "none", or "" for the IDE's own choice), for the tasks the thread starts.
+// The caller has checked that it exists.
+func (o *Orchestrator) ReceiveAs(source, ref, text, gitIdentity string) (v ThreadView, existing bool, err error) {
 	text = strings.TrimSpace(text)
 	if err := checkText(text); err != nil {
 		return ThreadView{}, false, err
@@ -160,7 +170,7 @@ func (o *Orchestrator) Receive(source, ref, text string) (v ThreadView, existing
 	o.st.ThreadSeq++
 	now := time.Now()
 	t := Thread{ID: o.st.ThreadSeq, Source: source, Ref: ref, Text: text,
-		Status: ThreadQueued, Created: now, Updated: now}
+		Status: ThreadQueued, Created: now, Updated: now, GitIdentity: gitIdentity}
 	o.st.Threads = append(o.st.Threads, t)
 	o.st.Queue = append(o.st.Queue, inboxItem{Thread: t.ID, Text: text})
 	o.trimThreads()

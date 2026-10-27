@@ -65,6 +65,11 @@ type Task struct {
 	// own, on its own port), or "off". Absent means the profile's default. A
 	// repo checked out into the workspace always wins — it is run from source.
 	Scopes map[string]string `json:"scopes,omitempty"`
+	// GitIdentity is the git identity (config.json's git.identities, or the
+	// companion's) the task's sessions and FrIDE's git calls for it run as:
+	// commit author, credentials, forge token. Empty: none, git's own
+	// configuration, which is what every task had before identities existed.
+	GitIdentity string `json:"gitIdentity,omitempty"`
 }
 
 // slugRe mirrors Claude Code's worktree-name rules, which also keeps the slug

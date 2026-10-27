@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/gitid"
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/move"
 	"github.com/Icewater1337/fride/internal/stack"
@@ -49,6 +50,27 @@ func Arrived(cfg *config.Config, st *store.Store, m *move.Manifest) []string {
 		if _, _, ok := cfg.Settings.Profile(t.Profile); !ok {
 			_, _ = st.Update(slug, func(t *store.Task) error { t.Profile = ""; return nil })
 			notes = append(notes, "profile "+t.Profile+" does not exist here — using the default")
+		}
+	}
+	// An identity is this computer's own: its token never travels with the
+	// task. One that does not exist here is chosen again, as for a new task.
+	if t, err := st.Get(slug); err == nil && t.GitIdentity != "" && cfg.Settings != nil {
+		if _, ok := cfg.Settings.GitIdentity(t.GitIdentity); !ok {
+			main := ""
+			if len(t.Repos) > 0 {
+				if r, ok := cfg.Repo(t.Repos[0].Name); ok {
+					main = r.Main
+				}
+			}
+			id, _ := gitid.Choose(cfg.Settings, "", main)
+			_, _ = st.Update(slug, func(t *store.Task) error { t.GitIdentity = id; return nil })
+			note := "git identity " + t.GitIdentity + " does not exist here — "
+			if id == "" {
+				note += "none"
+			} else {
+				note += "using " + id
+			}
+			notes = append(notes, note)
 		}
 	}
 	repos := make([]string, 0, len(m.Repos))

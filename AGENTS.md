@@ -44,6 +44,8 @@ internal/companion       companion mode: pairing code and token, the signed webh
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide
+internal/gitid           git identities: token store, a task's environment, the
+                         choice by host, the credential helper (`fride git credential`)
 internal/task            task creation, shared by the CLI, the server and the orchestrator
 internal/agent           agent CLIs: flags, detection, transcripts
 internal/jsonl           reading JSONL that survives long lines and reports errors
@@ -60,6 +62,7 @@ docs/CONFIG.md           config.json reference
 docs/FLEET.md            fleet mode
 docs/INBOX.md            messages from outside: `fride in`, /api/inbox
 docs/COMPANION.md        companion mode: pairing, /api/companion, webhook, export/import
+docs/GIT.md              git identities: who a task commits and pushes as, tokens
 docs/REVIEW.md           the Review tab: design, the MVP and phases 2 and 3, data model, API
 ```
 

@@ -58,6 +58,17 @@ type NewTask struct {
 	Agent      string    `json:"agent,omitempty"`
 	Dangerous  bool      `json:"dangerous,omitempty"`
 	StartAgent bool      `json:"startAgent,omitempty"`
+	// GitIdentity is an identity id, "none", or empty for the IDE's own
+	// choice: by the first repository's host, then git.default.
+	GitIdentity string `json:"gitIdentity,omitempty"`
+}
+
+// GitIdentity is one git identity a new task can be created with. Never its
+// token: the orchestrator only names it.
+type GitIdentity struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+	Host  string `json:"host"`
 }
 
 // Conversation is one recorded conversation of a task, as an option for
@@ -181,6 +192,8 @@ type Host interface {
 	Repos() []RepoInfo
 	// Profiles are the ways the stack can boot, from config.json.
 	Profiles() []string
+	// GitIdentities are the identities a new task can be created with.
+	GitIdentities() []GitIdentity
 	Tasks() []TaskInfo
 	CreateTask(NewTask) (TaskInfo, error)
 	SetStatus(slug, status string) error

@@ -64,6 +64,8 @@ type Settings struct {
 	Inbox *Inbox `json:"inbox,omitempty"`
 	// Companion runs FrIDE under a local companion program (COMPANION.md).
 	Companion *Companion `json:"companion,omitempty"`
+	// Git is the git identities a task can be created with (GIT.md).
+	Git *Git `json:"git,omitempty"`
 
 	mu   sync.Mutex
 	path string

@@ -227,7 +227,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request, t *store.
 		if c.AI.State == "done" && !c.AI.Stale {
 			groups = c.AI.Groups
 		}
-		st, err := review.Split(s.cfg.RepoDir(slug, req.Repo), rc, review.Plan(rc, groups))
+		st, err := review.SplitAs(s.cfg.RepoDir(slug, req.Repo), rc, review.Plan(rc, groups), s.taskGitEnv(slug))
 		if err != nil {
 			writeErr(w, 409, err)
 			return

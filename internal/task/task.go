@@ -11,6 +11,7 @@ import (
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/gitid"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
 	"github.com/Icewater1337/fride/internal/workspace"
@@ -25,6 +26,10 @@ type Request struct {
 	Branch    string
 	Profile   string
 	Dangerous bool
+	// GitIdentity is the identity's id, settings.NoGitIdentity for none, or
+	// "" to choose one: by the host of the first repository's origin, else
+	// git.default (gitid.Choose).
+	GitIdentity string
 }
 
 // Create builds the task's workspace, registers the task and starts its setup
@@ -52,6 +57,20 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 	if err := workspace.ValidateBranch(branch); err != nil {
 		return nil, nil, err
 	}
+	// Chosen before anything is built, like the profile: an id that does
+	// not exist is a mistake in the request.
+	var mainCheckout string
+	if r, ok := cfg.Repo(req.Repos[0].Name); ok {
+		mainCheckout = r.Main
+	}
+	identity, err := gitid.Choose(cfg.Settings, req.GitIdentity, mainCheckout)
+	if err != nil {
+		return nil, nil, err
+	}
+	env, err := gitid.ForID(cfg.Settings, cfg.StateDir, identity)
+	if err != nil {
+		return nil, nil, err
+	}
 	// Two names can share a slug ("PROJ-42 search", "proj 42: search"), so
 	// the message names the task that has it. A store that cannot be read is
 	// an error, not "no such task": guessing wrong here is what used to wipe
@@ -67,7 +86,7 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 	}
 	// Create refuses an existing folder too, atomically; this only says it
 	// in the user's terms.
-	created, err := workspace.Create(cfg, slug, req.Repos, string(req.Agent), branch)
+	created, err := workspace.CreateWith(cfg, slug, req.Repos, string(req.Agent), branch, env)
 	if errors.Is(err, workspace.ErrExists) {
 		return nil, nil, fmt.Errorf("%s already exists — choose another name", cfg.WorkspaceDir(slug))
 	}
@@ -76,7 +95,7 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 	}
 	t := &store.Task{Slug: slug, Name: req.Name, Status: store.StatusOpen,
 		Created: time.Now(), Agent: string(req.Agent), Dangerous: req.Dangerous,
-		Profile: req.Profile}
+		Profile: req.Profile, GitIdentity: identity}
 	for _, c := range created {
 		t.Repos = append(t.Repos, store.TaskRepo{Name: c.Repo, BaseRef: c.BaseRef, Branch: c.Branch})
 	}

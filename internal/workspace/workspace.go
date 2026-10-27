@@ -45,10 +45,17 @@ type Created struct {
 // belongs to another task, or to the user: nothing in it may be touched.
 var ErrExists = errors.New("already exists")
 
-func git(dir string, args ...string) (string, error) {
+func git(dir string, args ...string) (string, error) { return gitEnv(dir, nil, args...) }
+
+// gitEnv is git() with extra environment: a task's git identity, for the
+// calls that reach its remote.
+func gitEnv(dir string, env []string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
 	}
 	var out, errb strings.Builder
 	cmd.Stdout = &out
@@ -198,7 +205,14 @@ func PruneStale(cfg *config.Config) {
 // or branch that was there before. A caller must not clean up after it. An
 // earlier version left that to the caller, which ran a forced Remove and so
 // wiped the existing task whenever the slug was already taken.
-func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) (out []Created, err error) {
+func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) ([]Created, error) {
+	return CreateWith(cfg, slug, specs, agentKind, branch, nil)
+}
+
+// CreateWith is Create with the task's git identity environment (gitid.Env)
+// for its fetches, so a private remote is reached with the task's own
+// credentials rather than whatever git finds for the user.
+func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string, env []string) (out []Created, err error) {
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("name at least one repo")
 	}
@@ -254,7 +268,7 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 
 		// Refresh remote-tracking refs so "from origin/main" means today's main.
 		if strings.HasPrefix(base, "origin/") {
-			if _, err := git(repo.Main, "fetch", "--quiet", "origin", strings.TrimPrefix(base, "origin/")); err != nil {
+			if _, err := gitEnv(repo.Main, env, "fetch", "--quiet", "origin", strings.TrimPrefix(base, "origin/")); err != nil {
 				c.Notes = append(c.Notes, "could not fetch "+base+" — using the local ref")
 			}
 		}

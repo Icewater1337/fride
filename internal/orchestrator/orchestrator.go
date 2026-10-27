@@ -669,6 +669,9 @@ func describe(a Action) string {
 		if a.Branch != "" {
 			s += " on " + a.Branch
 		}
+		if a.GitIdentity != "" {
+			s += " as " + a.GitIdentity
+		}
 		if in := strings.TrimSpace(a.Instruction); in != "" {
 			s += ", then tell its agent: " + in
 		}
@@ -701,21 +704,31 @@ func describe(a Action) string {
 // orchestrator's own bookkeeping takes it, and only for as long as it takes.
 func (o *Orchestrator) do(a Action, tr turn) (string, error) {
 	if a.Kind == ActCreateTask {
-		return o.create(a)
+		return o.create(a, tr)
 	}
 	return a.Task, o.act(a, tr)
 }
 
-func (o *Orchestrator) create(a Action) (string, error) {
+func (o *Orchestrator) create(a Action, tr turn) (string, error) {
 	if strings.TrimSpace(a.Name) == "" {
 		return "", fmt.Errorf("a task needs a name")
 	}
 	if len(a.Repos) == 0 {
 		return "", fmt.Errorf("a task needs at least one repository")
 	}
+	// The identity the message came with, unless the model named another:
+	// the sender knows which account the work belongs to, the model guesses.
+	identity := a.GitIdentity
+	if identity == "" && tr.thread != 0 {
+		o.mu.Lock()
+		if th := o.thread(tr.thread); th != nil {
+			identity = th.GitIdentity
+		}
+		o.mu.Unlock()
+	}
 	t, err := o.host.CreateTask(NewTask{
 		Name: a.Name, Repos: a.Repos, Branch: a.Branch, Profile: a.Profile,
-		Agent: a.AgentKind, Dangerous: a.Dangerous,
+		Agent: a.AgentKind, Dangerous: a.Dangerous, GitIdentity: identity,
 		// An agent is started unless the model explicitly said not to. A
 		// workspace with nothing running in it is not what "start a task"
 		// means, and there would be nothing for the orchestrator to
