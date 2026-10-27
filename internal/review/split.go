@@ -127,6 +127,13 @@ func Plan(rc RepoChanges, groups []Group) []Part {
 // touched, and the branch is created only once the stack's last tree is
 // identical to the working tree: a split that lost a line is no split.
 func Split(dir string, rc RepoChanges, parts []Part) (Stack, error) {
+	return SplitAs(dir, rc, parts, nil)
+}
+
+// SplitAs is Split with extra environment for the commits: the task's git
+// identity (gitid.Env), so the stack is authored as the task's own commits
+// are rather than as whoever git's config names.
+func SplitAs(dir string, rc RepoChanges, parts []Part, env []string) (Stack, error) {
 	st := Stack{Repo: rc.Repo, Base: rc.MergeBase}
 	if rc.MergeBase == "" {
 		return st, fmt.Errorf("%s: %s", rc.Repo, rc.Err)
@@ -206,7 +213,7 @@ func Split(dir string, rc RepoChanges, parts []Part) (Stack, error) {
 		if tree, err = withIndex("stack", "write-tree"); err != nil {
 			return st, err
 		}
-		sha, err := git(dir, "commit-tree", tree, "-p", parent, "-m", p.Title)
+		sha, err := commitTree(dir, env, tree, parent, p.Title)
 		if err != nil {
 			return st, err
 		}
@@ -225,3 +232,18 @@ func Split(dir string, rc RepoChanges, parts []Part) (Stack, error) {
 }
 
 func short(s string) string { return s[:min(10, len(s))] }
+
+func commitTree(dir string, env []string, tree, parent, title string) (string, error) {
+	cmd := exec.Command("git", "commit-tree", tree, "-p", parent, "-m", title)
+	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git commit-tree: %s", strings.TrimSpace(errb.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
+}

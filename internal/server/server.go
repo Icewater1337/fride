@@ -24,6 +24,7 @@ import (
 	"github.com/Icewater1337/fride/internal/doctor"
 	"github.com/Icewater1337/fride/internal/files"
 	"github.com/Icewater1337/fride/internal/fleet"
+	"github.com/Icewater1337/fride/internal/gitid"
 	"github.com/Icewater1337/fride/internal/ide"
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/mem"
@@ -58,6 +59,8 @@ type Server struct {
 	// settingsMu serialises settings edits: each one reads config.json,
 	// changes it and writes it back.
 	settingsMu sync.Mutex
+	// gitMu serialises writes of the companion's git identities file.
+	gitMu sync.Mutex
 }
 
 // localHosts are the only Host/Origin hostnames this server will answer to.
@@ -123,6 +126,8 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInbox)
 	s.localFleetRoutes(mux)
+	// Tokens are set on this computer only, never over the fleet.
+	mux.HandleFunc("/api/git/identities/", s.handleGitToken)
 	if s.companion != nil {
 		// Like the inbox, never on the fleet listener: only here, on loopback.
 		mux.HandleFunc("/api/companion/", s.handleCompanion)
@@ -148,7 +153,8 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/env", s.handleEnv)
 	mux.HandleFunc("/api/mem", s.handleMem)
 	mux.HandleFunc("/api/review/queue", s.handleReviewQueue)
-	mux.HandleFunc("/ws/term", s.handleTermWS) // terminal stream
+	mux.HandleFunc("/api/git/identities", s.handleGitIdentities) // no tokens, only has_token
+	mux.HandleFunc("/ws/term", s.handleTermWS)                   // terminal stream
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -183,6 +189,10 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 		Exists  bool     `json:"exists"`
 		Default string   `json:"defaultBase"`
 		Recent  []string `json:"recentBranches,omitempty"`
+		// GitIdentity is the identity a task starting with this repository
+		// gets unless another is chosen: by its origin's host, else
+		// git.default. The New task dialog preselects it.
+		GitIdentity string `json:"gitIdentity,omitempty"`
 	}
 	out := []repoInfo{}
 	for _, rp := range s.cfg.Repos {
@@ -191,6 +201,7 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			info.Exists = true
 			info.Default = workspace.DefaultBase(rp.Main)
 			info.Recent = workspace.RecentBranches(rp.Main, 25)
+			info.GitIdentity, _ = gitid.Choose(s.cfg.Settings, "", rp.Main)
 		}
 		out = append(out, info)
 	}
@@ -369,6 +380,9 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			Dangerous  bool       `json:"dangerous"`
 			Branch     string     `json:"branch"`
 			Profile    string     `json:"profile"`
+			// GitIdentity is an id, "none", or empty to choose by the first
+			// repository's host, then git.default.
+			GitIdentity string `json:"gitIdentity"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, 400, err)
@@ -378,7 +392,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, fmt.Errorf("unknown agent %q", req.Agent))
 			return
 		}
-		v, err := s.createTask(req.Name, req.Repos, agent.Normalize(req.Agent), req.StartAgent, req.Dangerous, req.Branch, req.Profile)
+		v, err := s.createTask(req.Name, req.Repos, agent.Normalize(req.Agent), req.StartAgent, req.Dangerous, req.Branch, req.Profile, req.GitIdentity)
 		if err != nil {
 			writeErr(w, 400, err)
 			return
@@ -398,7 +412,7 @@ type repoSpec struct {
 }
 
 func (s *Server) createTask(name string, repos []repoSpec, kind agent.Kind,
-	startAgent, dangerous bool, branch, profile string) (*taskView, error) {
+	startAgent, dangerous bool, branch, profile, gitIdentity string) (*taskView, error) {
 	if !s.cfg.Configured() {
 		return nil, fmt.Errorf("FrIDE is not set up yet — see SETUP.md (config: %s)", filepath.Join(s.cfg.StateDir, "config.json"))
 	}
@@ -414,7 +428,7 @@ func (s *Server) createTask(name string, repos []repoSpec, kind agent.Kind,
 		specs = append(specs, workspace.RepoSpec{Name: r.Name, BaseRef: r.BaseRef})
 	}
 	t, _, err := task.Create(s.cfg, s.st, task.Request{Name: name, Repos: specs, Agent: kind,
-		Branch: branch, Profile: profile, Dangerous: dangerous})
+		Branch: branch, Profile: profile, Dangerous: dangerous, GitIdentity: gitIdentity})
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +482,7 @@ func (s *Server) launchAgent(slug string, kind agent.Kind, title string, o agent
 	}
 
 	sess, err := s.terms.Start(slug, term.KindAgent, title, s.cfg.WorkspaceDir(slug),
-		s.cfg.AgentArgv(kind, o), nil)
+		s.cfg.AgentArgv(kind, o), s.taskGitEnv(slug))
 	if err != nil {
 		return nil, err
 	}
@@ -728,6 +742,31 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		updated, err := s.st.Update(slug, func(t *store.Task) error { t.Profile = req.Profile; return nil })
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, s.view(updated, true))
+
+	case action == "git-identity" && r.Method == http.MethodPut:
+		// Applies to sessions started afterwards: a running one keeps the
+		// environment it was started with.
+		var req struct {
+			GitIdentity string `json:"gitIdentity"` // "" or "none": no identity
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		id := req.GitIdentity
+		if id == settings.NoGitIdentity {
+			id = ""
+		}
+		if _, ok := s.cfg.Settings.GitIdentity(id); id != "" && !ok {
+			writeErr(w, 400, fmt.Errorf("unknown git identity %q", id))
+			return
+		}
+		updated, err := s.st.Update(slug, func(t *store.Task) error { t.GitIdentity = id; return nil })
 		if err != nil {
 			writeErr(w, 400, err)
 			return
@@ -1105,7 +1144,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			}
 			sess, err = s.startAgent(slug, resumeID)
 		} else {
-			sess, err = s.terms.Start(slug, term.KindShell, "shell", dir, []string{shell()}, nil)
+			sess, err = s.terms.Start(slug, term.KindShell, "shell", dir, []string{shell()}, s.taskGitEnv(slug))
 		}
 		if err != nil {
 			writeErr(w, 500, err)

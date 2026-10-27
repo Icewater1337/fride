@@ -43,12 +43,18 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 				Text   string `json:"text"`
 				Source string `json:"source"`
 				Ref    string `json:"ref"`
+				// GitIdentity is what the thread's new tasks are created as.
+				GitIdentity string `json:"gitIdentity"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeErr(w, 400, err)
 				return
 			}
-			v, existing, err := s.orch.Receive(req.Source, req.Ref, req.Text)
+			if err := s.checkGitIdentity(req.GitIdentity); err != nil {
+				writeErr(w, 400, err)
+				return
+			}
+			v, existing, err := s.orch.ReceiveAs(req.Source, req.Ref, req.Text, req.GitIdentity)
 			if err != nil {
 				writeErr(w, 400, err)
 				return
