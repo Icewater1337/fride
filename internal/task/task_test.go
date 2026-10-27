@@ -102,3 +102,58 @@ func TestCreateTwiceKeepsTheFirstTask(t *testing.T) {
 		t.Fatal("the folder in the way was touched")
 	}
 }
+
+// A task records the identity it was given, or the one its first
+// repository's host picks, or git.default; an unknown one is refused before
+// anything is built.
+func TestCreateChoosesTheGitIdentity(t *testing.T) {
+	root := t.TempDir()
+	api := filepath.Join(root, "repos", "api")
+	if err := os.MkdirAll(api, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, api, "init", "-q", "-b", "main")
+	git(t, api, "commit", "-q", "--allow-empty", "-m", "base")
+	git(t, api, "remote", "add", "origin", "git@gitlab.example.com:group/api.git")
+	state := filepath.Join(root, "state")
+	b, _ := json.Marshal(settings.Settings{Version: settings.Version,
+		BaseFolders: []string{filepath.Join(root, "repos")}, WorkspaceRoot: filepath.Join(root, "ws"),
+		Git: &settings.Git{Default: "github", Identities: []settings.GitIdentity{
+			{ID: "github", Kind: settings.GitHub, Host: "github.com"},
+			{ID: "work", Kind: settings.GitLab, Host: "gitlab.example.com"},
+		}}})
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "config.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Home: root, StateDir: state}
+	cfg.ReloadFromDisk()
+	st, err := store.New(cfg.StateDir, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, requested, want string }{
+		{"by host", "", "work"},
+		{"chosen", "github", "github"},
+		{"none", "none", ""},
+	} {
+		tk, _, err := Create(cfg, st, Request{Name: c.name, Agent: agent.Claude, GitIdentity: c.requested,
+			Repos: []workspace.RepoSpec{{Name: "api"}}, Branch: "b-" + strings.ReplaceAll(c.name, " ", "-")})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got, _ := st.Get(tk.Slug); got.GitIdentity != c.want {
+			t.Errorf("%s: identity %q, want %q", c.name, got.GitIdentity, c.want)
+		}
+	}
+	_, _, err = Create(cfg, st, Request{Name: "typo", Agent: agent.Claude, GitIdentity: "wrok",
+		Repos: []workspace.RepoSpec{{Name: "api"}}})
+	if err == nil || !strings.Contains(err.Error(), "unknown git identity") {
+		t.Fatalf("an unknown identity: %v", err)
+	}
+	if _, err := os.Stat(cfg.WorkspaceDir("typo")); !os.IsNotExist(err) {
+		t.Fatalf("a workspace was built for a refused request: %v", err)
+	}
+}
