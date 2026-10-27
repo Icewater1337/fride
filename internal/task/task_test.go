@@ -10,6 +10,7 @@ import (
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/move"
 	"github.com/Icewater1337/fride/internal/settings"
 	"github.com/Icewater1337/fride/internal/store"
 	"github.com/Icewater1337/fride/internal/workspace"
@@ -155,5 +156,49 @@ func TestCreateChoosesTheGitIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.WorkspaceDir("typo")); !os.IsNotExist(err) {
 		t.Fatalf("a workspace was built for a refused request: %v", err)
+	}
+}
+
+// A task that arrives with an identity this computer does not have gets
+// the one chosen here, as a new task would.
+func TestArrivedChoosesAnIdentityThatExistsHere(t *testing.T) {
+	root := t.TempDir()
+	api := filepath.Join(root, "repos", "api")
+	if err := os.MkdirAll(api, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, api, "init", "-q", "-b", "main")
+	git(t, api, "remote", "add", "origin", "https://gitlab.example.com/group/api.git")
+	state := filepath.Join(root, "state")
+	b, _ := json.Marshal(settings.Settings{Version: settings.Version,
+		BaseFolders: []string{filepath.Join(root, "repos")}, WorkspaceRoot: filepath.Join(root, "ws"),
+		Git: &settings.Git{Identities: []settings.GitIdentity{{ID: "lab", Kind: settings.GitLab, Host: "gitlab.example.com"}}}})
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "config.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Home: root, StateDir: state}
+	cfg.ReloadFromDisk()
+	st, err := store.New(cfg.StateDir, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The folder is what makes a task exist for the store.
+	if err := os.MkdirAll(cfg.WorkspaceDir("t1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tk := store.Task{Slug: "t1", Name: "t1", Status: store.StatusOpen, GitIdentity: "work",
+		Repos: []store.TaskRepo{{Name: "api", Branch: "feat/x"}}}
+	if err := st.Add(&tk); err != nil {
+		t.Fatal(err)
+	}
+	notes := Arrived(cfg, st, &move.Manifest{Task: tk})
+	if got, _ := st.Get("t1"); got.GitIdentity != "lab" {
+		t.Fatalf("identity = %q, want lab", got.GitIdentity)
+	}
+	if !strings.Contains(strings.Join(notes, "\n"), "git identity work does not exist here — using lab") {
+		t.Fatalf("notes = %v", notes)
 	}
 }
