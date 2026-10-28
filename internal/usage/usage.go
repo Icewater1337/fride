@@ -3,7 +3,8 @@
 //
 // Claude Code writes one JSONL file per session under
 // ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl, where the directory name
-// is the session's working directory with "/", "." and "_" replaced by "-".
+// is the session's working directory with every character but an ASCII letter
+// or digit replaced by "-" (agent.ClaudeHolds knows the details).
 // Each `assistant` line carries message.usage with the token counts for that
 // API response.
 //
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/jsonl"
 )
 
@@ -48,9 +50,6 @@ type Session struct {
 	Messages     int       `json:"messages"`
 	LastActivity time.Time `json:"lastActivity,omitempty"`
 }
-
-// encodeDir mirrors Claude Code's project-directory naming.
-var encodeDir = strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace
 
 type entry struct {
 	Type      string    `json:"type"`
@@ -88,8 +87,6 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 		}
 		return nil, err
 	}
-	prefix := encodeDir(filepath.Clean(workspaceDir))
-
 	u := &Usage{}
 	seen := map[string]bool{}   // dedupe by entry uuid: resumed/forked
 	models := map[string]bool{} // transcripts repeat earlier lines
@@ -100,7 +97,7 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 			continue
 		}
 		name := de.Name()
-		if name != prefix && !strings.HasPrefix(name, prefix+"-") {
+		if !agent.ClaudeHolds(name, workspaceDir) {
 			continue
 		}
 		files, _ := filepath.Glob(filepath.Join(projects, name, "*.jsonl"))
