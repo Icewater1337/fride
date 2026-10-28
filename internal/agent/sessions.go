@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/Icewater1337/fride/internal/jsonl"
 )
@@ -64,7 +65,46 @@ func Under(p, root string) bool {
 // Claude Code writes one JSONL per session under
 // ~/.claude/projects/<encoded-cwd>/. The directory name is lossy, so each
 // candidate is confirmed against the cwd recorded inside it.
-var claudeEncode = strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace
+//
+// claudeEncode is Claude Code's own naming: every UTF-16 unit that is not an
+// ASCII letter or digit becomes "-" (so a space, "@" or "é" does too), and a
+// name over 200 units is cut there and suffixed with the base-36 absolute value
+// of a 32-bit (h<<5)-h+c hash of the original path.
+func claudeEncode(p string) string {
+	units := utf16.Encode([]rune(p))
+	b := make([]byte, len(units))
+	var h int32
+	for i, u := range units {
+		h = h*31 + int32(u) // wraps like JS's |0
+		if u < 128 && ('a' <= u && u <= 'z' || 'A' <= u && u <= 'Z' || '0' <= u && u <= '9') {
+			b[i] = byte(u)
+		} else {
+			b[i] = '-'
+		}
+	}
+	if len(b) <= claudeMaxName {
+		return string(b)
+	}
+	abs := int64(h)
+	if abs < 0 {
+		abs = -abs
+	}
+	return string(b[:claudeMaxName]) + "-" + strconv.FormatInt(abs, 36)
+}
+
+const claudeMaxName = 200
+
+// ClaudeHolds reports whether the project directory called name can hold
+// conversations started in workspaceDir or a folder inside it. A cut name
+// keeps only its first 200 units comparable, since the hash differs per folder;
+// either way the cwd recorded inside each transcript has the final say.
+func ClaudeHolds(name, workspaceDir string) bool {
+	prefix := claudeEncode(filepath.Clean(workspaceDir))
+	if len(prefix) > claudeMaxName {
+		return strings.HasPrefix(name, prefix[:claudeMaxName]+"-")
+	}
+	return name == prefix || strings.HasPrefix(name, prefix+"-")
+}
 
 func claudeSessions(home, workspaceDir string) []Recorded {
 	projects := filepath.Join(home, ".claude", "projects")
@@ -72,7 +112,6 @@ func claudeSessions(home, workspaceDir string) []Recorded {
 	if err != nil {
 		return nil
 	}
-	prefix := claudeEncode(filepath.Clean(workspaceDir))
 	byID := map[string]*Recorded{}
 	seen := map[string]bool{}
 
@@ -80,7 +119,7 @@ func claudeSessions(home, workspaceDir string) []Recorded {
 		if !de.IsDir() {
 			continue
 		}
-		if n := de.Name(); n != prefix && !strings.HasPrefix(n, prefix+"-") {
+		if !ClaudeHolds(de.Name(), workspaceDir) {
 			continue
 		}
 		files, _ := filepath.Glob(filepath.Join(projects, de.Name(), "*.jsonl"))
@@ -344,10 +383,9 @@ func ClaudeTranscripts(home, workspaceDir string) []Transcript {
 	if err != nil {
 		return nil
 	}
-	prefix := claudeEncode(filepath.Clean(workspaceDir))
 	var out []Transcript
 	for _, de := range des {
-		if n := de.Name(); !de.IsDir() || (n != prefix && !strings.HasPrefix(n, prefix+"-")) {
+		if !de.IsDir() || !ClaudeHolds(de.Name(), workspaceDir) {
 			continue
 		}
 		files, _ := filepath.Glob(filepath.Join(projects, de.Name(), "*.jsonl"))
