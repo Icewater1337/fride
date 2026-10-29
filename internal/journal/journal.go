@@ -16,7 +16,6 @@
 package journal
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/jsonl"
 	"golang.org/x/sys/unix"
 )
 
@@ -120,6 +120,10 @@ func Append(cfg *config.Config, slug string, e Entry) error {
 	if err != nil {
 		return err
 	}
+	// Read skips a line this long, so it would be recorded and then never seen.
+	if len(b) > jsonl.MaxLine {
+		return fmt.Errorf("entry is %d MiB, over the %d MiB limit", len(b)>>20, jsonl.MaxLine>>20)
+	}
 	_, err = f.Write(append(b, '\n'))
 	return err
 }
@@ -136,22 +140,17 @@ func Read(cfg *config.Config, slug string) ([]Entry, error) {
 	defer f.Close()
 
 	var out []Entry
-	sc := bufio.NewScanner(f)
-	// A plan can be a whole document pasted in one entry.
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+	// A plan can be a whole document pasted in one entry; jsonl.Scan skips a
+	// line too long to keep instead of ending the read there.
+	err = jsonl.Scan(f, func(line []byte) bool {
 		var e Entry
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue // a corrupt line must not lose the rest of the record
+		if json.Unmarshal(line, &e) == nil { // a corrupt line must not lose the rest of the record
+			out = append(out, e)
 		}
-		out = append(out, e)
-	}
+		return true
+	})
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
-	return out, nil
+	return out, err
 }
 
 // Count summarises the record for the UI.
