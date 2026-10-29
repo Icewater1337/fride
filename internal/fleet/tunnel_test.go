@@ -3,10 +3,12 @@ package fleet
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -144,5 +146,80 @@ func TestBufferedConnPassesHalfClose(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("the far side never saw the half-close")
+	}
+}
+
+// Closing a mirror ends the tunnels already open through it.
+func TestMirrorsCloseEndsOpenTunnels(t *testing.T) {
+	n, err := JoinLoopback(t.TempDir(), "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	ln, err := n.Listen(Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A stand-in owner: accepts the upgrade, then echoes.
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				if _, err := http.ReadRequest(br); err != nil {
+					return
+				}
+				_, _ = io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: "+tunnelProto+"\r\nConnection: Upgrade\r\n\r\n")
+				_, _ = io.Copy(c, br)
+			}()
+		}
+	}()
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+
+	ms := NewMirrors(n)
+	if opened, problems := ms.Open("owner", ln.Addr().String(), "t", []int{port}); len(opened) != 1 {
+		t.Skipf("mirror port not free: %v", problems)
+	}
+	ms.mu.Lock()
+	m := ms.m[port]
+	ms.mu.Unlock()
+	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := io.WriteString(c, "hi\n"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := bufio.NewReader(c).ReadString('\n'); err != nil || got != "hi\n" {
+		t.Fatalf("through the mirror: %q, %v", got, err)
+	}
+	if ms.Close("", "") != 1 {
+		t.Fatal("mirror not closed")
+	}
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("open connection survived Close: %v", err)
+	}
+	for i := 0; ; i++ {
+		ms.mu.Lock()
+		n := m.Conns
+		ms.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if i > 100 {
+			t.Fatalf("after Close: %d conns", n)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
