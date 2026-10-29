@@ -595,6 +595,53 @@ func checkRootPath(p string, repos []Repo) error {
 	return nil
 }
 
+// checkManifest refuses a manifest that names anything outside what an arriving
+// task owns: a file outside the staging area (a transcript or bundle path with
+// "..", which Finish would copy out of it), a branch or commit git would read
+// as an option, or a task repository that did not travel and whose worktree
+// path a later removal would then trust. Like the archive, the manifest is only
+// as good as the other computer's code.
+func checkManifest(m *Manifest) error {
+	for _, f := range m.Root {
+		if err := checkRootPath(f.Path, m.Repos); err != nil {
+			return err
+		}
+	}
+	sent := map[string]bool{}
+	for _, r := range m.Repos {
+		if r.Bundle != "" && !filepath.IsLocal(filepath.FromSlash(r.Bundle)) {
+			return fmt.Errorf("%s: refusing bundle path %q", r.Name, r.Bundle)
+		}
+		if strings.HasPrefix(r.Branch, "-") || exec.Command("git", "check-ref-format", "refs/heads/"+r.Branch).Run() != nil {
+			return fmt.Errorf("%s: refusing branch name %q", r.Name, r.Branch)
+		}
+		if !isCommitID(r.Head) || (r.WIP != "" && !isCommitID(r.WIP)) {
+			return fmt.Errorf("%s: refusing commit %q / %q", r.Name, r.Head, r.WIP)
+		}
+		sent[r.Name] = true
+	}
+	for _, tr := range m.Task.Repos {
+		if !sent[tr.Name] {
+			return fmt.Errorf("refusing task repository %q: nothing was sent for it", tr.Name)
+		}
+	}
+	for _, t := range m.Transcripts {
+		if !filepath.IsLocal(filepath.FromSlash(t.File)) {
+			return fmt.Errorf("refusing conversation path %q", t.File)
+		}
+	}
+	return nil
+}
+
+// isCommitID reports whether s is a full SHA-1 or SHA-256 object id, the only
+// form Snapshot records.
+func isCommitID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.Trim(s, "0123456789abcdef") == ""
+}
+
 // Prepare receives the archive and fetches its bundles into side refs. Nothing
 // a user sees changes yet; Finish makes it real, Abort throws it away.
 func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error) {
@@ -651,11 +698,9 @@ func PrepareAs(cfg *config.Config, st *store.Store, r io.Reader, as string) (*Ma
 		drop()
 		return nil, errors.New(strings.Join(p, "; "))
 	}
-	for _, f := range m.Root {
-		if err := checkRootPath(f.Path, m.Repos); err != nil {
-			drop()
-			return nil, err
-		}
+	if err := checkManifest(m); err != nil {
+		drop()
+		return nil, err
 	}
 	staging := stagingDir(cfg, slug)
 	if err := removeUnder(incomingDir(cfg), staging); err != nil {
@@ -733,6 +778,9 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := checkManifest(m); err != nil {
+		return nil, nil, err
+	}
 	ws := cfg.WorkspaceDir(slug)
 	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
 		return nil, nil, err
@@ -784,9 +832,6 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 	// The workspace's own files, before the guide and the hook: those are
 	// this computer's to write, with its own paths.
 	for _, f := range m.Root {
-		if err := checkRootPath(f.Path, m.Repos); err != nil {
-			return fail(err)
-		}
 		dst := filepath.Join(ws, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return fail(err)
