@@ -110,3 +110,39 @@ func TestCleanName(t *testing.T) {
 		}
 	}
 }
+
+// A half-close on one side of a mirrored connection reaches the other side
+// through bufferedConn, so the owner sees EOF.
+func TestBufferedConnPassesHalfClose(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			got <- err
+			return
+		}
+		defer c.Close()
+		_, err = io.Copy(io.Discard, c) // returns once the peer half-closes
+		got <- err
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	b := &bufferedConn{Conn: c, r: bufio.NewReader(c)}
+	closeWrite(b)
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the far side never saw the half-close")
+	}
+}
