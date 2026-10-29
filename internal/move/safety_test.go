@@ -239,3 +239,38 @@ func TestCheckRootPath(t *testing.T) {
 		}
 	}
 }
+
+// An archive's manifest named a transcript as "../../x": Finish copied that
+// file from outside the staging area into the agent's projects folder.
+func TestCheckManifest(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	good := func() *Manifest {
+		return &Manifest{
+			Task:        store.Task{Repos: []store.TaskRepo{{Name: "app"}}},
+			Repos:       []Repo{{Name: "app", Branch: "feat/t1", Head: head, WIP: strings.Repeat("b", 64), Bundle: "bundles/app.bundle"}},
+			Transcripts: []Transcript{{File: "transcripts/0-s.jsonl"}},
+		}
+	}
+	if err := checkManifest(good()); err != nil {
+		t.Fatal(err)
+	}
+	for name, spoil := range map[string]func(m *Manifest){
+		"transcript ..":     func(m *Manifest) { m.Transcripts[0].File = "../../.ssh/id_ed25519" },
+		"transcript abs":    func(m *Manifest) { m.Transcripts[0].File = "/etc/passwd" },
+		"transcript empty":  func(m *Manifest) { m.Transcripts[0].File = "" },
+		"bundle ..":         func(m *Manifest) { m.Repos[0].Bundle = "bundles/../../other" },
+		"branch option":     func(m *Manifest) { m.Repos[0].Branch = "--force" },
+		"branch invalid":    func(m *Manifest) { m.Repos[0].Branch = "a..b" },
+		"branch empty":      func(m *Manifest) { m.Repos[0].Branch = "" },
+		"head option":       func(m *Manifest) { m.Repos[0].Head = "--all" },
+		"wip short":         func(m *Manifest) { m.Repos[0].WIP = "abc" },
+		"task repo unsent":  func(m *Manifest) { m.Task.Repos = append(m.Task.Repos, store.TaskRepo{Name: "../../x"}) },
+		"root file escapes": func(m *Manifest) { m.Root = []RootFile{{Path: "../x"}} },
+	} {
+		m := good()
+		spoil(m)
+		if checkManifest(m) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
