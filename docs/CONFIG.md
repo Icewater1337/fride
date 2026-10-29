@@ -129,6 +129,7 @@ backend's compose file.
 | `inbox` | `{ "notify": "<shell command>" }`: how the sender of an inbox message hears back. See [inbox](#inbox). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
+| `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
 
 ## repos.&lt;name&gt;
 
@@ -386,6 +387,39 @@ with a token it was paired with. See [COMPANION.md](COMPANION.md).
 | `enabled` | Start `fride serve` in companion mode, as `--under-fridolin` or `FRIDE_UNDER_FRIDOLIN=1` do. Fleet mode then stays off. |
 | `webhookUrl` | Where thread news is POSTed, signed. Loopback only (`127.0.0.1`, `[::1]`, `localhost`); `fride config check` refuses anything else. Default: the URL the companion gave when it paired. |
 | `claudePlugins` | Claude Code plugin folders every Claude Code task agent loads, each passed as `--plugin-dir` (a plugin, or a folder of plugins), new and resumed sessions alike. `~` is expanded; a relative path is relative to FrIDE's home. Nothing is installed into `~/.claude`, and no prompt asks. A folder that is missing is left out and `fride config check` warns. Remove an entry (or the field) to opt out; it applies to agents started after the next reload. See [plugins for task agents](COMPANION.md#plugins-for-task-agents). |
+
+## git
+
+The git identities a task can be created with: who its commits are made as,
+and which token its pushes use. See [GIT.md](GIT.md).
+
+```json
+"git": {
+  "identities": [
+    { "id": "github", "label": "GitHub", "kind": "github", "host": "github.com",
+      "name": "Jane Doe", "email": "jane@example.com" },
+    { "id": "work", "label": "Work GitLab", "kind": "gitlab", "host": "gitlab.example.com",
+      "name": "Jane Doe", "email": "jane@work.example.com" }
+  ],
+  "default": "github"
+}
+```
+
+| field | meaning |
+|---|---|
+| `identities[].id` | Lowercase letters, digits, `-` and `_`, up to 32, starting with a letter or digit. Unique. `none` is reserved: it asks for no identity. |
+| `identities[].label` | What the UI shows. Default: the id. |
+| `identities[].kind` | `github`, `gitlab` or `generic`. It decides the username the credential helper gives, and whether `gh` or `glab` is told the token. |
+| `identities[].host` | A hostname, with an optional `:port`, such as `gitlab.example.com`. No `https://`, no path: HTTPS is assumed. A new task whose first repository's `origin` is on this host gets this identity; the first match wins. |
+| `identities[].name`, `identities[].email` | The commit identity. Optional; empty leaves git's own configuration in charge. |
+| `default` | The identity of a new task whose first repository's host matches none. Empty: no identity. It may name one the companion set. |
+
+No token goes here. Set it with `fride git token set <id>` or in Settings;
+it is kept in `$FRIDE_HOME/secrets/git/<id>.token`. Identities a companion
+sets are in `$FRIDE_HOME/git-identities.companion.json`, and one of yours
+with the same id wins. `fride config check` checks each identity, that ids
+are unique, and that `default` names one of them. Edits apply from the next
+reload of config.json, to tasks created and sessions started after it.
 
 ## requirements
 

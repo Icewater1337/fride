@@ -50,6 +50,14 @@ func (h orchHost) Profiles() []string {
 	return out
 }
 
+func (h orchHost) GitIdentities() []orchestrator.GitIdentity {
+	var out []orchestrator.GitIdentity
+	for _, g := range h.s.cfg.Settings.GitIdentities() {
+		out = append(out, orchestrator.GitIdentity{ID: g.ID, Label: g.Label, Host: g.Host})
+	}
+	return out
+}
+
 func (h orchHost) Tasks() []orchestrator.TaskInfo {
 	tasks, err := h.s.st.List()
 	if err != nil {
@@ -94,7 +102,7 @@ func (h orchHost) CreateTask(n orchestrator.NewTask) (orchestrator.TaskInfo, err
 	for _, r := range n.Repos {
 		specs = append(specs, repoSpec{Name: r.Name, BaseRef: r.BaseRef})
 	}
-	v, err := h.s.createTask(n.Name, specs, kind, n.StartAgent, n.Dangerous, n.Branch, n.Profile)
+	v, err := h.s.createTask(n.Name, specs, kind, n.StartAgent, n.Dangerous, n.Branch, n.Profile, n.GitIdentity)
 	if err != nil {
 		return orchestrator.TaskInfo{}, err
 	}

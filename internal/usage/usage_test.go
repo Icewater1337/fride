@@ -14,7 +14,7 @@ import (
 // spent after a large tool result went uncounted and the total looked real.
 func TestUsageCountsPastAnOversizedLine(t *testing.T) {
 	home := t.TempDir()
-	dir := filepath.Join(home, "projects", encodeDir("/ws"))
+	dir := filepath.Join(home, "projects", "-ws")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -186,6 +186,12 @@ func (s *Server) handleCompanion(w http.ResponseWriter, r *http.Request) {
 		s.companionInfo(w)
 	case rest == "mem" && r.Method == http.MethodGet:
 		s.companionMem(w)
+	case rest == "git/identities" && r.Method == http.MethodGet:
+		writeJSON(w, 200, s.identities())
+	case len(parts) == 3 && parts[0] == "git" && parts[1] == "identities" && r.Method == http.MethodPut:
+		s.companionPutIdentity(w, r, parts[2])
+	case len(parts) == 3 && parts[0] == "git" && parts[1] == "identities" && r.Method == http.MethodDelete:
+		s.companionDeleteIdentity(w, parts[2])
 	case rest == "tasks" && r.Method == http.MethodPost:
 		s.companionCreate(w, r)
 	case rest == "tasks/import" && r.Method == http.MethodPost:
@@ -248,6 +254,8 @@ func (s *Server) companionInfo(w http.ResponseWriter) {
 		"mode": "companion", "configured": s.cfg.Configured(),
 		"repos": repos, "profiles": profiles,
 		"webhook_url": s.companionWebhook(), "orchestrator": s.orch != nil,
+		// The companion pushes identities only to a FrIDE that says it takes them.
+		"git_identities": true,
 	})
 }
 
@@ -282,8 +290,15 @@ func (s *Server) companionCreate(w http.ResponseWriter, r *http.Request) {
 		Repos   []string `json:"repos"`
 		Source  string   `json:"source"`
 		Ref     string   `json:"ref"`
+		// GitIdentity is what the tasks for this message are created as:
+		// an id, "none", or "" for FrIDE's own choice by host.
+		GitIdentity string `json:"git_identity"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 128<<10)).Decode(&req); err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	if err := s.checkGitIdentity(req.GitIdentity); err != nil {
 		writeErr(w, 400, err)
 		return
 	}
@@ -303,7 +318,7 @@ func (s *Server) companionCreate(w http.ResponseWriter, r *http.Request) {
 	if source == "" {
 		source = "companion"
 	}
-	v, existing, err := s.orch.Receive(source, req.Ref, text)
+	v, existing, err := s.orch.ReceiveAs(source, req.Ref, text, req.GitIdentity)
 	if err != nil {
 		writeErr(w, 400, err)
 		return
@@ -361,6 +376,7 @@ func (s *Server) taskSummary(slug string) map[string]any {
 		"agent_running": s.terms.AgentSession(t.Slug) != nil,
 		"agent_waiting": s.terms.Attention(t.Slug),
 		"workspace":     s.cfg.WorkspaceDir(t.Slug),
+		"git_identity":  t.GitIdentity,
 	}
 	if st := stack.Get(s.cfg, t.Slug); st != nil {
 		out["stack_up"], out["entry_url"] = st.Up, st.EntryURL

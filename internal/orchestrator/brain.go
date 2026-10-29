@@ -74,6 +74,9 @@ type Action struct {
 	// absent field has to stay distinguishable from an explicit false: the
 	// default is to start one.
 	StartAgent *bool `json:"startAgent,omitempty"`
+	// GitIdentity is who the task's commits and pushes are made as. Empty
+	// leaves it to the inbox thread's, then to the IDE's choice by host.
+	GitIdentity string `json:"gitIdentity,omitempty"`
 	// Instruction is the new task's first instruction for its agent. It is
 	// held and typed in once that agent is at its prompt, because the task's
 	// slug is only known after creating it, and a freshly started agent is
@@ -174,6 +177,7 @@ func schema() string {
           "agent": {"type": "string", "enum": ["claude", "codex", "antigravity"]},
           "dangerous": {"type": "boolean"},
           "startAgent": {"type": "boolean"},
+          "gitIdentity": {"type": "string", "description": "For create_task: one of the GIT IDENTITIES listed in the state, only when the user names one; omit it and the IDE picks by the repository's host."},
           "instruction": {"type": "string", "description": "For create_task: the first instruction for the new task's agent, typed in once it is ready. One line."},
           "status": {"type": "string", "enum": ["open", "in_progress", "done"]},
           "conversation": {"type": "string", "description": "For resume_agent: which recorded conversation to reopen. Omit for the most recent free one."}

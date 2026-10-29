@@ -151,6 +151,8 @@ type Mirror struct {
 	Port  int    `json:"port"`
 	Conns int    `json:"connections"`
 	ln    net.Listener
+	live  map[net.Conn]struct{} // both ends of every open connection, for Close
+	shut  bool
 }
 
 // Mirrors manages the ports this node mirrors from others.
@@ -182,7 +184,7 @@ func (ms *Mirrors) Open(node, addr, task string, ports []int) (opened []int, pro
 			problems = append(problems, fmt.Sprintf(":%d is in use on this computer", p))
 			continue
 		}
-		m := &Mirror{Node: node, Task: task, Port: p, ln: ln}
+		m := &Mirror{Node: node, Task: task, Port: p, ln: ln, live: map[net.Conn]struct{}{}}
 		ms.m[p] = m
 		go ms.serve(m, addr)
 		opened = append(opened, p)
@@ -197,8 +199,11 @@ func (ms *Mirrors) serve(m *Mirror, addr string) {
 			return
 		}
 		go func() {
-			ms.count(m, 1)
-			defer ms.count(m, -1)
+			if !ms.track(m, c, true) {
+				c.Close()
+				return
+			}
+			defer ms.untrack(m, c, true)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			remote, br, err := openTunnel(ctx, ms.net, addr, m.Port)
 			cancel()
@@ -207,6 +212,12 @@ func (ms *Mirrors) serve(m *Mirror, addr string) {
 				c.Close()
 				return
 			}
+			if !ms.track(m, remote, false) {
+				remote.Close()
+				c.Close()
+				return
+			}
+			defer ms.untrack(m, remote, false)
 			pipe(c, c, &bufferedConn{Conn: remote, r: br})
 		}()
 	}
@@ -219,10 +230,35 @@ type bufferedConn struct {
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
-func (ms *Mirrors) count(m *Mirror, d int) {
+// CloseWrite passes a half-close on; embedding net.Conn would hide it.
+func (b *bufferedConn) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+// track registers an open connection; false once the mirror is closed.
+func (ms *Mirrors) track(m *Mirror, c net.Conn, client bool) bool {
 	ms.mu.Lock()
-	m.Conns += d
-	ms.mu.Unlock()
+	defer ms.mu.Unlock()
+	if m.shut {
+		return false
+	}
+	m.live[c] = struct{}{}
+	if client {
+		m.Conns++
+	}
+	return true
+}
+
+func (ms *Mirrors) untrack(m *Mirror, c net.Conn, client bool) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	delete(m.live, c)
+	if client {
+		m.Conns--
+	}
 }
 
 // Close stops mirroring a task's ports (all of a node's when task is "", all
@@ -234,6 +270,10 @@ func (ms *Mirrors) Close(node, task string) int {
 	for p, m := range ms.m {
 		if (node == "" || m.Node == node) && (task == "" || m.Task == task) {
 			m.ln.Close()
+			m.shut = true
+			for c := range m.live {
+				c.Close() // else a tunnel opened earlier keeps relaying
+			}
 			delete(ms.m, p)
 			n++
 		}

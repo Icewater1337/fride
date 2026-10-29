@@ -55,6 +55,7 @@
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
   <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></symbol>
 </svg>
 
 <header class="topbar">
@@ -295,6 +296,17 @@
           <tr><th>Repository</th><th>Core</th><th>Copies into new worktrees</th><th>IDE</th></tr>
         </thead><tbody></tbody></table>
       </div>
+
+      <h3 class="sh">Git identities</h3>
+      <p class="hint">Who a task commits and pushes as. Each one is a forge account: its commit
+        name and email, and a token that git, <code>gh</code> and <code>glab</code> get in that task
+        only. Identities are listed in config.json (<code>git.identities</code>) or set by a companion
+        program. The token is stored on this computer, readable by you alone, and never shown again.</p>
+      <div class="tablewrap">
+        <table id="git-table" class="table"><thead>
+          <tr><th>Identity</th><th>Host</th><th>Commits as</th><th>Token</th></tr>
+        </thead><tbody></tbody></table>
+      </div>
     </div>
   </section>
 
@@ -307,6 +319,7 @@
         <div class="task-badges">
           <span id="task-node-badge" class="chip node hidden"></span>
           <button id="task-mode-badge" class="chip mode" title="The profile this task boots with — click to switch"><svg class="i"><use href="#i-layers"/></svg><span class="lbl"></span><svg class="i caret"><use href="#i-chevron-down"/></svg></button>
+          <button id="task-git-badge" class="chip git hidden" title="The git identity this task commits and pushes as — click to switch"><svg class="i"><use href="#i-key"/></svg><span class="lbl"></span><svg class="i caret"><use href="#i-chevron-down"/></svg></button>
           <button id="task-perm-badge" class="chip perm hidden"><svg class="i"><use href="#i-shield"/></svg><span class="lbl"></span></button>
         </div>
       </div>
@@ -533,6 +546,11 @@
                autocomplete="off" spellcheck="false">
         <span class="hint" id="branch-hint">Created in every selected repository, and what your
           commits get pushed to. Suggested from the name — edit it and the suggestion stops.</span>
+      </label>
+      <label class="field hidden" id="git-line">Git identity
+        <select id="new-git"></select>
+        <span class="hint" id="git-hint">Who the task commits and pushes as, with which token.
+          Picked by the first repository's host; change it when the work belongs to another account.</span>
       </label>
       <h3>Repositories &amp; base branch</h3>
       <p class="hint">The workspace is the folder this task opens; each repository below gets

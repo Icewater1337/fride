@@ -222,7 +222,6 @@ func transcriptPath(home, workspaceDir, sessionID string) string {
 		return "" // a session id is a uuid; anything else is not ours to open
 	}
 	projects := filepath.Join(home, ".claude", "projects")
-	prefix := claudeEncode(filepath.Clean(workspaceDir))
 	des, err := os.ReadDir(projects)
 	if err != nil {
 		return ""
@@ -231,7 +230,7 @@ func transcriptPath(home, workspaceDir, sessionID string) string {
 		if !de.IsDir() {
 			continue
 		}
-		if n := de.Name(); n != prefix && !strings.HasPrefix(n, prefix+"-") {
+		if !ClaudeHolds(de.Name(), workspaceDir) {
 			continue
 		}
 		p := filepath.Join(projects, de.Name(), sessionID+".jsonl")

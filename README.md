@@ -155,6 +155,16 @@ always.
 Without the mode, FrIDE is exactly what it was. See
 [docs/COMPANION.md](docs/COMPANION.md).
 
+## Git identities
+
+GitHub for one project, a self-hosted GitLab for another: list each account
+in config.json (`git.identities`), and a task commits and pushes as the one
+its first repository's host names, or the one you pick when you create it.
+Its sessions get the commit name and email, a credential helper that gives
+the account's token to that host only, and `GH_TOKEN` or `GITLAB_TOKEN` for
+`gh` and `glab`. Tokens are set with `fride git token set <id>` or in
+Settings, and stored readable by you alone. See [docs/GIT.md](docs/GIT.md).
+
 ## Messages from outside (the inbox)
 
 `fride in "<message>"` hands the orchestrator a message from anywhere: a
@@ -178,8 +188,11 @@ fride doctor                              # is this machine ready?
 fride scan ~/work                         # what is in these repositories?
 fride config check                        # validate config.json
 
-fride task new <name> [repo[:baseref]...] [--profile p] [--agent claude|codex|antigravity] [--branch b]
+fride task new <name> [repo[:baseref]...] [--profile p] [--agent claude|codex|antigravity] [--branch b] [--git-identity id]
 fride task ls
+fride task git-identity <task> <id|none>  # for sessions started from now on
+fride git ls                              # the git identities, and whether each has a token
+fride git token set <id>                  # the token from stdin, or typed without echo
 fride task profile <task> <profile>       # applies at the next stack up
 fride task service <task> <svc> <shared|task|off|default>
 fride task rm <task> [--force]

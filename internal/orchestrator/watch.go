@@ -240,6 +240,17 @@ func (o *Orchestrator) prompt(lead string, obs []Observation) string {
 		b.WriteString("\nPROFILES (ways to boot the stack; the first is the default): " + strings.Join(ps, ", ") + "\n")
 	}
 
+	if ids := o.host.GitIdentities(); len(ids) > 0 {
+		b.WriteString("\nGIT IDENTITIES (who a new task's commits and pushes are made as; leave gitIdentity out and the IDE picks by the repository's host):\n")
+		for _, g := range ids {
+			line := "  " + g.ID + " — " + g.Host
+			if g.Label != "" && g.Label != g.ID {
+				line += " (" + g.Label + ")"
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+
 	b.WriteString("\nTASKS:\n")
 	tasks := o.host.Tasks()
 	if len(tasks) == 0 {
