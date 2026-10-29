@@ -219,6 +219,14 @@ type bufferedConn struct {
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
+// CloseWrite passes a half-close on; embedding net.Conn would hide it.
+func (b *bufferedConn) CloseWrite() error {
+	if cw, ok := b.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 func (ms *Mirrors) count(m *Mirror, d int) {
 	ms.mu.Lock()
 	m.Conns += d
