@@ -332,6 +332,26 @@ the entry to stop loading it; agents started after the next reload of
 config.json go without it. The orchestrator's own Claude Code process does not
 load them.
 
+## Rules for task agents
+
+Task agents run Claude Code in auto mode, whose own judgement refuses some
+steps however clearly the task asks for them: by default, merging a pull
+request no human has approved. A companion whose agents are to merge their
+own work once CI is green, as fridolin's bug fixer asks, lists that step in
+`companion.claudeAllow`:
+
+```json
+"companion": { "enabled": true, "claudeAllow": ["Bash(gh pr merge:*)"] }
+```
+
+Each rule is a Claude Code permission rule, passed to every task agent as one
+`--settings '{"permissions":{"allow":[…]}}'` for that session only: nothing
+goes into `~/.claude` or the workspace, and the person's own sessions are
+untouched. An allowed command runs without the mode's check, so list only the
+commands you want every task to run on its own. Rules that grant any command
+(`Bash`, `Bash(*)`) are dropped by auto mode (`fride config check` warns).
+Agents started after the next reload of config.json have them.
+
 ## Moving a task with files
 
 `fride task export <task> <file>` writes the task as one file (a gzip'd tar):

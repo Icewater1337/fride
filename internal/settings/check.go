@@ -134,6 +134,12 @@ func (s *Settings) Check() []Problem {
 			add(false, "companion.claudePlugins", "%s is not a directory, so task agents start without it", d)
 		}
 	}
+	for _, r := range s.ClaudeAllowRules() {
+		switch r {
+		case "Bash", "Bash(*)", "*", "PowerShell", "PowerShell(*)":
+			add(false, "companion.claudeAllow", "%s grants any command; auto mode drops it, so name the commands (Bash(gh pr merge:*))", r)
+		}
+	}
 
 	if l := s.Ledger; l != nil {
 		if strings.TrimSpace(l.Remote) == "" {

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -318,6 +319,29 @@ type Companion struct {
 	// plugins. A leading ~ is expanded; a relative path is relative to FrIDE's
 	// home. Nothing is installed into ~/.claude. Remove an entry to opt out.
 	ClaudePlugins []string `json:"claudePlugins,omitempty"`
+	// ClaudeAllow are Claude Code permission rules every Claude Code task
+	// agent has without asking, as `"Bash(gh pr merge:*)"`, passed as
+	// --settings '{"permissions":{"allow":[…]}}'. In auto mode a rule
+	// stands over the mode's own judgement too, which by default refuses,
+	// for one, to merge a pull request no human approved. Rules that grant
+	// any command (Bash, Bash(*)) are dropped by auto mode and warned about.
+	ClaudeAllow []string `json:"claudeAllow,omitempty"`
+}
+
+// ClaudeAllowRules is companion.claudeAllow, trimmed, without empty or
+// repeated rules.
+func (s *Settings) ClaudeAllowRules() []string {
+	if s == nil || s.Companion == nil {
+		return nil
+	}
+	var out []string
+	for _, r := range s.Companion.ClaudeAllow {
+		r = strings.TrimSpace(r)
+		if r != "" && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // ClaudePluginDirs is companion.claudePlugins as absolute paths.
