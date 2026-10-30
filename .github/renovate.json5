@@ -1,0 +1,53 @@
+// Renovate (the Mend Renovate GitHub app) proposes the dependency updates:
+// Go modules and the actions the workflows pin by SHA. The daily dependency
+// agent merges what it opens (docs/DEPENDENCIES.md).
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  timezone: "Europe/Zurich",
+  // PRs come in the early morning; the dependency agent runs after.
+  schedule: ["before 6am"],
+  // A release has to be a week old before it is proposed, which keeps a
+  // hijacked release that is yanked within days out of the proposals.
+  // Security fixes come at once (vulnerabilityAlerts below).
+  minimumReleaseAge: "7 days",
+  internalChecksFilter: "strict",
+  // The dependency agent works through the queue; there is no reason to
+  // hold PRs back.
+  prHourlyLimit: 0,
+  prConcurrentLimit: 20,
+  labels: ["dependencies"],
+  dependencyDashboard: true,
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    labels: ["dependencies", "security"],
+    minimumReleaseAge: null,
+    schedule: ["at any time"],
+  },
+  // A Go major release moves to a new import path; Renovate rewrites the
+  // imports along with go.mod.
+  postUpdateOptions: ["gomodTidy", "gomodUpdateImportPaths"],
+
+  packageRules: [
+    // Minor and patch releases of an ecosystem come grouped in one PR; a
+    // major release comes on its own, so a breaking change is looked at
+    // by itself.
+    {
+      matchManagers: ["gomod"],
+      matchUpdateTypes: ["minor", "patch", "digest"],
+      groupName: "Go modules",
+    },
+    {
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch", "digest"],
+      groupName: "GitHub Actions",
+    },
+
+    // go.mod's go directive moves by hand, with the Go release CI tests.
+    {
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang", "toolchain"],
+      enabled: false,
+    },
+  ],
+}
