@@ -36,3 +36,21 @@ func TestCompanionClaudePlugins(t *testing.T) {
 		t.Error("a missing plugin folder is not reported")
 	}
 }
+
+// A rule that grants any command is a warning: auto mode drops it.
+func TestCompanionClaudeAllowBlanket(t *testing.T) {
+	s := fixture(t)
+	s.Companion = &Companion{ClaudeAllow: []string{"Bash(gh pr merge:*)", "Bash(*)"}}
+	var warned []string
+	for _, p := range s.Check() {
+		if p.Where == "companion.claudeAllow" {
+			if p.Error {
+				t.Errorf("an error, not a warning: %s", p)
+			}
+			warned = append(warned, p.Msg)
+		}
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "Bash(*)") {
+		t.Errorf("warnings %q", warned)
+	}
+}

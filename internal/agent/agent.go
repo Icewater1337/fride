@@ -58,6 +58,11 @@ type Options struct {
 	// PluginDirs are Claude Code plugin folders loaded for this session only,
 	// each as --plugin-dir. The other agents ignore them.
 	PluginDirs []string
+	// AllowRules are Claude Code permission rules this session has without
+	// asking, as one --settings '{"permissions":{"allow":[…]}}' (one
+	// argument, unlike --allowedTools, which would take the prompt after it
+	// for a rule). The other agents ignore them.
+	AllowRules []string
 }
 
 type spec struct {
@@ -134,6 +139,10 @@ func claudeArgv(o Options) []string {
 	}
 	for _, d := range o.PluginDirs {
 		argv = append(argv, "--plugin-dir", d)
+	}
+	if len(o.AllowRules) > 0 {
+		js, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": o.AllowRules}})
+		argv = append(argv, "--settings", string(js))
 	}
 	if o.ResumeID != "" {
 		// Resume one specific conversation. --continue would only ever reopen the

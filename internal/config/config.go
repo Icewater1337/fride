@@ -157,6 +157,7 @@ func (c *Config) AgentArgv(kind agent.Kind, o agent.Options) []string {
 				o.PluginDirs = append(o.PluginDirs, d)
 			}
 		}
+		o.AllowRules = c.Settings.ClaudeAllowRules()
 	}
 	return agent.Argv(kind, o)
 }
