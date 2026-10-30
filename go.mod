@@ -7,6 +7,7 @@ require (
 	github.com/creack/pty v1.1.24
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
+	golang.org/x/text v0.43.0
 	tailscale.com v1.104.1
 )
 
@@ -46,7 +47,6 @@ require (
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect

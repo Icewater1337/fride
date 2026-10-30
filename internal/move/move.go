@@ -38,6 +38,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 	"io"
 	"io/fs"
 	"os"
@@ -579,15 +581,55 @@ func stagingDir(cfg *config.Config, slug string) string {
 	return filepath.Join(incomingDir(cfg), slug)
 }
 
+// foldKey is a path component as a case-insensitive, normalising filesystem
+// sees it: Unicode-folded and NFC, without the trailing dots and spaces
+// Windows drops.
+func foldKey(c string) string {
+	return cases.Fold().String(norm.NFC.String(strings.TrimRight(c, ". ")))
+}
+
+// checkRootCollisions refuses root files whose paths fold onto one another, or
+// where one folds onto a directory the other needs.
+func checkRootCollisions(files []RootFile) error {
+	dir := map[string]bool{}
+	for _, f := range files {
+		var parts []string
+		for _, c := range strings.Split(filepath.ToSlash(filepath.Clean(filepath.FromSlash(f.Path))), "/") {
+			parts = append(parts, foldKey(c))
+		}
+		for i := 1; i < len(parts); i++ {
+			dir[strings.Join(parts[:i], "/")] = true
+		}
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		var parts []string
+		for _, c := range strings.Split(filepath.ToSlash(filepath.Clean(filepath.FromSlash(f.Path))), "/") {
+			parts = append(parts, foldKey(c))
+		}
+		k := strings.Join(parts, "/")
+		if seen[k] || dir[k] {
+			return fmt.Errorf("refusing workspace file %q: its path folds onto another entry", f.Path)
+		}
+		seen[k] = true
+	}
+	return nil
+}
+
 // checkRootPath refuses a root file that would land outside the workspace, in
 // one of its repositories or in its sidecar. The archive comes from another
 // computer, and the paths in it are only as good as that computer's code.
 func checkRootPath(p string, repos []Repo) error {
 	clean := filepath.Clean(filepath.FromSlash(p))
 	first, _, _ := strings.Cut(filepath.ToSlash(clean), "/")
-	bad := p == "" || filepath.IsAbs(clean) || clean == "." || first == ".." || first == sidecarDir
+	bad := p == "" || filepath.IsAbs(clean) || clean == "." || first == ".." || foldKey(first) == sidecarDir
 	for _, r := range repos {
-		bad = bad || first == r.Name
+		bad = bad || foldKey(first) == foldKey(r.Name)
+	}
+	// Case-insensitive filesystems and Unicode normalisation make these names
+	// the same as ".git" on disk.
+	for _, c := range strings.Split(filepath.ToSlash(clean), "/") {
+		bad = bad || foldKey(c) == ".git"
 	}
 	if bad {
 		return fmt.Errorf("refusing workspace file %q", p)
@@ -606,6 +648,9 @@ func checkManifest(m *Manifest) error {
 		if err := checkRootPath(f.Path, m.Repos); err != nil {
 			return err
 		}
+	}
+	if err := checkRootCollisions(m.Root); err != nil {
+		return err
 	}
 	sent := map[string]bool{}
 	for _, r := range m.Repos {
