@@ -664,6 +664,28 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		}
 		res = append(res, RemoveResult{Repo: repo.Name, Removed: true, Detail: detail})
 	}
+	// A worktree whose repository is no longer discovered (its base folder left
+	// the settings, its main checkout moved) is not in cfg.Repos. Skipping it
+	// silently let Purge delete its uncommitted work with the folder.
+	known := map[string]bool{}
+	for _, repo := range cfg.Repos {
+		known[repo.Name] = true
+	}
+	entries, err := os.ReadDir(ws)
+	if err != nil {
+		return res, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || known[e.Name()] {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(ws, e.Name(), ".git")); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		allGone = false
+		res = append(res, RemoveResult{Repo: e.Name(), Removed: false,
+			Detail: "kept — repository no longer configured; inspect with: git -C " + filepath.Join(ws, e.Name()) + " status"})
+	}
 	if allGone {
 		// The workspace root also holds the files this tool put there itself
 		// (CLAUDE.md, .claude/settings.json for the PreCompact hook). Remove

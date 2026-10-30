@@ -200,3 +200,26 @@ func TestCreateCleansUpOnlyWhatItMade(t *testing.T) {
 		t.Error("the branch the failed Create made is still there")
 	}
 }
+
+// #47: a worktree whose repository is no longer discovered was skipped
+// silently, and Purge deleted its uncommitted work with the folder.
+func TestPurgeKeepsAWorktreeOfAnUndiscoveredRepo(t *testing.T) {
+	cfg, _ := setup(t, false)
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/x"); err != nil {
+		t.Fatal(err)
+	}
+	wt := cfg.RepoDir("t1", "api")
+	write(t, filepath.Join(wt, "wip.txt"), "uncommitted\n")
+	cfg.Settings.BaseFolders = []string{t.TempDir()}
+	cfg.Reload()
+	res, err := Purge(cfg, "t1")
+	if err == nil {
+		t.Errorf("Purge went ahead: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "wip.txt")); err != nil {
+		t.Fatalf("the uncommitted work went: %+v", res)
+	}
+	if len(res) != 1 || res[0].Removed || !strings.Contains(res[0].Detail, "no longer configured") {
+		t.Errorf("results = %+v", res)
+	}
+}
