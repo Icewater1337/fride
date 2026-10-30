@@ -240,6 +240,33 @@ func TestCheckRootPath(t *testing.T) {
 	}
 }
 
+func TestCheckRootPathFolds(t *testing.T) {
+	repos := []Repo{{Name: "app"}}
+	for _, bad := range []string{".GIT/config", "x/.Git/hooks/pre-commit", ".git ", "x/.git./y", "APP/f.txt", "App/.git", ".FRIDE/task.json", "caf\u00e9/.git"} {
+		if checkRootPath(bad, repos) == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	if checkRootPath("gitignore/x", repos) != nil || checkRootPath("app2/x", repos) != nil {
+		t.Error("an unrelated name was refused")
+	}
+	files := func(p ...string) *Manifest {
+		m := &Manifest{}
+		for _, x := range p {
+			m.Root = append(m.Root, RootFile{Path: x})
+		}
+		return m
+	}
+	for _, c := range [][]string{{"Notes/a.md", "notes/A.MD"}, {"cafe\u0301/x", "caf\u00e9/x"}, {"a/b", "A"}} {
+		if checkManifest(files(c...)) == nil {
+			t.Errorf("%q: entries that fold onto each other were accepted", c)
+		}
+	}
+	if err := checkManifest(files("a/b", "a/c", "d")); err != nil {
+		t.Error(err)
+	}
+}
+
 // An archive's manifest named a transcript as "../../x": Finish copied that
 // file from outside the staging area into the agent's projects folder.
 func TestCheckManifest(t *testing.T) {
