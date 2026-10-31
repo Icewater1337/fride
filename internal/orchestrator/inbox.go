@@ -559,6 +559,11 @@ func (o *Orchestrator) mentioned(text string) []int {
 			}
 		}
 	}
+	// A say about several threads' tasks is not any one sender's news; each
+	// would read the others' (#52). Per-task reports are for that.
+	if len(out) > 1 {
+		return nil
+	}
 	return out
 }
 
