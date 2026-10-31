@@ -1,6 +1,6 @@
 module github.com/Icewater1337/fride
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/coder/websocket v1.8.15
@@ -8,7 +8,7 @@ require (
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.org/x/text v0.43.0
-	tailscale.com v1.104.1
+	tailscale.com v1.104.2
 )
 
 require (
