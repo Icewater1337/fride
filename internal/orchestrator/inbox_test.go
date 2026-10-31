@@ -601,6 +601,33 @@ func TestAReportGoesOnlyToItsTasksThreads(t *testing.T) {
 	}
 }
 
+// A look whose one "say" names tasks of several threads (#52) is the
+// orchestrator's own: it reaches none of them, and asks none of them for a
+// reply. A say naming a single thread's task still reaches that thread.
+func TestASayNamingSeveralThreadsTasksReachesNone(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, map[string]any{
+		"say": "t1 is ready to merge; t2 is finished and idle. What next?", "needsUser": true, "actions": []any{},
+	})
+	o.mu.Lock()
+	o.st.Threads = []Thread{
+		{ID: 1, Source: "chat", Status: ThreadActive, Tasks: []string{"t1"}},
+		{ID: 2, Source: "chat", Status: ThreadActive, Tasks: []string{"t2"}},
+	}
+	gen := o.gen
+	o.mu.Unlock()
+
+	if err := o.think(context.Background(), gen, "look", loop, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int{1, 2} {
+		v := threadOf(t, o, id)
+		if len(v.Messages) != 0 || v.Status != ThreadActive {
+			t.Fatalf("thread #%d got %+v, status %s; want nothing", id, v.Messages, v.Status)
+		}
+	}
+}
+
 // A message that comes with a git identity gets it on the task it starts,
 // unless the orchestrator names another; the brain is told the identities.
 func TestInboxGitIdentityReachesTheTask(t *testing.T) {
