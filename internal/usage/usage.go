@@ -17,6 +17,7 @@
 package usage
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -54,10 +55,12 @@ type Session struct {
 type entry struct {
 	Type      string    `json:"type"`
 	UUID      string    `json:"uuid"`
+	RequestID string    `json:"requestId"`
 	SessionID string    `json:"sessionId"`
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
 	Message   struct {
+		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage struct {
 			InputTokens              int64 `json:"input_tokens"`
@@ -88,7 +91,7 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 		return nil, err
 	}
 	u := &Usage{}
-	seen := map[string]bool{}   // dedupe by entry uuid: resumed/forked
+	seen := map[string]bool{}   // dedupe by response id: resumed/forked
 	models := map[string]bool{} // transcripts repeat earlier lines
 	sessions := map[string]*Session{}
 
@@ -155,10 +158,13 @@ func accumulate(path, workspaceDir string, u *Usage, seen map[string]bool,
 			}
 			confirmed = true
 		}
-		if e.Type != "assistant" || e.UUID == "" || seen[e.UUID] {
+		// One response is written as a line per content block, each with its own
+		// uuid and the same usage, so key on the response, not the line.
+		key := cmp.Or(e.Message.ID, e.RequestID, e.UUID)
+		if e.Type != "assistant" || key == "" || seen[key] {
 			return true
 		}
-		seen[e.UUID] = true
+		seen[key] = true
 
 		us := e.Message.Usage
 		if us.InputTokens == 0 && us.OutputTokens == 0 &&
