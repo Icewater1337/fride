@@ -539,6 +539,15 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 			asked = append(asked, o.threadsFor(r.Task)...)
 		}
 	}
+	// Marked under the lock that added the messages: apply can run for tens of
+	// seconds, and a tick's noteNews in that time would ship the report as a
+	// plain update (#64).
+	if tr.origin == fromInbox || gen == o.gen {
+		if tr.origin != fromInbox && reply.NeedsUser {
+			o.asking(about)
+		}
+		o.asking(asked)
+	}
 	o.save()
 	o.mu.Unlock()
 
@@ -551,13 +560,8 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 		// question about one message is that thread's, answered there, and
 		// does not stop the loop from minding every other task.
 		o.settleInbox(tr, reply.NeedsUser)
-		o.asking(asked)
 	case (reply.NeedsUser || len(asked) > 0) && gen == o.gen:
 		o.mem.awaiting = true
-		if reply.NeedsUser {
-			o.asking(about)
-		}
-		o.asking(asked)
 	}
 	o.thinking = false
 	o.save()

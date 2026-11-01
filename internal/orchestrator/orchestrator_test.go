@@ -31,6 +31,9 @@ type fakeHost struct {
 	sendErr   error
 	resumeErr error
 	notes     []Note
+	// onCreate, when set, runs inside CreateTask, before the lock: a tick
+	// landing while apply is busy.
+	onCreate func()
 }
 
 func newFakeHost() *fakeHost {
@@ -53,6 +56,9 @@ func (f *fakeHost) Tasks() []TaskInfo {
 }
 
 func (f *fakeHost) CreateTask(n NewTask) (TaskInfo, error) {
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, n)
