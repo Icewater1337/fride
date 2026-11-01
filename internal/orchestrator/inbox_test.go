@@ -667,3 +667,34 @@ func TestInboxGitIdentityReachesTheTask(t *testing.T) {
 		t.Fatalf("created %+v, want the named identity", h2.created)
 	}
 }
+
+// A report's question is marked under the lock that adds it, so a tick that
+// notes the thread while apply is still running ships it as the question (#64).
+func TestQuestionReachesTheSenderWhenATickRunsDuringApply(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, Reply{
+		Say:     "On it.",
+		Actions: []Action{{Kind: ActCreateTask, Name: "Search filters", Repos: []NewRepo{{Name: "backend"}}, Instruction: "Fix."}},
+		Reports: []Report{{Task: "new", Say: "Which DB?", NeedsUser: true}},
+	})
+	a, _, _ := o.Receive("cli", "a", "fix the filters")
+	settled(t, o, a.ID)
+	waitFor(t, func() bool { return len(h.noted()) >= 1 })
+	before := len(h.noted())
+
+	h.onCreate = o.noteNews // the tick's deferred noteNews, mid-apply
+	b, _, _ := o.Receive("cli", "b", "and the sorting")
+	settled(t, o, b.ID)
+	h.onCreate = nil
+
+	// The first note the thread got after the report is the one the tick sent.
+	for _, n := range h.noted()[before:] {
+		if n.Thread.ID == a.ID {
+			if !n.Asks {
+				t.Fatalf("the tick sent the question as a plain update: %+v", n)
+			}
+			return
+		}
+	}
+	t.Fatal("thread never noted after the report")
+}
