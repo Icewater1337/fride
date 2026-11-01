@@ -120,8 +120,8 @@ func Append(cfg *config.Config, slug string, e Entry) error {
 	if err != nil {
 		return err
 	}
-	// Read skips a line this long, so it would be recorded and then never seen.
-	if len(b) > jsonl.MaxLine {
+	// jsonl.Scan counts the newline toward MaxLine, so reserve space for it.
+	if len(b) >= jsonl.MaxLine {
 		return fmt.Errorf("entry is %d MiB, over the %d MiB limit", len(b)>>20, jsonl.MaxLine>>20)
 	}
 	_, err = f.Write(append(b, '\n'))
