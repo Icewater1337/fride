@@ -121,6 +121,7 @@ func TestAnAnswerReachesAQuestionButNotAConfirmation(t *testing.T) {
 	o.mu.Lock()
 	o.mem.tasks["t1"] = taskState{blocked: "Bash"}
 	o.mu.Unlock()
+	h.obs["t1"] = Observation{Running: true, Waiting: true, Blocked: "Bash"}
 	o.apply(send, user)
 	if _, sent, _ := h.counts(); sent != 1 {
 		t.Fatal("typed at a permission dialog")
