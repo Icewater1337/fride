@@ -178,6 +178,11 @@ func (f *fleetState) peer(name string) (fleet.Peer, error) {
 
 // call does a JSON request against another computer.
 func (f *fleetState) call(p fleet.Peer, method, path string, in, out any) error {
+	return f.callWith(f.client, p, method, path, in, out)
+}
+
+// callWith is call with a client of the caller's choosing (f.stream has no timeout).
+func (f *fleetState) callWith(c *http.Client, p fleet.Peer, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -194,12 +199,21 @@ func (f *fleetState) call(p fleet.Peer, method, path string, in, out any) error 
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := f.client.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return fmt.Errorf("%s: %w", p.Name, err)
 	}
 	defer resp.Body.Close()
 	return decodeResponse(p.Name, resp, out)
+}
+
+// abortKept asks the target to drop an incoming task, and reports whether it
+// refused because the task is already registered there.
+func (f *fleetState) abortKept(p fleet.Peer, slug string) bool {
+	var ab struct {
+		Status string `json:"status"`
+	}
+	return f.call(p, "POST", "/fleet/import/abort", map[string]string{"slug": slug}, &ab) == nil && strings.HasPrefix(ab.Status, "kept")
 }
 
 func decodeResponse(who string, resp *http.Response, out any) error {
@@ -549,11 +563,18 @@ func (s *Server) moveTask(t *store.Task, to string, startAgent, startStack bool)
 	var fin struct {
 		Notes []string `json:"notes"`
 	}
-	if err := s.fleet.call(p, "POST", "/fleet/import/finish",
+	// Finish starts the agent and maybe the stack: no 8 s ceiling.
+	var notes []string
+	if err := s.fleet.callWith(s.fleet.stream, p, "POST", "/fleet/import/finish",
 		map[string]any{"slug": t.Slug, "startAgent": startAgent, "startStack": startStack}, &fin); err != nil {
-		return rollback(err)
+		// The answer may have been lost after the target registered the task.
+		// Then it is there, and restoring here would leave it on both computers.
+		if !s.fleet.abortKept(p, t.Slug) {
+			return rollback(err)
+		}
+		notes = append(notes, fmt.Sprintf("%s did not confirm the arrival (%v), but has the task", to, err))
 	}
-	notes := fin.Notes
+	notes = append(notes, fin.Notes...)
 	if kept, err := move.Forget(s.cfg, m); err != nil {
 		log.Printf("move %s: removing the old workspace: %v", t.Slug, err)
 	} else if len(kept) > 0 {
