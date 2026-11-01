@@ -54,6 +54,7 @@ import (
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/store"
+	"github.com/Icewater1337/fride/internal/workspace"
 )
 
 // Version of the archive format. 2 added Root: an older target would ignore it
@@ -178,7 +179,7 @@ func Snapshot(cfg *config.Config, t *store.Task, from string) (*Manifest, error)
 		}
 		// The commit the task branched from is what the target most likely has.
 		if tr.BaseRef != "" {
-			if b, err := git(wt, nil, "merge-base", "HEAD", tr.BaseRef); err == nil {
+			if b, err := git(wt, nil, "merge-base", "--end-of-options", "HEAD", tr.BaseRef); err == nil {
 				r.Base = b
 			}
 		}
@@ -666,6 +667,9 @@ func checkManifest(m *Manifest) error {
 		sent[r.Name] = true
 	}
 	for _, tr := range m.Task.Repos {
+		if err := workspace.ValidateBaseRef(tr.BaseRef); err != nil {
+			return fmt.Errorf("%s: %w", tr.Name, err)
+		}
 		if !sent[tr.Name] {
 			return fmt.Errorf("refusing task repository %q: nothing was sent for it", tr.Name)
 		}
