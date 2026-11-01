@@ -15,7 +15,7 @@ func TestNarrateRunsHeadless(t *testing.T) {
 	bin := filepath.Join(tmp, "claude")
 	script := `#!/bin/sh
 { for a in "$@"; do printf 'ARG=[%s]\n' "$a"; done
-  pwd; ls -A | wc -l; echo "CLAUDECODE=$CLAUDECODE"; echo "STDIN=$(cat)"; } > "$REC"
+  pwd; set -- $(ls -A); echo $#; echo "CLAUDECODE=$CLAUDECODE"; echo "STDIN=$(cat)"; } > "$REC"
 echo narrated
 `
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
