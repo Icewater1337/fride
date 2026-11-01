@@ -65,11 +65,15 @@ type Sender struct {
 	stop     chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
+	// down is set when an event used up its retries; while set, events get a
+	// single attempt. Only the loop goroutine touches it.
+	down bool
 }
 
 // DefaultBackoff retries for about two minutes in all: long enough for a
 // companion that is restarting, short enough that news is not held behind a
-// companion that is gone.
+// companion that is gone: once an event has used these up, later events get a
+// single attempt each until one is delivered.
 var DefaultBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 60 * time.Second}
 
 // NewSender makes a sender; Start runs it.
@@ -129,9 +133,11 @@ func (s *Sender) deliverWithRetry(e Event) {
 	for attempt := 0; ; attempt++ {
 		retry, err := s.Deliver(e)
 		if err == nil {
+			s.down = false
 			return
 		}
-		if !retry || attempt >= len(s.Backoff) {
+		if !retry || attempt >= len(s.Backoff) || s.down {
+			s.down = s.down || retry
 			log.Printf("companion: webhook %s for thread #%d not delivered: %v", e.Event, e.ThreadID, err)
 			return
 		}
