@@ -756,6 +756,20 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 		}
 		o.mu.Lock()
 		ts := o.mem.tasks[a.Task]
+		if ts.blocked != "" {
+			// ts.blocked is only refreshed while the task is supervised, so it
+			// can outlive a dialog answered in the task's tab: look again.
+			cursor := ts.cursor
+			o.mu.Unlock()
+			ob, err := o.host.Observe(a.Task, cursor)
+			o.mu.Lock()
+			if err == nil {
+				ts = o.mem.tasks[a.Task]
+				ts.blocked = ob.Blocked
+				o.mem.tasks[a.Task] = ts
+			}
+			ts = o.mem.tasks[a.Task]
+		}
 		// Refused whoever asked, including the user. Sending is built for a text
 		// prompt — it types the line and presses Enter — and an agent stopped on
 		// a confirmation is not showing one. The keystrokes would move a

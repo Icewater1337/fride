@@ -316,6 +316,24 @@ func TestNothingIsTypedAtAnAgentOnAConfirmation(t *testing.T) {
 	}
 }
 
+// The block is only refreshed while a task is supervised; a dialog answered in
+// the tab after that must not keep refusing sends.
+func TestStaleBlockDoesNotRefuseASend(t *testing.T) {
+	h := newFakeHost()
+	h.obs["t1"] = Observation{Running: true, Waiting: true}
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.mem.tasks["t1"] = taskState{blocked: "Bash"}
+	o.mu.Unlock()
+	o.apply(Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "run the tests"}}}, user)
+	if _, sent, _ := h.counts(); sent != 1 {
+		t.Fatalf("a stale block refused the send: %v", h.sent)
+	}
+	if o.Snapshot().Awaiting {
+		t.Fatal("a stale block muted the loop")
+	}
+}
+
 func TestSayingSomethingRestoresPatience(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
