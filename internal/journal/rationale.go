@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 )
 
@@ -299,7 +300,18 @@ func Narrate(claudeBin, doc string) (string, error) {
 		"- If the record is thin, say so plainly rather than padding it.\n" +
 		"- Output prose only, no headings.\n\n---\n\n" + doc
 
-	cmd := exec.Command(claudeBin, "-p", prompt)
+	// The record is untrusted text (agents write it, task archives carry it),
+	// and narrating needs no tools: run like the other headless calls — none,
+	// clean env, an empty directory, the prompt on stdin.
+	dir, err := os.MkdirTemp("", "fride-narrate-")
+	if err != nil {
+		return "", fmt.Errorf("could not generate the narrative: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	cmd := exec.Command(claudeBin, "-p", "--tools", "", "--permission-mode", "dontAsk", "--no-session-persistence")
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = agent.CleanEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("could not generate the narrative: %w", err)
