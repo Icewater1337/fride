@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -109,5 +110,34 @@ func TestTermTakesAPasteOver32KiB(t *testing.T) {
 	}
 	if !printed(lines, "40000", 5*time.Second) {
 		t.Fatal("the paste did not reach the program in full")
+	}
+}
+
+// The socket closes when the process exits: the browser marks a tab as ended
+// only from the socket's close, and the handler's Read used to stay blocked.
+func TestTermSocketClosesWhenTheProcessExits(t *testing.T) {
+	s := &Server{terms: term.NewManager(), port: 7777}
+	sess, err := s.terms.Start("t3", term.KindShell, "shell", t.TempDir(),
+		[]string{"sh", "-c", "sleep 0.3"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(s.handleTermWS))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/term?id="+sess.ID,
+		&websocket.DialOptions{Host: "127.0.0.1:7777"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	for {
+		if _, _, err := conn.Read(ctx); err != nil {
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+				t.Fatalf("want a normal close after the process exits, got %v", err)
+			}
+			return
+		}
 	}
 }
