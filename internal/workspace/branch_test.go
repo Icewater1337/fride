@@ -1,6 +1,11 @@
 package workspace
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/Icewater1337/fride/internal/config"
+)
 
 func TestSuggestBranch(t *testing.T) {
 	cases := map[string]string{
@@ -28,5 +33,25 @@ func TestValidateBranch(t *testing.T) {
 		if err := ValidateBranch(bad); err == nil {
 			t.Errorf("ValidateBranch(%q) = nil, want an error", bad)
 		}
+	}
+}
+
+func TestValidateBaseRef(t *testing.T) {
+	for _, ok := range []string{"", "main", "origin/main", "HEAD~2", "abc123"} {
+		if err := ValidateBaseRef(ok); err != nil {
+			t.Errorf("ValidateBaseRef(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"-x", "origin/-x", "--upload-pack=x"} {
+		if err := ValidateBaseRef(bad); err == nil {
+			t.Errorf("ValidateBaseRef(%q) = nil, want an error", bad)
+		}
+	}
+}
+
+func TestCreateRefusesOptionLikeBaseRefBeforeGit(t *testing.T) {
+	_, err := Create(&config.Config{}, "s", []RepoSpec{{Name: "r", BaseRef: "origin/-x"}}, "", "fix/a")
+	if err == nil || !strings.Contains(err.Error(), "dash") {
+		t.Fatalf("err = %v, want a base ref validation error", err)
 	}
 }

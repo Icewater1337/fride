@@ -190,6 +190,16 @@ func ValidateBranch(b string) error {
 	return nil
 }
 
+// ValidateBaseRef refuses a base ref that git could read as an option. It is
+// not check-ref-format: a base may be any revision (HEAD~2, a commit id), which
+// that rule rejects. "origin/-x" is checked too, as the fetch gets only "-x".
+func ValidateBaseRef(b string) error {
+	if strings.HasPrefix(b, "-") || strings.HasPrefix(strings.TrimPrefix(b, "origin/"), "-") {
+		return fmt.Errorf("base ref %q may not start with a dash", b)
+	}
+	return nil
+}
+
 // PruneStale forgets worktree registrations whose directory has gone. Deleting
 // a workspace folder from Finder is a supported way to delete a task, but git
 // still holds a registration for it, which would later refuse the same slug or
@@ -221,6 +231,11 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 	}
 	if err := ValidateBranch(branch); err != nil {
 		return nil, err
+	}
+	for _, sp := range specs {
+		if err := ValidateBaseRef(sp.BaseRef); err != nil {
+			return nil, fmt.Errorf("%s: %w", sp.Name, err)
+		}
 	}
 	ws := cfg.WorkspaceDir(slug)
 	if err := os.MkdirAll(filepath.Dir(ws), 0o755); err != nil {
@@ -268,11 +283,11 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 
 		// Refresh remote-tracking refs so "from origin/main" means today's main.
 		if strings.HasPrefix(base, "origin/") {
-			if _, err := gitEnv(repo.Main, env, "fetch", "--quiet", "origin", strings.TrimPrefix(base, "origin/")); err != nil {
+			if _, err := gitEnv(repo.Main, env, "fetch", "--quiet", "--end-of-options", "origin", strings.TrimPrefix(base, "origin/")); err != nil {
 				c.Notes = append(c.Notes, "could not fetch "+base+" — using the local ref")
 			}
 		}
-		if _, err := git(repo.Main, "rev-parse", "--verify", "--quiet", base); err != nil {
+		if _, err := git(repo.Main, "rev-parse", "--verify", "--quiet", "--end-of-options", base); err != nil {
 			return out, fmt.Errorf("%s: base ref %q does not exist", repo.Name, base)
 		}
 		dest := cfg.RepoDir(slug, repo.Name)
