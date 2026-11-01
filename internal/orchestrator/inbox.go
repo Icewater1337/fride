@@ -542,9 +542,12 @@ func (o *Orchestrator) threadsFor(slug string) []int {
 // mentioned are the threads whose tasks a report names. A scheduled look covers
 // every followed task at once and says one thing about all of them; which
 // thread that belongs to is only knowable from what it is about.
-func (o *Orchestrator) mentioned(text string) []int {
+//
+// several is true when it named more than one thread's tasks and so returned
+// none: nobody was asked, and the caller must not wait for an answer (#66).
+func (o *Orchestrator) mentioned(text string) (ids []int, several bool) {
 	if text == "" {
-		return nil
+		return nil, false
 	}
 	var out []int
 	for i := range o.st.Threads {
@@ -553,7 +556,7 @@ func (o *Orchestrator) mentioned(text string) []int {
 			continue
 		}
 		for _, s := range t.open() {
-			if strings.Contains(text, s) {
+			if names(text, s) {
 				out = append(out, t.ID)
 				break
 			}
@@ -562,9 +565,30 @@ func (o *Orchestrator) mentioned(text string) []int {
 	// A say about several threads' tasks is not any one sender's news; each
 	// would read the others' (#52). Per-task reports are for that.
 	if len(out) > 1 {
-		return nil
+		return nil, true
 	}
-	return out
+	return out, false
+}
+
+// names reports whether text has slug as a whole word: "login" is not in
+// "login-page is ready", or the task named "login" would be asked about
+// "login-page" too (#66).
+func names(text, slug string) bool {
+	for i := 0; ; {
+		j := strings.Index(text[i:], slug)
+		if j < 0 {
+			return false
+		}
+		a, b := i+j, i+j+len(slug)
+		if (a == 0 || !slugByte(text[a-1])) && (b == len(text) || !slugByte(text[b])) {
+			return true
+		}
+		i = a + 1
+	}
+}
+
+func slugByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' // not '.': it ends a sentence
 }
 
 // asking marks threads as waiting on their sender. Only one that was simply

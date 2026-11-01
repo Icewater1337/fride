@@ -528,8 +528,9 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 	}
 	o.lastErr = ""
 	about := tr.threads()
+	var unreached bool // a say for several threads, which none of them gets
 	if tr.origin != fromInbox {
-		about = o.mentioned(reply.Say)
+		about, unreached = o.mentioned(reply.Say)
 	}
 	o.addTo(RoleOrchestrator, "", reply.Say, about...)
 	var asked []int // the threads a report has a question for
@@ -560,7 +561,7 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 		// question about one message is that thread's, answered there, and
 		// does not stop the loop from minding every other task.
 		o.settleInbox(tr, reply.NeedsUser)
-	case (reply.NeedsUser || len(asked) > 0) && gen == o.gen:
+	case (reply.NeedsUser && !unreached || len(asked) > 0) && gen == o.gen:
 		o.mem.awaiting = true
 	}
 	o.thinking = false

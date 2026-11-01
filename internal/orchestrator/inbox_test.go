@@ -626,6 +626,37 @@ func TestASayNamingSeveralThreadsTasksReachesNone(t *testing.T) {
 			t.Fatalf("thread #%d got %+v, status %s; want nothing", id, v.Messages, v.Status)
 		}
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.mem.awaiting {
+		t.Fatal("awaiting set though the question reached nobody: the loop stops for good (#66)")
+	}
+}
+
+// "login" is a prefix of "login-page": a say about the second is not about
+// the first, so it reaches only its own thread and that one is waited on.
+func TestASayNamingOneSlugDoesNotMatchItsPrefix(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, map[string]any{
+		"say": "login-page is ready to merge — merge it?", "needsUser": true, "actions": []any{},
+	})
+	o.mu.Lock()
+	o.st.Threads = []Thread{
+		{ID: 1, Source: "chat", Status: ThreadActive, Tasks: []string{"login"}},
+		{ID: 2, Source: "chat", Status: ThreadActive, Tasks: []string{"login-page"}},
+	}
+	gen := o.gen
+	o.mu.Unlock()
+
+	if err := o.think(context.Background(), gen, "look", loop, nil); err != nil {
+		t.Fatal(err)
+	}
+	if v := threadOf(t, o, 1); len(v.Messages) != 0 || v.Status != ThreadActive {
+		t.Fatalf("thread #1 got %+v, status %s; want nothing", v.Messages, v.Status)
+	}
+	if v := threadOf(t, o, 2); len(v.Messages) != 1 || v.Status != ThreadAsking {
+		t.Fatalf("thread #2 got %+v, status %s; want the question, asking", v.Messages, v.Status)
+	}
 }
 
 // A message that comes with a git identity gets it on the task it starts,
