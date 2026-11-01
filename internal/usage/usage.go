@@ -60,15 +60,17 @@ type entry struct {
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
 	Message   struct {
-		ID    string `json:"id"`
-		Model string `json:"model"`
-		Usage struct {
-			InputTokens              int64 `json:"input_tokens"`
-			OutputTokens             int64 `json:"output_tokens"`
-			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-		} `json:"usage"`
+		ID    string    `json:"id"`
+		Model string    `json:"model"`
+		Usage usageLine `json:"usage"`
 	} `json:"message"`
+}
+
+type usageLine struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 }
 
 // under reports whether p is root or nested inside it.
@@ -91,9 +93,7 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 		return nil, err
 	}
 	u := &Usage{}
-	seen := map[string]bool{}   // dedupe by response id: resumed/forked
-	models := map[string]bool{} // transcripts repeat earlier lines
-	sessions := map[string]*Session{}
+	recs := map[string]*rec{} // by response id: resumed/forked transcripts repeat earlier lines
 
 	for _, de := range des {
 		if !de.IsDir() {
@@ -104,12 +104,44 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 			continue
 		}
 		files, _ := filepath.Glob(filepath.Join(projects, name, "*.jsonl"))
-		for _, f := range files {
+		// Task subagents write their own transcripts under <session>/subagents.
+		sub, _ := filepath.Glob(filepath.Join(projects, name, "*", "subagents", "*.jsonl"))
+		for _, f := range append(files, sub...) {
 			// Failed rather than under-reported: a total that silently left out
 			// part of a transcript looks exactly like a real one.
-			if err := accumulate(f, workspaceDir, u, seen, models, sessions); err != nil {
+			if err := accumulate(f, workspaceDir, recs); err != nil {
 				return nil, fmt.Errorf("reading %s: %w", f, err)
 			}
+		}
+	}
+
+	models := map[string]bool{}
+	sessions := map[string]*Session{}
+	for _, r := range recs {
+		us := r.us
+		if us == (usageLine{}) {
+			continue
+		}
+		u.InputTokens += us.InputTokens
+		u.OutputTokens += us.OutputTokens
+		u.CacheReadTokens += us.CacheReadInputTokens
+		u.CacheCreationTokens += us.CacheCreationInputTokens
+		u.Messages++
+		if r.model != "" {
+			models[r.model] = true
+		}
+		if r.ts.After(u.LastActivity) {
+			u.LastActivity = r.ts
+		}
+		s := sessions[r.session]
+		if s == nil {
+			s = &Session{ID: r.session, Dir: r.cwd}
+			sessions[r.session] = s
+		}
+		s.Total += us.InputTokens + us.OutputTokens + us.CacheReadInputTokens + us.CacheCreationInputTokens
+		s.Messages++
+		if r.ts.After(s.LastActivity) {
+			s.LastActivity = r.ts
 		}
 	}
 
@@ -128,8 +160,16 @@ func ForWorkspace(claudeHome, workspaceDir string) (*Usage, error) {
 	return u, nil
 }
 
-func accumulate(path, workspaceDir string, u *Usage, seen map[string]bool,
-	models map[string]bool, sessions map[string]*Session) error {
+// rec is one API response. Its lines are merged, not first-wins: a top-level
+// transcript repeats identical usage on every line, but a subagent's lines grow
+// (output_tokens 6, 6, 273), so the per-field maximum is the final figure.
+type rec struct {
+	us                  usageLine
+	model, session, cwd string
+	ts                  time.Time
+}
+
+func accumulate(path, workspaceDir string, recs map[string]*rec) error {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -159,42 +199,26 @@ func accumulate(path, workspaceDir string, u *Usage, seen map[string]bool,
 			confirmed = true
 		}
 		// One response is written as a line per content block, each with its own
-		// uuid and the same usage, so key on the response, not the line.
+		// uuid, so key on the response, not the line.
 		key := cmp.Or(e.Message.ID, e.RequestID, e.UUID)
-		if e.Type != "assistant" || key == "" || seen[key] {
+		if e.Type != "assistant" || key == "" {
 			return true
 		}
-		seen[key] = true
-
+		r := recs[key]
+		if r == nil {
+			r = &rec{session: cmp.Or(e.SessionID, filepath.Base(path)), cwd: e.CWD}
+			recs[key] = r
+		}
 		us := e.Message.Usage
-		if us.InputTokens == 0 && us.OutputTokens == 0 &&
-			us.CacheReadInputTokens == 0 && us.CacheCreationInputTokens == 0 {
-			return true
-		}
-		u.InputTokens += us.InputTokens
-		u.OutputTokens += us.OutputTokens
-		u.CacheReadTokens += us.CacheReadInputTokens
-		u.CacheCreationTokens += us.CacheCreationInputTokens
-		u.Messages++
+		r.us.InputTokens = max(r.us.InputTokens, us.InputTokens)
+		r.us.OutputTokens = max(r.us.OutputTokens, us.OutputTokens)
+		r.us.CacheReadInputTokens = max(r.us.CacheReadInputTokens, us.CacheReadInputTokens)
+		r.us.CacheCreationInputTokens = max(r.us.CacheCreationInputTokens, us.CacheCreationInputTokens)
 		if e.Message.Model != "" {
-			models[e.Message.Model] = true
+			r.model = e.Message.Model
 		}
-		if e.Timestamp.After(u.LastActivity) {
-			u.LastActivity = e.Timestamp
-		}
-		id := e.SessionID
-		if id == "" {
-			id = filepath.Base(path)
-		}
-		s := sessions[id]
-		if s == nil {
-			s = &Session{ID: id, Dir: e.CWD}
-			sessions[id] = s
-		}
-		s.Total += us.InputTokens + us.OutputTokens + us.CacheReadInputTokens + us.CacheCreationInputTokens
-		s.Messages++
-		if e.Timestamp.After(s.LastActivity) {
-			s.LastActivity = e.Timestamp
+		if e.Timestamp.After(r.ts) {
+			r.ts = e.Timestamp
 		}
 		return true
 	})
