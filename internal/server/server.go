@@ -1560,8 +1560,13 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// The process exited: tell the browser, or its tab stays "connected"
+		// (it marks a tab dead only from onclose) and the blocked Read below
+		// never returns. A no-op if the browser left first.
+		_ = conn.Close(websocket.StatusNormalClosure, "process exited")
 	}()
 
+loop:
 	for { // browser -> pty
 		_, msg, err := conn.Read(ctx)
 		if err != nil {
@@ -1574,7 +1579,7 @@ func (s *Server) handleTermWS(w http.ResponseWriter, r *http.Request) {
 		switch in.Type {
 		case "data":
 			if err := sess.Write([]byte(in.Data)); err != nil {
-				break
+				break loop
 			}
 		case "resize":
 			_ = sess.Resize(in.Rows, in.Cols)
