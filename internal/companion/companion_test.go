@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -254,4 +255,39 @@ func TestEventFor(t *testing.T) {
 			t.Errorf("EventFor(%s, %v) = %s, want %s", c.status, c.started, got, c.want)
 		}
 	}
+}
+
+func TestWebhookDownCompanionGetsOneAttemptPerEvent(t *testing.T) {
+	var calls atomic.Int32
+	var up atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if !up.Load() {
+			w.WriteHeader(503)
+		}
+	}))
+	defer srv.Close()
+	s := NewSender(func() string { return srv.URL + "/hook" }, func() []byte { return []byte("k") })
+	s.Backoff = []time.Duration{time.Millisecond, time.Millisecond}
+	s.Start()
+	defer s.Close()
+	wait := func(n int32) {
+		for deadline := time.Now().Add(5 * time.Second); calls.Load() < n && time.Now().Before(deadline); {
+			time.Sleep(5 * time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond) // any extra attempt would show now
+		if got := calls.Load(); got != n {
+			t.Fatalf("calls = %d, want %d", got, n)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		s.Send(Event{Event: EventUpdate, ThreadID: i})
+	}
+	wait(3 + 1 + 1) // first event: 1 try + 2 retries; the others one try each
+	up.Store(true)
+	s.Send(Event{Event: EventUpdate})
+	wait(6)
+	up.Store(false)
+	s.Send(Event{Event: EventUpdate})
+	wait(9) // down was cleared by the success, so retries are back
 }
