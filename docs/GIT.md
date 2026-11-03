@@ -82,7 +82,7 @@ is not affected.
 | `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME` | `name`, when set |
 | `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` | `email`, when set |
 | `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_n`, `GIT_CONFIG_VALUE_n` | `credential.https://<host>.helper`, first empty, then `!fride git credential --home <FRIDE_HOME> <id>` |
-| `GH_TOKEN`, and `GH_HOST` plus `GH_ENTERPRISE_TOKEN` for a host other than github.com | kind `github`, for `gh` |
+| `GH_CONFIG_DIR`, with `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` and `GITHUB_ENTERPRISE_TOKEN` empty, and `GH_HOST` for a host other than github.com | kind `github`, for `gh` (see below) |
 | `GITLAB_TOKEN`, `GITLAB_HOST` | kind `gitlab`, for `glab` |
 | `FRIDE_GIT_IDENTITY` | the identity's id |
 
@@ -110,7 +110,18 @@ It ignores `store` and `erase`: the token is FrIDE's, and a failed push is
 no reason to forget it. Without a token it answers nothing and says on
 stderr how to set one, which git shows. It reads the token when git asks,
 so a token set while a session runs is used by that session's next push.
-`gh` and `glab` read their variables when the session starts.
+
+`gh` never asks git's helper. So a `github` identity's token is also `gh`'s
+login: `<FRIDE_HOME>/secrets/gh/<id>/` (0700), with `hosts.yml` (0600)
+holding the token for the identity's host, rewritten whole each time the
+token is set (`fride git token set`, the API, the companion) and removed
+with it. A session gets the folder as `GH_CONFIG_DIR`, and `gh` reads it at
+every call, so a token set while a session runs is used by its next `gh`
+call too. That matters for a companion's token, which lasts an hour while an
+agent may work for longer. A token stored by an older FrIDE has no login
+until it is set again; until then a session gets it as `GH_TOKEN` (and
+`GH_ENTERPRISE_TOKEN` for another host), read once when the session starts.
+`glab` reads `GITLAB_TOKEN` when the session starts.
 
 The helper reads the FrIDE home it was given (`--home`), not
 `$FRIDE_HOME`, so it answers for the FrIDE that started the task whatever an

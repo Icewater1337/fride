@@ -42,14 +42,21 @@ func Env(g settings.GitIdentity, fride, stateDir, token string) []string {
 	// The forge tools do not ask git's helper; they read the environment.
 	switch g.Kind {
 	case settings.GitHub:
-		if token != "" {
-			env = append(env, "GH_TOKEN="+token)
-		}
-		if h := settings.HostKey(g.Host); h != "github.com" {
+		h := settings.HostKey(g.Host)
+		if h != "github.com" {
 			env = append(env, "GH_HOST="+h)
+		}
+		switch dir := ghLogin(stateDir, g, token); {
+		case token == "":
+		case dir != "":
+			// gh's login, which it reads at every call and SetTokenFor
+			// keeps current (gh.go).
+			env = append(append(env, "GH_CONFIG_DIR="+dir), emptyGHVars()...)
+		default:
+			env = append(env, "GH_TOKEN="+token)
 			// gh reads GH_TOKEN for github.com only; a GitHub Enterprise
 			// host takes its token from GH_ENTERPRISE_TOKEN.
-			if token != "" {
+			if h != "github.com" {
 				env = append(env, "GH_ENTERPRISE_TOKEN="+token)
 			}
 		}
