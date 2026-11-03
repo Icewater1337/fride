@@ -240,3 +240,90 @@ func TestTokenStore(t *testing.T) {
 		t.Fatalf("removing twice: %v", err)
 	}
 }
+
+// An agent works for hours, and a companion's token lasts one: the gh of a
+// session started with one token must use the next.
+func TestGHFollowsANewToken(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetTokenFor(dir, github, "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+	gh, _ := GHConfigDir(dir, "github")
+	env := Env(github, "/fride", dir, "tok-1")
+	joined := strings.Join(env, "\n") + "\n"
+	for _, want := range []string{"GH_CONFIG_DIR=" + gh + "\n", "GH_TOKEN=\n", "GITHUB_TOKEN=\n"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("env lacks %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "tok-1") {
+		t.Errorf("the token is in the environment:\n%s", joined)
+	}
+	for p, perm := range map[string]os.FileMode{gh: 0o700, filepath.Dir(gh): 0o700, filepath.Join(gh, "hosts.yml"): 0o600} {
+		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != perm {
+			t.Errorf("%s: %v %v, want %v", p, fi.Mode(), err, perm)
+		}
+	}
+
+	if err := SetTokenFor(dir, github, "tok-2"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(gh, "hosts.yml")); strings.Contains(string(b), "tok-1") || !strings.Contains(string(b), "oauth_token: tok-2\n") {
+		t.Fatalf("hosts.yml after a new token:\n%s", b)
+	}
+	if bin, err := exec.LookPath("gh"); err == nil {
+		// The session's environment as it was when it started, after one
+		// FrIDE inherited: the stale token there must not win.
+		cmd := exec.Command(bin, "auth", "token")
+		cmd.Env = append([]string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "GH_TOKEN=stale",
+			"GH_NO_UPDATE_NOTIFIER=1", "GH_PROMPT_DISABLED=1"}, env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "tok-2" {
+			t.Fatalf("gh auth token: %q %v, want tok-2", out, err)
+		}
+	}
+
+	// A login that does not hold the token (set before FrIDE kept one) is
+	// not used: gh gets the token itself, as before.
+	if e := strings.Join(Env(github, "/fride", dir, "tok-3"), "\n"); !strings.Contains(e, "GH_TOKEN=tok-3") || strings.Contains(e, "GH_CONFIG_DIR") {
+		t.Errorf("env for a token the login lacks:\n%s", e)
+	}
+
+	ghe := settings.GitIdentity{ID: "ghe", Kind: settings.GitHub, Host: "GitHub.example.com:443"}
+	if err := SetTokenFor(dir, ghe, "t"); err != nil {
+		t.Fatal(err)
+	}
+	e := strings.Join(Env(ghe, "/fride", dir, "t"), "\n") + "\n"
+	for _, want := range []string{"GH_HOST=github.example.com\n", "GH_ENTERPRISE_TOKEN=\n", "GH_CONFIG_DIR="} {
+		if !strings.Contains(e, want) {
+			t.Errorf("enterprise env lacks %q:\n%s", want, e)
+		}
+	}
+	gheDir, _ := GHConfigDir(dir, "ghe")
+	if b, _ := os.ReadFile(filepath.Join(gheDir, "hosts.yml")); !strings.HasPrefix(string(b), "github.example.com:\n") {
+		t.Errorf("enterprise hosts.yml:\n%s", b)
+	}
+
+	// A GitLab identity has no gh login.
+	if err := SetTokenFor(dir, work, "glpat-x"); err != nil {
+		t.Fatal(err)
+	}
+	if workDir, _ := GHConfigDir(dir, "work"); exists(workDir) {
+		t.Error("a GitLab identity got a gh login")
+	}
+
+	if err := RemoveToken(dir, "github"); err != nil {
+		t.Fatal(err)
+	}
+	if exists(gh) {
+		t.Error("gh's login outlived the token")
+	}
+	if _, err := GHConfigDir(dir, "../x"); err == nil {
+		t.Error("GHConfigDir took ../x")
+	}
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}

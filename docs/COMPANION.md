@@ -215,7 +215,9 @@ leaves it out.
 The companion can give FrIDE the forge accounts it holds, so a task commits
 and pushes as the right one ([GIT.md](GIT.md)). What it sets is kept in
 `$FRIDE_HOME/git-identities.companion.json`, never in config.json, and its
-tokens in `$FRIDE_HOME/secrets/git/<id>.token` (0600). The user's own
+tokens in `$FRIDE_HOME/secrets/git/<id>.token` (0600), a `github` one also as
+`gh`'s login in `$FRIDE_HOME/secrets/gh/<id>/`, which a running session's `gh`
+reads at its next call ([GIT.md](GIT.md#the-credential-helper)). The user's own
 identities in config.json are listed too; one with the same id wins over
 the companion's.
 

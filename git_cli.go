@@ -29,7 +29,8 @@ func cmdGit(cfg *config.Config, args []string) {
 			check(errors.New("usage: fride git token set <id>   (the token on stdin)\n       fride git token rm <id>"))
 		}
 		id := args[2]
-		if _, ok := cfg.Settings.GitIdentity(id); !ok {
+		g, ok := cfg.Settings.GitIdentity(id)
+		if !ok {
 			check(fmt.Errorf("no git identity %q — `fride git ls` lists them", id))
 		}
 		if args[1] == "rm" {
@@ -39,7 +40,7 @@ func cmdGit(cfg *config.Config, args []string) {
 		}
 		token, err := readToken(id)
 		check(err)
-		check(gitid.SetToken(cfg.StateDir, id, token))
+		check(gitid.SetTokenFor(cfg.StateDir, g, token))
 		fmt.Printf("%s: token stored in %s\n", id, gitid.TokenDir(cfg.StateDir))
 	case "credential":
 		os.Exit(gitCredential(cfg, args[1:]))

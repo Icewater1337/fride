@@ -98,7 +98,8 @@ func HasToken(stateDir, id string) bool {
 	return err == nil
 }
 
-// RemoveToken deletes an identity's token. One that is not there is fine.
+// RemoveToken deletes an identity's token, and gh's login with it. One that
+// is not there is fine.
 func RemoveToken(stateDir, id string) error {
 	p, err := tokenPath(stateDir, id)
 	if err != nil {
@@ -107,5 +108,5 @@ func RemoveToken(stateDir, id string) error {
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return nil
+	return removeGH(stateDir, id)
 }

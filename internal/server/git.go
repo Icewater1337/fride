@@ -112,7 +112,7 @@ func (s *Server) handleGitToken(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err)
 			return
 		}
-		if err := gitid.SetToken(s.cfg.StateDir, id, req.Token); err != nil {
+		if err := gitid.SetTokenFor(s.cfg.StateDir, g, req.Token); err != nil {
 			writeErr(w, 400, err)
 			return
 		}
@@ -186,7 +186,7 @@ func (s *Server) companionPutIdentity(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	if token != "" {
-		if err := gitid.SetToken(s.cfg.StateDir, id, token); err != nil {
+		if err := gitid.SetTokenFor(s.cfg.StateDir, g, token); err != nil {
 			writeErr(w, 500, err)
 			return
 		}
