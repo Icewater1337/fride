@@ -667,6 +667,7 @@ func (s *Server) handleImportFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := req.Slug
+	defer s.lockImport(slug)()
 	m, notes, err := move.Finish(s.cfg, s.st, slug, task.Landing(s.cfg))
 	if err != nil {
 		writeErr(w, 400, err)
@@ -689,6 +690,14 @@ func (s *Server) handleImportFinish(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"notes": nonNil(notes)})
 }
 
+// lockImport serialises finish and abort for one slug; call the result to unlock.
+func (s *Server) lockImport(slug string) func() {
+	m, _ := s.imports.LoadOrStore(slug, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (s *Server) handleImportAbort(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Slug string `json:"slug"`
@@ -703,6 +712,8 @@ func (s *Server) handleImportAbort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err)
 		return
 	}
+	// Wait for a finish still running for this slug, so the answer below is true.
+	defer s.lockImport(req.Slug)()
 	// A task already registered here is not aborted: Finish succeeded, and
 	// removing it now would lose the only copy.
 	if _, err := s.st.Get(req.Slug); err == nil {

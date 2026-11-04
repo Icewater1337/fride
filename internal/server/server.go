@@ -52,6 +52,8 @@ type Server struct {
 	orch *orchestrator.Orchestrator
 	// fleet is set when this computer is part of the user's fleet (fleet.go).
 	fleet *fleetState
+	// imports serialises import finish and abort per slug (fleet.go).
+	imports sync.Map
 	// companion is set in companion mode (companion.go).
 	companion *companionState
 	// localAPI is the API alone, for requests the node proxy serves here.
