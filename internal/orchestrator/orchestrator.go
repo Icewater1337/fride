@@ -559,8 +559,10 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 	case tr.origin == fromInbox:
 		// Settled even if the chat was cleared meanwhile: the actions ran. A
 		// question about one message is that thread's, answered there, and
-		// does not stop the loop from minding every other task.
-		o.settleInbox(tr, reply.NeedsUser)
+		// does not stop the loop from minding every other task. The thread
+		// being read was still routing when asked was marked, so it is settled
+		// here; noteNews skips a routing thread, so it can't ship early (#81).
+		o.settleInbox(tr, reply.NeedsUser || containsInt(asked, tr.thread))
 	case (reply.NeedsUser && !unreached || len(asked) > 0) && gen == o.gen:
 		o.mem.awaiting = true
 	}

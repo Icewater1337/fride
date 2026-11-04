@@ -729,3 +729,33 @@ func TestQuestionReachesTheSenderWhenATickRunsDuringApply(t *testing.T) {
 	}
 	t.Fatal("thread never noted after the report")
 }
+
+// A report's question about a task the thread being read follows makes that
+// thread wait too: it is still routing when the others are marked early, so
+// the question has to survive settling (#81).
+func TestQuestionForTheThreadBeingReadWaitsForItsReply(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, Reply{
+		Say:     "On it.",
+		Actions: []Action{{Kind: ActCreateTask, Name: "Search filters", Repos: []NewRepo{{Name: "backend"}}, Instruction: "Fix."}},
+		Reports: []Report{{Task: "new", Say: "Which DB?", NeedsUser: true}},
+	})
+	v, _, _ := o.Receive("cli", "a", "fix the filters")
+	if s := settled(t, o, v.ID).Status; s != ThreadActive {
+		t.Fatalf("status %s: the thread followed no task when the report came", s)
+	}
+	waitFor(t, func() bool { return len(h.noted()) >= 1 })
+	before := len(h.noted())
+
+	if _, err := o.Reply(v.ID, "and the sorting"); err != nil {
+		t.Fatal(err)
+	}
+	if s := settled(t, o, v.ID).Status; s != ThreadAsking {
+		t.Fatalf("status %s, want the thread being read to wait for a reply", s)
+	}
+	o.noteNews()
+	waitFor(t, func() bool { return len(h.noted()) > before })
+	if n := h.noted()[before]; n.Thread.ID != v.ID || !n.Asks {
+		t.Fatalf("the question went out as a plain update: %+v", n)
+	}
+}
