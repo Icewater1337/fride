@@ -175,3 +175,39 @@ func TestScrollbackArrivesBeforeLiveOutput(t *testing.T) {
 		}
 	}
 }
+
+// A browser that stops reading must be closed once its channel is full, not
+// left to miss chunks; one that keeps reading gets every chunk.
+func TestSlowSubscriberIsClosedAndFastOneLosesNothing(t *testing.T) {
+	s := &Session{subs: map[chan []byte]struct{}{}}
+	slow, cancelSlow := s.Subscribe()
+	defer cancelSlow()
+	fast, cancelFast := s.Subscribe()
+	defer cancelFast()
+
+	const n = 200
+	got := make(chan int)
+	go func() {
+		c := 0
+		for range fast {
+			c++
+		}
+		got <- c
+	}()
+	for i := 0; i < n; i++ {
+		s.publish([]byte("x"))
+		time.Sleep(time.Millisecond) // let the fast reader keep up
+	}
+
+	queued := 0
+	for range slow { // closed, so the range ends after the queued chunks
+		queued++
+	}
+	if queued != cap(slow) {
+		t.Fatalf("slow subscriber kept %d chunks, want exactly its full channel (%d)", queued, cap(slow))
+	}
+	cancelFast()
+	if c := <-got; c != n {
+		t.Fatalf("fast subscriber got %d of %d chunks", c, n)
+	}
+}
