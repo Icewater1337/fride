@@ -299,7 +299,7 @@ func finishHunks(f *File, budget *lineBudget) {
 	for i := range f.Hunks {
 		h := &f.Hunks[i]
 		h.ID = hunkID(f.Path, h.Lines)
-		if whitespaceOnly(h.Lines) {
+		if whitespaceOnly(f.Path, h.Lines) {
 			h.Mechanical = "whitespace"
 		}
 	}
@@ -356,11 +356,23 @@ func hashOf(s string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// indentSensitiveExt lists the files where leading indentation is syntax: a
+// dedent can move a statement out of its block. One place to extend.
+var indentSensitiveExt = map[string]bool{".py": true, ".pyi": true, ".yaml": true, ".yml": true, ".mk": true}
+
+func indentSensitive(p string) bool {
+	base := path.Base(p)
+	return indentSensitiveExt[strings.ToLower(path.Ext(base))] || base == "Makefile" || base == "GNUmakefile"
+}
+
 // whitespaceOnly reports a hunk whose removed and added lines are the same
 // once whitespace is ignored, taken in order. A hunk that only adds or only
-// removes blank lines counts too. Anything else, even a single moved
-// character, is left for the reader.
-func whitespaceOnly(lines []string) bool {
+// removes blank lines counts too. Whitespace inside a quoted string is never
+// ignored, and neither is leading indentation in an indentation-sensitive
+// file (see indentSensitive). Anything else, even a single moved character,
+// is left for the reader.
+func whitespaceOnly(p string, lines []string) bool {
+	sens := indentSensitive(p)
 	var minus, plus strings.Builder
 	changed := false
 	for _, l := range lines {
@@ -370,22 +382,52 @@ func whitespaceOnly(lines []string) bool {
 		switch l[0] {
 		case '-':
 			changed = true
-			minus.WriteString(squash(l[1:]))
+			minus.WriteString(squashLine(l[1:], sens))
 		case '+':
 			changed = true
-			plus.WriteString(squash(l[1:]))
+			plus.WriteString(squashLine(l[1:], sens))
 		}
 	}
 	return changed && minus.String() == plus.String()
 }
 
-func squash(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return -1
+// squashLine drops the whitespace of one line except inside quotes. With indent
+// set, the leading whitespace is kept (a line break marks each line's start).
+// shortcut: quotes are tracked per line, so an apostrophe in a comment only
+// makes the check stricter and a multi-line string is not seen; upgrade with
+// a real lexer if that bites.
+func squashLine(s string, indent bool) string {
+	var b strings.Builder
+	rest := s
+	if indent {
+		rest = strings.TrimLeftFunc(s, unicode.IsSpace)
+		if rest == "" {
+			return ""
 		}
-		return r
-	}, s)
+		b.WriteString("\n")
+		b.WriteString(s[:len(s)-len(rest)])
+	}
+	var q rune
+	esc := false
+	for _, r := range rest {
+		switch {
+		case q != 0:
+			b.WriteRune(r)
+			if esc {
+				esc = false
+			} else if r == '\\' {
+				esc = true
+			} else if r == q {
+				q = 0
+			}
+		case r == '"' || r == '\'' || r == '`':
+			q = r
+			b.WriteRune(r)
+		case !unicode.IsSpace(r):
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // untrackedFile builds the review of a file git does not know yet: all added.
@@ -527,4 +569,13 @@ func gitRaw(dir string, args ...string) (string, error) {
 		return out.String(), fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
 	return out.String(), nil
+}
+
+func squash(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
