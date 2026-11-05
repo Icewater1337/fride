@@ -1186,7 +1186,7 @@ func cmdInfra(cfg *config.Config, st *store.Store, args []string) {
 // No dollar figure: that would mean hardcoding per-model prices that drift.
 func cmdUsage(cfg *config.Config, st *store.Store, args []string) {
 	t := resolveTask(cfg, st, args)
-	u, err := usage.ForWorkspace(filepath.Join(cfg.Home, ".claude"), cfg.WorkspaceDir(t.Slug))
+	u, err := usage.ForWorkspace(agent.ClaudeDir(cfg.Home), cfg.WorkspaceDir(t.Slug))
 	check(err)
 	if u.Messages == 0 {
 		fmt.Printf("task %s — no Claude activity recorded for %s\n", t.Slug, cfg.WorkspaceDir(t.Slug))

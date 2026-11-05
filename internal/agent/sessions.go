@@ -107,7 +107,7 @@ func ClaudeHolds(name, workspaceDir string) bool {
 }
 
 func claudeSessions(home, workspaceDir string) []Recorded {
-	projects := filepath.Join(home, ".claude", "projects")
+	projects := filepath.Join(ClaudeDir(home), "projects")
 	des, err := os.ReadDir(projects)
 	if err != nil {
 		return nil
@@ -378,7 +378,7 @@ type Transcript struct {
 // folder inside it — what has to travel with the workspace for a conversation
 // to be resumable somewhere else.
 func ClaudeTranscripts(home, workspaceDir string) []Transcript {
-	projects := filepath.Join(home, ".claude", "projects")
+	projects := filepath.Join(ClaudeDir(home), "projects")
 	des, err := os.ReadDir(projects)
 	if err != nil {
 		return nil
@@ -423,5 +423,5 @@ func transcriptCwd(path string) string {
 // ClaudeProjectDir is where Claude Code keeps the transcripts of conversations
 // started in cwd.
 func ClaudeProjectDir(home, cwd string) string {
-	return filepath.Join(home, ".claude", "projects", claudeEncode(filepath.Clean(cwd)))
+	return filepath.Join(ClaudeDir(home), "projects", claudeEncode(filepath.Clean(cwd)))
 }

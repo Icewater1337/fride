@@ -59,7 +59,7 @@ func OpenByPID(k Kind, home string) map[int]Open {
 // lands on a stale file is possible in principle; the cost is one conversation
 // wrongly reported busy, which is the safe direction to be wrong in.
 func claudeOpen(home string) map[int]Open {
-	des, err := os.ReadDir(filepath.Join(home, ".claude", "sessions"))
+	des, err := os.ReadDir(filepath.Join(ClaudeDir(home), "sessions"))
 	if err != nil {
 		return nil
 	}
@@ -73,7 +73,7 @@ func claudeOpen(home string) map[int]Open {
 		if err != nil || !alive(pid) {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(home, ".claude", "sessions", name))
+		raw, err := os.ReadFile(filepath.Join(ClaudeDir(home), "sessions", name))
 		if err != nil {
 			continue
 		}
