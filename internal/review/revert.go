@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/procgroup"
 )
 
 // RevertCheck is whether a repository's changed tests notice the change.
@@ -156,6 +157,7 @@ func revertRun(dir, mergeBase string, tests, gone []string, command string) (exi
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = scratch
+	procgroup.Contain(cmd)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err = cmd.Run()
