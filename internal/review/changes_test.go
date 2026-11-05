@@ -350,3 +350,24 @@ func TestIsTest(t *testing.T) {
 		}
 	}
 }
+
+func TestWhitespaceOnly(t *testing.T) {
+	cases := []struct {
+		name, path string
+		lines      []string
+		want       bool
+	}{
+		{"python dedent", "auth.py", []string{"-        grant(user)", "+    grant(user)"}, false},
+		{"yaml reindent", "ci.yml", []string{"-  run: make", "+    run: make"}, false},
+		{"makefile reindent", "Makefile", []string{"-\tgo test", "+  go test"}, false},
+		{"python inner spacing", "a.py", []string{"-x=1", "+x = 1"}, true},
+		{"string literal", "a.go", []string{`-s := "a b"`, `+s := "a  b"`}, false},
+		{"go reindent", "a.go", []string{"-\tx := 1", "+    x := 1"}, true},
+		{"trailing in python", "a.py", []string{"-x = 1", "+x = 1  "}, true},
+	}
+	for _, c := range cases {
+		if got := whitespaceOnly(c.path, c.lines); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
