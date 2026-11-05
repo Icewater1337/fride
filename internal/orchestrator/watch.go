@@ -81,9 +81,9 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		}
 		all = append(all, ob)
 	}
-	o.deliverHeld(all)
+	typed := o.deliverHeld(all)
 	o.relayQuestions(all)
-	o.recoverFailed(all)
+	o.recoverFailed(all, typed)
 	o.heartbeat(all, shown)
 	obs := all[:0:0]
 	for _, ob := range all {

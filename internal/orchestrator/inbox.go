@@ -664,8 +664,12 @@ func (o *Orchestrator) hold(slug, text string, threads []int) {
 // It runs before the brain is consulted and needs no turn: whether an agent is
 // ready is a fact the observation already holds, and the instruction was
 // decided when it was held.
-func (o *Orchestrator) deliverHeld(obs []Observation) {
+//
+// It returns the tasks it typed into, so that recoverFailed does not add a
+// "continue" on top of an instruction in the same tick.
+func (o *Orchestrator) deliverHeld(obs []Observation) map[string]bool {
 	now := time.Now()
+	typed := map[string]bool{}
 	for _, ob := range obs {
 		slug := ob.Task.Slug
 		o.mu.Lock()
@@ -686,6 +690,7 @@ func (o *Orchestrator) deliverHeld(obs []Observation) {
 		delete(o.st.Held, slug)
 		if err == nil || errors.Is(err, ErrNotSeen) {
 			o.mem.tasks[slug] = o.mem.tasks[slug].sentOne(now)
+			typed[slug] = true
 		}
 		if err != nil {
 			o.addTo(RoleError, slug, "→ "+slug+": "+h.Text+" — "+err.Error(), h.Threads...)
@@ -695,6 +700,7 @@ func (o *Orchestrator) deliverHeld(obs []Observation) {
 		o.save()
 		o.mu.Unlock()
 	}
+	return typed
 }
 
 // waitHeld is one look at an instruction whose agent is not ready yet. Only an

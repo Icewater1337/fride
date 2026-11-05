@@ -36,8 +36,10 @@ const (
 const recoverText = "Your last response was cut off by an API error. Continue where you left off."
 
 // recoverFailed types "continue" at every agent whose latest turn ended on an
-// API error, within the bounds above, and says so in the task's threads.
-func (o *Orchestrator) recoverFailed(obs []Observation) {
+// API error, within the bounds above, and says so in the task's threads. A task
+// in typed was just given a held instruction, which gets it going just as well:
+// that failure is counted as dealt with, so no "continue" follows, now or later.
+func (o *Orchestrator) recoverFailed(obs []Observation, typed map[string]bool) {
 	now := time.Now()
 	for _, ob := range obs {
 		slug := ob.Task.Slug
@@ -57,8 +59,13 @@ func (o *Orchestrator) recoverFailed(obs []Observation) {
 			}
 			o.mu.Unlock()
 			continue
+		case typed[slug]:
+			ts.failedSeen = ob.Failed.UUID
+			o.mem.tasks[slug] = ts
+			o.mu.Unlock()
+			continue
 		case held || ts.gaveUp || ob.Failed.UUID == ts.failedSeen || now.Before(ts.recoverAt):
-			// A held instruction is typed instead, and gets it going just as
+			// A held instruction will be typed instead, and gets it going just as
 			// well; this error has been dealt with; or it is not time yet.
 			o.mu.Unlock()
 			continue
