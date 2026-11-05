@@ -129,6 +129,10 @@ func TestMoveCarriesEverything(t *testing.T) {
 		`{"type":"user","uuid":"u0","cwd":"`+srcWS+`","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"`+time.Now().UTC().Format(time.RFC3339)+`"}`+"\n"+
 			`{"type":"assistant","uuid":"u1","cwd":"`+srcWS+`","sessionId":"11111111-2222-3333-4444-555555555555","timestamp":"`+time.Now().UTC().Format(time.RFC3339)+`","message":{"usage":{"input_tokens":3,"output_tokens":5}}}`+"\n")
 
+	capOther := `{"file":"` + srcWS + `-other/a.go","lines":["x"]}` + "\n"
+	capLine := `{"at":"2026-01-01T00:00:00Z","tool":"Edit","file":"` + srcWS + `/app/a.go","lines":["agent wrote ` + srcWS + `"]}` + "\n"
+	write(t, filepath.Join(src.cfg.StateDir, "review", slug, "edits.jsonl"), capLine+"torn {\n"+capOther)
+
 	// --- the protocol
 	m, err := Snapshot(src.cfg, task, "a")
 	if err != nil {
@@ -192,6 +196,14 @@ func TestMoveCarriesEverything(t *testing.T) {
 		"11111111-2222-3333-4444-555555555555.jsonl")
 	if body := read(t, tr); !strings.Contains(body, `"cwd":"`+dstWS+`"`) || strings.Contains(body, srcWS) {
 		t.Errorf("transcript not rewritten to the new workspace:\n%s", body)
+	}
+	// Captures follow the move, so the gutter still marks the agent's lines.
+	caps := read(t, filepath.Join(dst.cfg.StateDir, "review", slug, "edits.jsonl"))
+	if !strings.Contains(caps, `"file":"`+dstWS+`/app/a.go"`) || strings.Contains(caps, `"file":"`+srcWS+`/`) {
+		t.Errorf("captures not rewritten to the new workspace:\n%s", caps)
+	}
+	if !strings.Contains(caps, "torn {\n"+capOther) || !strings.Contains(caps, `"agent wrote `+srcWS+`"`) {
+		t.Errorf("a malformed line, another path or the captured text changed:\n%s", caps)
 	}
 	if got.Resume != "11111111-2222-3333-4444-555555555555" {
 		t.Errorf("resume = %q", got.Resume)
