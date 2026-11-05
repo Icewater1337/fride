@@ -85,6 +85,9 @@ type sessionJSON struct {
 	ResumedFrom string    `json:"resumedFrom,omitempty"`
 	Busy        bool      `json:"busy"`
 	Attention   bool      `json:"attention"`
+	// Exited lets the UI tell a session whose process ended (never reconnect)
+	// from one whose socket merely dropped (reconnect).
+	Exited bool `json:"exited,omitempty"`
 }
 
 // MarshalJSON encodes a copy taken under the lock. Encoding the struct itself
@@ -95,7 +98,7 @@ func (s *Session) MarshalJSON() ([]byte, error) {
 	v := sessionJSON{
 		ID: s.ID, Task: s.Task, Title: s.Title, Kind: s.Kind, Dir: s.Dir,
 		Created: s.Created, Dangerous: s.Dangerous, ResumedFrom: s.ResumedFrom,
-		Busy: s.Busy, Attention: s.Attention,
+		Busy: s.Busy, Attention: s.Attention, Exited: s.closed,
 	}
 	s.mu.Unlock()
 	return json.Marshal(v)
