@@ -116,6 +116,9 @@ func (s *Session) SetDangerous(on bool) {
 // reliably means it has finished the turn and is sitting at the prompt.
 const idleAfter = 3 * time.Second
 
+// exitDrain bounds how long output queued at process exit may still be read.
+const exitDrain = 300 * time.Millisecond
+
 func (s *Session) Alive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -416,7 +419,9 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 	m.sessions[id] = s
 	m.mu.Unlock()
 
+	readDone := make(chan struct{})
 	go func() {
+		defer close(readDone)
 		bufr := make([]byte, 32*1024)
 		for {
 			n, err := ptmx.Read(bufr)
@@ -424,10 +429,20 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 				s.publish(bufr[:n])
 			}
 			if err != nil {
-				break
+				return
 			}
 		}
+	}()
+	// The tab ends when the process does, not when the PTY reaches EOF: a
+	// background child that inherited the terminal keeps it open indefinitely.
+	go func() {
 		err := cmd.Wait()
+		// Let the reader deliver what is still queued, but only for a moment;
+		// with a child holding the PTY it never sees EOF.
+		select {
+		case <-readDone:
+		case <-time.After(exitDrain):
+		}
 		msg := "\r\n\x1b[90m[process exited]\x1b[0m\r\n"
 		if err != nil {
 			msg = fmt.Sprintf("\r\n\x1b[90m[process exited: %v]\x1b[0m\r\n", err)
