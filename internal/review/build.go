@@ -126,7 +126,7 @@ func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry)
 	}
 	out.AI = kept.AI
 	out.AI.Marks = nil // folded into the findings below
-	out.AI.Stale = out.AI.State == "done" && !fresh(out.AI.Anchors, out)
+	out.AI.Stale = len(out.AI.Anchors) > 0 && !fresh(out.AI.Anchors, out)
 	for i := range out.AI.Findings {
 		f := &out.AI.Findings[i]
 		m := kept.AI.Marks[f.ID]
