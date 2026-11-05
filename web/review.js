@@ -17,7 +17,7 @@ const rv = {
   showDismissed: false,
   poll: null,
   soon: null,        // a quicker look while an AI pass or a revert check runs
-  loading: false,
+  loading: null,     // gen of the task whose /changes call is in flight; see loadReview
 };
 
 const RV_HIDE_KEY = 'fride-review-hide-viewed';
@@ -116,12 +116,17 @@ $('#rv-tour').addEventListener('change', e => {
 // loadReview fetches the change. draw: put it on screen if the tab is open.
 // force: redraw even if the reader is mid-page (the Refresh button).
 async function loadReview(p = pin(), draw = false, force = false) {
-  if (rv.loading && !force) return;
-  rv.loading = true;
+  if (rv.loading === p.gen && !force) return;
+  rv.loading = p.gen;
   if (force) $('#rv-refresh').classList.add('spin');
   let d;
   try { d = await api.get(`${p.base}/tasks/${p.slug}/changes`); }
-  finally { rv.loading = false; $('#rv-refresh').classList.remove('spin'); }
+  finally {
+    // Keyed by the task's pin: after a task switch the old task's late answer
+    // must not clear the flag the new task's load now owns.
+    if (rv.loading === p.gen) rv.loading = null;
+    $('#rv-refresh').classList.remove('spin');
+  }
   if (stale(p)) return;
   rv.data = d;
   rvBadge(d);
