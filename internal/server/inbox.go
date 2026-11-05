@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/orchestrator"
+	"github.com/Icewater1337/fride/internal/procgroup"
 )
 
 // The inbox routes: how anything outside the IDE hands the orchestrator a
@@ -143,6 +144,7 @@ func (h orchHost) Notify(n orchestrator.Note) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, shell(), "-c", command)
 	cmd.Dir = h.s.cfg.StateDir
+	procgroup.Contain(cmd)
 	cmd.Stdin = bytes.NewReader(body)
 	cmd.Env = append(os.Environ(),
 		"FRIDE_THREAD="+strconv.Itoa(n.Thread.ID),
