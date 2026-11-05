@@ -252,7 +252,14 @@ func (s *Session) publish(p []byte) {
 	for ch := range s.subs {
 		select {
 		case ch <- append([]byte(nil), p...):
-		default: // a stalled browser must never block the PTY reader
+		default:
+			// A stalled browser must never block the PTY reader, and must never
+			// miss a chunk silently either: a gap garbles the screen. Drop the
+			// subscriber instead; closing ends its websocket handler (after it
+			// drains what is queued, so nothing is skipped). Deleting during
+			// range is safe in Go; cancel tolerates an already removed channel.
+			delete(s.subs, ch)
+			close(ch)
 		}
 	}
 	s.mu.Unlock()
