@@ -76,6 +76,7 @@ const state = {
   fleet: { enabled: false, self: '', peers: [], mirrors: [], state: {} },
   currentNode: '',     // the computer the open task lives on ('' = this one)
   newNode: '',         // the computer chosen in the New task modal
+  newFillGen: 0,
   gitIds: {},          // API base -> the git identities of that computer
   gitDefaults: {},     // API base -> its git.default
   newGit: null,        // /git/identities of the computer in the New task modal
@@ -2204,18 +2205,27 @@ function renderNodePicker() {
 // fillNewTask loads what the chosen computer offers: its repositories (with
 // their branches), its profiles and its agent CLIs.
 async function fillNewTask() {
+  // Choosing another computer while this one still loads starts a newer call;
+  // an older one must not write anything after an await.
+  const gen = ++state.newFillGen;
   const base = nodeBase(state.newNode);
-  try { state.newConfig = await api.get(base + '/config'); }
-  catch (e) { $('#modal-error').textContent = e.message; state.newConfig = { profiles: [] }; }
+  let cfg;
+  try { cfg = await api.get(base + '/config'); }
+  catch (e) { if (gen !== state.newFillGen) return; $('#modal-error').textContent = e.message; cfg = { profiles: [] }; }
+  if (gen !== state.newFillGen) return;
+  state.newConfig = cfg;
   if (!state.newProfile || !(state.newConfig.profiles || []).some(p => p.name === state.newProfile)) {
     state.newProfile = state.newConfig.defaultProfile || '';
   }
   renderModePicker();
   updateSlugPreview();
   const core = new Set(state.newConfig.coreRepos || []);
+  let repos;
+  try { repos = await api.get(base + '/repos'); } catch { repos = []; }
+  if (gen !== state.newFillGen) return;
+  state.repos = repos;
   const picker = $('#repo-picker');
   picker.innerHTML = '';
-  try { state.repos = await api.get(base + '/repos'); } catch { state.repos = []; }
   for (const r of state.repos) {
     // Core repositories make up the app, so they start out selected.
     const on = r.exists && core.has(r.name);
@@ -2261,7 +2271,12 @@ async function fillNewTask() {
     picker.appendChild(row);
   }
   if (!state.repos.length) picker.appendChild(el('div', 'hint', 'No repositories found under the base folders (Settings).'));
-  try { await loadAgents(base); } catch (e) { console.error('agents:', e); }
+  try {
+    const d = await api.get(base + '/agents');
+    if (gen !== state.newFillGen) return;
+    state.agents = d.agents || [];
+    state.agentDefault = d.default || 'claude';
+  } catch (e) { if (gen !== state.newFillGen) return; console.error('agents:', e); }
   // Default to the last choice, unless that CLI is gone from this machine.
   state.newAgent = state.agentDefault;
   if (!agentInfo(state.newAgent).installed) {
@@ -2269,8 +2284,11 @@ async function fillNewTask() {
     if (first) state.newAgent = first.kind;
   }
   renderAgentPicker();
-  try { state.newGit = await api.get(base + '/git/identities'); }
-  catch { state.newGit = { identities: [], default: '' }; }
+  let git;
+  try { git = await api.get(base + '/git/identities'); }
+  catch { git = { identities: [], default: '' }; }
+  if (gen !== state.newFillGen) return;
+  state.newGit = git;
   state.gitEdited = false;
   renderGitPicker();
 }
