@@ -34,6 +34,7 @@ package move
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -907,7 +908,14 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 		rdir := review.Dir(cfg, slug)
 		if err := os.MkdirAll(rdir, 0o755); err == nil {
 			for _, e := range entries {
-				_ = copyFile(filepath.Join(staging, "review", e.Name()), filepath.Join(rdir, e.Name()))
+				src, dst := filepath.Join(staging, "review", e.Name()), filepath.Join(rdir, e.Name())
+				if e.Name() == "edits.jsonl" && m.Workspace != ws {
+					if b, err := os.ReadFile(src); err == nil {
+						_ = os.WriteFile(dst, rewriteCaptures(b, m.Workspace, ws), 0o644)
+						continue
+					}
+				}
+				_ = copyFile(src, dst)
 			}
 		}
 	}
@@ -1025,6 +1033,27 @@ func installTranscripts(cfg *config.Config, staging string, m *Manifest, ws stri
 		n++
 	}
 	return n, nil
+}
+
+// rewriteCaptures points the review captures (edits.jsonl) at this computer's
+// workspace: they store absolute paths, which provenance matches against the
+// current worktree. Only a "file" that is the old workspace or lies under it
+// (whole path component) changes; any other line, malformed ones included,
+// stays byte for byte.
+func rewriteCaptures(b []byte, from, to string) []byte {
+	lines := bytes.SplitAfter(b, []byte("\n"))
+	for i, l := range lines {
+		var c struct {
+			File string `json:"file"`
+		}
+		if json.Unmarshal(l, &c) != nil || c.File != from && !strings.HasPrefix(c.File, from+"/") && !strings.HasPrefix(c.File, from+string(filepath.Separator)) {
+			continue
+		}
+		old, _ := json.Marshal(c.File)
+		nu, _ := json.Marshal(to + c.File[len(from):])
+		lines[i] = bytes.Replace(l, append([]byte(`"file":`), old...), append([]byte(`"file":`), nu...), 1)
+	}
+	return bytes.Join(lines, nil)
 }
 
 // Abort throws a prepared move away.
