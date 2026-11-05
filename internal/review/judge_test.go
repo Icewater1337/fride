@@ -361,3 +361,34 @@ func TestRiskAndWhoseTurn(t *testing.T) {
 		t.Errorf("a working agent's task is not the reviewer's turn: %+v", q)
 	}
 }
+
+func TestOldAIPassIsStaleWhateverItsState(t *testing.T) {
+	dir := repo(t)
+	write(t, dir, "a.go", "package a\n")
+	gitT(t, dir, "add", "a.go")
+	gitT(t, dir, "commit", "-qm", "a")
+	base := gitT(t, dir, "rev-parse", "HEAD")
+	write(t, dir, "a.go", "package a\n\nvar X = 1\n")
+	specs := []RepoSpec{{Name: "api", Dir: dir, Base: base}}
+	old := anchors(Changes{Repos: []RepoChanges{Diff(dir, "api", base, newBudget())}})
+	write(t, dir, "a.go", "package a\n\nvar X = 2\n") // the code moves on after the pass
+
+	for _, state := range []string{"done", "running", "failed"} {
+		kept := Kept{AI: AI{State: state, Anchors: old,
+			Groups: []Group{{Title: "G", Hunks: []string{"aaa"}, Criticality: 5, Why: "w"}}}}
+		c := Build(specs, kept, agent.Trace{}, nil)
+		if !c.AI.Stale {
+			t.Errorf("%s: a pass over other code is not marked stale", state)
+		}
+		for _, f := range c.Focus {
+			if f.Kind == "critical" {
+				t.Errorf("%s: stale pass still yields focus item %q", state, f.Title)
+			}
+		}
+		for _, r := range c.Risk.Reasons {
+			if strings.Contains(r, "criticality") {
+				t.Errorf("%s: stale pass still adds risk point %q", state, r)
+			}
+		}
+	}
+}
