@@ -1181,7 +1181,19 @@ async function syncTerminals(p = pin()) {
   for (const s of sessions) {
     if (state.closing.has(s.id)) continue;
     const e = state.terms.get(s.id);
-    if (e) {
+    if (e && e.dead && !s.exited) {
+      // The socket dropped but the process lives: attach anew. The poll is the
+      // only trigger, so one dropped socket yields one new socket per poll. An
+      // exited session (s.exited) stays "[disconnected]".
+      const wasActive = state.activeTerm === s.id;
+      try { e.ws.close(); } catch {}
+      try { e.term.dispose(); } catch {}
+      e.pane.remove();
+      if (e.tab) e.tab.remove();
+      state.terms.delete(s.id);
+      attachTerm(s, p);
+      if (wasActive) selectTerm(s.id);
+    } else if (e) {
       e.attention = s.attention;
       e.busy = s.busy;
       e.sess = Object.assign(e.sess, s);

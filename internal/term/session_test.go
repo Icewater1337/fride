@@ -211,3 +211,25 @@ func TestSlowSubscriberIsClosedAndFastOneLosesNothing(t *testing.T) {
 		t.Fatalf("fast subscriber got %d of %d chunks", c, n)
 	}
 }
+
+// The UI reconnects a dropped socket only while the session is not exited, so
+// the listing has to say which it is (#91).
+func TestSessionJSONSaysWhenExited(t *testing.T) {
+	m := NewManager()
+	s, err := m.Start("t1", KindShell, "sh", ".", []string{"sleep", "30"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close(s.ID)
+	has := func() bool {
+		b, _ := json.Marshal(s)
+		return strings.Contains(string(b), `"exited":true`)
+	}
+	if has() {
+		t.Fatal("a running session is listed as exited")
+	}
+	s.close("bye")
+	if !has() {
+		t.Fatal("an exited session is not listed as exited")
+	}
+}
