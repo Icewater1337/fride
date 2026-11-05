@@ -25,8 +25,8 @@ func messagesOf(o *Orchestrator) []Message {
 func TestAnAgentStoppedOnAnAPIErrorIsToldToContinue(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
-	o.recoverFailed([]Observation{failedAt("e1")})
-	o.recoverFailed([]Observation{failedAt("e1")}) // the same error, seen again
+	o.recoverFailed([]Observation{failedAt("e1")}, nil)
+	o.recoverFailed([]Observation{failedAt("e1")}, nil) // the same error, seen again
 	h.mu.Lock()
 	sent := append([]string(nil), h.sent...)
 	h.mu.Unlock()
@@ -54,7 +54,7 @@ func TestRecoveryGivesUpAndSaysSo(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
 	for i := 0; i < maxRecoveries+3; i++ {
-		o.recoverFailed([]Observation{failedAt("e" + string(rune('a'+i)))})
+		o.recoverFailed([]Observation{failedAt("e" + string(rune('a'+i)))}, nil)
 		o.mu.Lock()
 		ts := o.mem.tasks["t1"]
 		ts.recoverAt = time.Time{} // skip the pause
@@ -75,12 +75,12 @@ func TestRecoveryGivesUpAndSaysSo(t *testing.T) {
 func TestRecoveryWaitsBetweenAttemptsAndResets(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
-	o.recoverFailed([]Observation{failedAt("e1")})
-	o.recoverFailed([]Observation{failedAt("e2")})
+	o.recoverFailed([]Observation{failedAt("e1")}, nil)
+	o.recoverFailed([]Observation{failedAt("e2")}, nil)
 	if _, sent, _ := h.counts(); sent != 1 {
 		t.Fatalf("sent %d, want the second attempt to wait", sent)
 	}
-	o.recoverFailed([]Observation{{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true}})
+	o.recoverFailed([]Observation{{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true}}, nil)
 	o.mu.Lock()
 	ts := o.mem.tasks["t1"]
 	o.mu.Unlock()
@@ -92,7 +92,7 @@ func TestRecoveryWaitsBetweenAttemptsAndResets(t *testing.T) {
 	busy.Waiting = false
 	dialog := failedAt("e4")
 	dialog.Blocked = "Bash"
-	o.recoverFailed([]Observation{busy, dialog})
+	o.recoverFailed([]Observation{busy, dialog}, nil)
 	if _, sent, _ := h.counts(); sent != 1 {
 		t.Fatalf("typed at an agent that was not at its prompt: %v", h.sent)
 	}
@@ -139,7 +139,7 @@ func TestAnUnseenContinueCountsAsAnAttempt(t *testing.T) {
 	h.sendErr = fmt.Errorf("t1's agent did not take the instruction: %w", ErrNotSeen)
 	o := newTestOrch(t, h)
 	for i := 0; i < maxRecoveries+3; i++ {
-		o.recoverFailed([]Observation{failedAt("e1")})
+		o.recoverFailed([]Observation{failedAt("e1")}, nil)
 		o.mu.Lock()
 		ts := o.mem.tasks["t1"]
 		ts.recoverAt = time.Time{} // skip the pause
@@ -169,5 +169,31 @@ func TestAnUnseenInstructionIsCounted(t *testing.T) {
 	o.mu.Unlock()
 	if ts.sent != 1 || ts.unanswered != 1 {
 		t.Fatalf("state = %+v, want the unseen send counted", ts)
+	}
+}
+
+// A held instruction typed at an agent stopped on an API error is what gets
+// it going: no "continue" in that tick or a later one, but a new error gets one.
+func TestHeldInstructionReplacesContinueAfterAFailedTurn(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.st.Held = map[string]held{"t1": {Text: "do the thing", Since: time.Now()}}
+	o.mu.Unlock()
+	ob := []Observation{failedAt("e1")}
+	o.recoverFailed(ob, o.deliverHeld(ob))
+	o.recoverFailed(ob, nil) // the next tick
+	h.mu.Lock()
+	sent := append([]string(nil), h.sent...)
+	h.mu.Unlock()
+	if len(sent) != 1 || sent[0] != "t1: do the thing" {
+		t.Fatalf("sent %q, want only the instruction", sent)
+	}
+	o.recoverFailed([]Observation{failedAt("e2")}, nil)
+	h.mu.Lock()
+	n := len(h.sent)
+	h.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("a new failure got no continue: %d sent", n)
 	}
 }
