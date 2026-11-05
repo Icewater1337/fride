@@ -1,6 +1,9 @@
 package review
 
-import "unicode"
+import (
+	"sort"
+	"unicode"
+)
 
 // Move is a run of a hunk's lines that the same change also has on the other
 // side, somewhere else: code that moved rather than changed.
@@ -54,33 +57,61 @@ func detectMoves(files []File) {
 	if len(removed) == 0 {
 		return
 	}
+	// Every removed line is the source of at most one move, and every added
+	// line the end of at most one: take the longest candidates first and mark
+	// what they use. A further copy of the same block is new code.
+	type cand struct {
+		fi, hi, li, n int
+		src           lineAt
+	}
+	var cands []cand
 	for fi := range files {
 		for hi := range files[fi].Hunks {
 			h := &files[fi].Hunks[hi]
-			_, nu := lineNumbers(h)
-			for li := 0; li < len(h.Lines); {
-				best, bestN := lineAt{}, 0
+			for li, l := range h.Lines {
 				// A run starts only at a distinctive line: a brace removed in
 				// a thousand places would make every pair a candidate.
-				if l := h.Lines[li]; l != "" && l[0] == '+' && significant(l[1:]) && len(removed[squash(l[1:])]) <= maxMoveSources {
-					for _, src := range removed[squash(l[1:])] {
-						if src.file == fi && src.hunk == hi {
-							continue
-						}
-						if n := runLength(files, fi, hi, li, src); n > bestN {
-							best, bestN = src, n
-						}
-					}
-				}
-				if bestN < minMoveLines || alnum(h.Lines[li:li+bestN]) < minMoveAlnum {
-					li++
+				if l == "" || l[0] != '+' || !significant(l[1:]) || len(removed[squash(l[1:])]) > maxMoveSources {
 					continue
 				}
-				srcHunk := &files[best.file].Hunks[best.hunk]
-				h.Moves = append(h.Moves, Move{Line: li, N: bestN, Path: files[best.file].Path, At: best.no})
-				srcHunk.Moves = append(srcHunk.Moves, Move{Line: best.idx, N: bestN, Path: files[fi].Path, At: nu[li]})
-				li += bestN
+				for _, src := range removed[squash(l[1:])] {
+					if src.file == fi && src.hunk == hi {
+						continue
+					}
+					if n := runLength(files, fi, hi, li, src); n >= minMoveLines && alnum(h.Lines[li:li+n]) >= minMoveAlnum {
+						cands = append(cands, cand{fi, hi, li, n, src})
+					}
+				}
 			}
+		}
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].n > cands[j].n })
+	used := map[[3]int]bool{} // {file, hunk, line}, on either side
+	free := func(f, h, l, n int) bool {
+		for i := l; i < l+n; i++ {
+			if used[[3]int{f, h, i}] {
+				return false
+			}
+		}
+		return true
+	}
+	for _, c := range cands {
+		if !free(c.fi, c.hi, c.li, c.n) || !free(c.src.file, c.src.hunk, c.src.idx, c.n) {
+			continue
+		}
+		for i := 0; i < c.n; i++ {
+			used[[3]int{c.fi, c.hi, c.li + i}] = true
+			used[[3]int{c.src.file, c.src.hunk, c.src.idx + i}] = true
+		}
+		h, srcHunk := &files[c.fi].Hunks[c.hi], &files[c.src.file].Hunks[c.src.hunk]
+		_, nu := lineNumbers(h)
+		h.Moves = append(h.Moves, Move{Line: c.li, N: c.n, Path: files[c.src.file].Path, At: c.src.no})
+		srcHunk.Moves = append(srcHunk.Moves, Move{Line: c.src.idx, N: c.n, Path: files[c.fi].Path, At: nu[c.li]})
+	}
+	for fi := range files {
+		for hi := range files[fi].Hunks {
+			m := files[fi].Hunks[hi].Moves
+			sort.Slice(m, func(i, j int) bool { return m[i].Line < m[j].Line })
 		}
 	}
 	for fi := range files {

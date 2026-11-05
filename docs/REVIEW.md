@@ -345,7 +345,9 @@ What was built instead finds runs of at least three lines (and 20
 alphanumerics, git's `--color-moved` floor) that one place of a repo lost and
 another gained, whitespace aside. Moved lines are tinted and say where they
 came from or went; a hunk that only moves code folds as a move. A block
-re-indented in place is not a move. Tree-sitter would need a C toolchain and a
+re-indented in place is not a move. A removed line is the source of at most
+one move (longest runs first), so a further copy of the block is new code: it
+is not folded and goes into the AI pass. Tree-sitter would need a C toolchain and a
 grammar per language in a binary that is otherwise self-contained; line runs
 catch the common case (a function moved to another file) and miss a function
 moved and edited in the middle, which shows as two moved runs around the edit.

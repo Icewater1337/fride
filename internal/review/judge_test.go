@@ -48,6 +48,30 @@ func TestDetectMovesFoldsMovedCode(t *testing.T) {
 	}
 }
 
+func TestDetectMovesUsesASourceOnce(t *testing.T) {
+	var minus, plus []string
+	for _, l := range []string{"func Helper(a, b int) int {", "\tsum := a + b", "\treturn sum * 2", "}"} {
+		minus, plus = append(minus, "-"+l), append(plus, "+"+l)
+	}
+	files := []File{
+		{Path: "a.go", Hunks: []Hunk{{OldStart: 10, NewStart: 10, Lines: minus}}},
+		{Path: "b.go", Hunks: []Hunk{{OldStart: 1, NewStart: 1, Lines: plus}}},
+		{Path: "c.go", Hunks: []Hunk{{OldStart: 1, NewStart: 1, Lines: plus}}},
+	}
+	detectMoves(files)
+	folded := 0
+	for _, f := range files[1:] {
+		if h := f.Hunks[0]; h.Mechanical == "moved" {
+			folded++
+		} else if len(h.Moves) != 0 {
+			t.Errorf("a copy kept moves without folding: %+v", h)
+		}
+	}
+	if folded != 1 || len(files[0].Hunks[0].Moves) != 1 {
+		t.Errorf("one removed block must fold one added copy, got %d folded, source moves %+v", folded, files[0].Hunks[0].Moves)
+	}
+}
+
 func TestLayerOrdersTheTour(t *testing.T) {
 	for p, want := range map[string]string{
 		"db/migrations/0042_add.sql": "schema", "internal/store/store.go": "logic",
