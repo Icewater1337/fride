@@ -2,6 +2,7 @@ package review
 
 import (
 	"sort"
+	"strings"
 	"unicode"
 )
 
@@ -32,7 +33,10 @@ type lineAt struct {
 }
 
 // detectMoves finds blocks that one file of a repository lost and another
-// place gained, whitespace aside, and folds a hunk that only moves code.
+// place gained, and folds a hunk that only moves code. Lines compare as in
+// whitespaceOnly: indentation that is syntax and spaces inside a string count,
+// other whitespace does not. Each side keys by its own file, so a block moved
+// between an indent-sensitive file and another one is not a move.
 //
 // A match inside one hunk is not a move: that is a block re-indented where it
 // stands, and the reader has to see what wraps it now.
@@ -42,12 +46,13 @@ type lineAt struct {
 func detectMoves(files []File) {
 	removed := map[string][]lineAt{}
 	for fi := range files {
+		sens := indentSensitive(files[fi].Path)
 		for hi := range files[fi].Hunks {
 			h := &files[fi].Hunks[hi]
 			old, _ := lineNumbers(h)
 			for li, l := range h.Lines {
 				if l != "" && l[0] == '-' {
-					if k := squash(l[1:]); k != "" {
+					if k := squashLine(l[1:], sens); k != "" {
 						removed[k] = append(removed[k], lineAt{fi, hi, li, old[li]})
 					}
 				}
@@ -66,15 +71,20 @@ func detectMoves(files []File) {
 	}
 	var cands []cand
 	for fi := range files {
+		sens := indentSensitive(files[fi].Path)
 		for hi := range files[fi].Hunks {
 			h := &files[fi].Hunks[hi]
 			for li, l := range h.Lines {
 				// A run starts only at a distinctive line: a brace removed in
 				// a thousand places would make every pair a candidate.
-				if l == "" || l[0] != '+' || !significant(l[1:]) || len(removed[squash(l[1:])]) > maxMoveSources {
+				if l == "" || l[0] != '+' || !significant(l[1:]) {
 					continue
 				}
-				for _, src := range removed[squash(l[1:])] {
+				sources := removed[squashLine(l[1:], sens)]
+				if len(sources) > maxMoveSources {
+					continue
+				}
+				for _, src := range sources {
 					if src.file == fi && src.hunk == hi {
 						continue
 					}
@@ -129,10 +139,11 @@ func detectMoves(files []File) {
 func runLength(files []File, fi, hi, li int, src lineAt) int {
 	add := files[fi].Hunks[hi].Lines
 	del := files[src.file].Hunks[src.hunk].Lines
+	addSens, delSens := indentSensitive(files[fi].Path), indentSensitive(files[src.file].Path)
 	n := 0
 	for li+n < len(add) && src.idx+n < len(del) {
 		a, d := add[li+n], del[src.idx+n]
-		if a == "" || d == "" || a[0] != '+' || d[0] != '-' || squash(a[1:]) != squash(d[1:]) {
+		if a == "" || d == "" || a[0] != '+' || d[0] != '-' || squashLine(a[1:], addSens) != squashLine(d[1:], delSens) {
 			break
 		}
 		n++
@@ -162,7 +173,7 @@ func allMoved(h *Hunk) bool {
 		}
 	}
 	for i, l := range h.Lines {
-		if l != "" && l[0] != ' ' && !in[i] && squash(l[1:]) != "" {
+		if l != "" && l[0] != ' ' && !in[i] && strings.TrimSpace(l[1:]) != "" {
 			return false
 		}
 	}
