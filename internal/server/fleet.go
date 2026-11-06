@@ -38,6 +38,7 @@ type fleetState struct {
 	name    string
 	client  *http.Client // JSON calls, short timeout
 	stream  *http.Client // archives and proxied requests, no overall timeout
+	patient *http.Client // aborts, which may have to wait out a finish on the target
 	mirrors *fleet.Mirrors
 
 	mu      sync.Mutex
@@ -50,6 +51,10 @@ type fleetState struct {
 	slotsAt time.Time
 }
 
+// abortWait bounds an abort's wait for a finish still running on the target. It
+// only has to outlast move.Finish and task.Arrived, which hold the import lock.
+const abortWait = 10 * time.Minute
+
 // StartFleet joins the fleet: it serves this computer's API to the user's
 // other computers over n, and lets this computer reach theirs.
 func (s *Server) StartFleet(n fleet.Network, name string) error {
@@ -57,6 +62,7 @@ func (s *Server) StartFleet(n fleet.Network, name string) error {
 		net: n, name: fleet.CleanName(name),
 		client:  fleet.HTTPClient(n, 8*time.Second),
 		stream:  fleet.HTTPClient(n, 0),
+		patient: fleet.HTTPClient(n, abortWait),
 		mirrors: fleet.NewMirrors(n),
 		slots:   map[int]string{},
 	}
@@ -207,13 +213,24 @@ func (f *fleetState) callWith(c *http.Client, p fleet.Peer, method, path string,
 	return decodeResponse(p.Name, resp, out)
 }
 
+// abortImport asks the target to drop an incoming task. The target answers once
+// a finish running for the slug is done, which can outlast f.client, and the
+// source must not restore before it knows the outcome. A target that does not
+// answer a trivial request is unreachable: no use waiting out the deadline.
+func (f *fleetState) abortImport(p fleet.Peer, slug string, out any) error {
+	if err := f.call(p, "GET", "/fleet/info", nil, nil); err != nil {
+		return err
+	}
+	return f.callWith(f.patient, p, "POST", "/fleet/import/abort", map[string]string{"slug": slug}, out)
+}
+
 // abortKept asks the target to drop an incoming task, and reports whether it
 // refused because the task is already registered there.
 func (f *fleetState) abortKept(p fleet.Peer, slug string) bool {
 	var ab struct {
 		Status string `json:"status"`
 	}
-	return f.call(p, "POST", "/fleet/import/abort", map[string]string{"slug": slug}, &ab) == nil && strings.HasPrefix(ab.Status, "kept")
+	return f.abortImport(p, slug, &ab) == nil && strings.HasPrefix(ab.Status, "kept")
 }
 
 func decodeResponse(who string, resp *http.Response, out any) error {
@@ -551,7 +568,7 @@ func (s *Server) moveTask(t *store.Task, to string, startAgent, startStack bool)
 
 	// From here on a failure must put the task back the way it was.
 	rollback := func(cause error) (map[string]any, error) {
-		_ = s.fleet.call(p, "POST", "/fleet/import/abort", map[string]string{"slug": t.Slug}, nil)
+		_ = s.fleet.abortImport(p, t.Slug, nil)
 		if rerr := move.Restore(s.cfg, m); rerr != nil {
 			return nil, fmt.Errorf("%v — and restoring the worktrees here failed too (%v); the work is safe in refs/fride/wip/%s/* and the task's branches", cause, rerr, t.Slug)
 		}
@@ -667,13 +684,26 @@ func (s *Server) handleImportFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := req.Slug
-	defer s.lockImport(slug)()
-	m, notes, err := move.Finish(s.cfg, s.st, slug, task.Landing(s.cfg))
+	// Locked only while it is decided whether this computer keeps the task. An
+	// abort waits on this lock, and the stack below can take minutes to start.
+	m, notes, err := func() (*move.Manifest, []string, error) {
+		defer s.lockImport(slug)()
+		if s.finishHook != nil {
+			s.finishHook("locked")
+		}
+		m, notes, err := move.Finish(s.cfg, s.st, slug, task.Landing(s.cfg))
+		if err != nil {
+			return nil, nil, err
+		}
+		return m, append(notes, task.Arrived(s.cfg, s.st, m)...), nil
+	}()
 	if err != nil {
 		writeErr(w, 400, err)
 		return
 	}
-	notes = append(notes, task.Arrived(s.cfg, s.st, m)...)
+	if s.finishHook != nil {
+		s.finishHook("arrived")
+	}
 	if req.StartAgent {
 		if _, err := s.startAgent(slug, m.Resume); err != nil {
 			notes = append(notes, "the agent could not be started: "+err.Error())
