@@ -1070,7 +1070,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		s.handleChanges(w, r, t, strings.TrimPrefix(strings.TrimPrefix(action, "changes"), "/"))
 
 	case action == "usage" && r.Method == http.MethodGet:
-		u, err := usage.ForWorkspace(filepath.Join(s.cfg.Home, ".claude"), s.cfg.WorkspaceDir(slug))
+		u, err := usage.ForWorkspace(agent.ClaudeDir(s.cfg.Home), s.cfg.WorkspaceDir(slug))
 		if err != nil {
 			writeErr(w, 500, err)
 			return

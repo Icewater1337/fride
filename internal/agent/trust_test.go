@@ -116,3 +116,61 @@ func TestClaudeStarted(t *testing.T) {
 		t.Fatal("the process's own registration did not count")
 	}
 }
+
+// With CLAUDE_CONFIG_DIR set, everything read from Claude Code's folder comes
+// from there, and nothing from ~/.claude.
+func TestClaudeDirFollowsConfigDir(t *testing.T) {
+	home, alt := t.TempDir(), t.TempDir()
+	ws := filepath.Join(home, "ws")
+	const id = "11111111-1111-1111-1111-111111111111"
+	line := fmt.Sprintf(`{"type":"user","cwd":%q,"sessionId":%q,"timestamp":"2026-01-02T03:04:05Z","message":{"role":"user","content":"hi"}}`+"\n", ws, id) +
+		fmt.Sprintf(`{"type":"assistant","uuid":"a1","cwd":%q,"sessionId":%q,"timestamp":"2026-01-02T03:04:06Z","message":{"role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}`+"\n", ws, id)
+	place := func(dir string) string {
+		t.Helper()
+		project := filepath.Join(dir, "projects", claudeEncode(ws))
+		sessions := filepath.Join(dir, "sessions")
+		for _, d := range []string{project, sessions} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p := filepath.Join(project, id+".jsonl")
+		if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rec := fmt.Sprintf(`{"pid":%d,"sessionId":%q,"cwd":%q,"startedAt":1}`, os.Getpid(), id, ws)
+		if err := os.WriteFile(filepath.Join(sessions, fmt.Sprintf("%d.json", os.Getpid())), []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	check := func(dir, want string) {
+		t.Helper()
+		if got := ClaudeDir(home); got != dir {
+			t.Fatalf("ClaudeDir = %q, want %q", got, dir)
+		}
+		if got := OpenByPID(Claude, home)[os.Getpid()]; got.SessionID != id {
+			t.Errorf("live session not read from %s: %+v", dir, got)
+		}
+		if got := Sessions(Claude, home, ws); len(got) != 1 || got[0].ID != id {
+			t.Errorf("sessions not read from %s: %+v", dir, got)
+		}
+		if got := ClaudeTranscripts(home, ws); len(got) != 1 || got[0].Path != want {
+			t.Errorf("transcripts not read from %s: %+v", dir, got)
+		}
+		if got := transcriptPath(home, ws, id); got != want {
+			t.Errorf("transcriptPath = %q, want %q", got, want)
+		}
+		if got := filepath.Join(ClaudeProjectDir(home, ws), id+".jsonl"); got != want {
+			t.Errorf("ClaudeProjectDir put it at %q, want %q", got, want)
+		}
+	}
+
+	t.Setenv("CLAUDE_CONFIG_DIR", alt)
+	inAlt := place(alt)
+	check(alt, inAlt)
+
+	// Set but empty means unset, as Claude Code and claudeConfigPath read it.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	check(filepath.Join(home, ".claude"), place(filepath.Join(home, ".claude")))
+}

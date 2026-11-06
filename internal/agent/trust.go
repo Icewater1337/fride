@@ -66,6 +66,16 @@ func candidates(dir string) []string {
 	return out
 }
 
+// ClaudeDir is the folder Claude Code keeps its sessions and transcripts in:
+// $CLAUDE_CONFIG_DIR, else ~/.claude. Agents inherit this process's environment,
+// so its value here is the one they run with. Taken as is, as Claude Code does.
+func ClaudeDir(home string) string {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(home, ".claude")
+}
+
 // claudeConfigPath is where Claude Code keeps its per-folder state:
 // $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json.
 func claudeConfigPath(home string) string {

@@ -221,7 +221,7 @@ func transcriptPath(home, workspaceDir, sessionID string) string {
 	if strings.ContainsAny(sessionID, `/\`) {
 		return "" // a session id is a uuid; anything else is not ours to open
 	}
-	projects := filepath.Join(home, ".claude", "projects")
+	projects := filepath.Join(ClaudeDir(home), "projects")
 	des, err := os.ReadDir(projects)
 	if err != nil {
 		return ""
