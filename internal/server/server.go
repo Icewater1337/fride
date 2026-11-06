@@ -54,6 +54,8 @@ type Server struct {
 	fleet *fleetState
 	// imports serialises import finish and abort per slug (fleet.go).
 	imports sync.Map
+	// finishHook, if set, runs at stages of handleImportFinish. Tests only.
+	finishHook func(stage string)
 	// companion is set in companion mode (companion.go).
 	companion *companionState
 	// localAPI is the API alone, for requests the node proxy serves here.
