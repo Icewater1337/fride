@@ -195,9 +195,16 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 	}
 	// A message that was being read when the last process stopped is read
 	// again: its turn never finished, so nothing of it was applied.
+	recovered := false
 	if it := o.st.Reading; it != nil {
 		o.st.Reading = nil
 		o.requeue(*it, "FrIDE restarted while this was being read")
+		recovered = true
+	}
+	// Only when something changed: load ignores a state file it cannot parse,
+	// and saving at every start would overwrite that file with an empty state.
+	if o.settleStranded() || recovered {
+		o.save()
 	}
 	o.turns.Add(2)
 	go func() {

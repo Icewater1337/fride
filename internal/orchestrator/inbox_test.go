@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -422,6 +423,106 @@ func TestInboxSurvivesARestart(t *testing.T) {
 	// And a retried delivery still finds it.
 	if _, existing, _ := again.Receive("plaud", "rec-1", "first"); !existing {
 		t.Fatal("the ref was forgotten across the restart")
+	}
+}
+
+// writeState saves a state as the last process would have left it.
+func writeState(t *testing.T, dir string, st state) {
+	t.Helper()
+	b, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "orchestrator.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestartSettlesThreadsLeftInRouting(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	writeState(t, dir, state{
+		Threads: []Thread{
+			{ID: 1, Source: "cli", Text: "fix it", Status: ThreadRouting, Tasks: []string{"t1"}, Created: now, Updated: now},
+			{ID: 2, Source: "cli", Text: "which branch?", Status: ThreadRouting, Created: now, Updated: now},
+		},
+		ThreadSeq: 2,
+		Seq:       2,
+		Messages: []Message{
+			{ID: 1, Role: RoleOrchestrator, Text: "Started a task.", Threads: []int{1}, Time: now},
+			{ID: 2, Role: RoleOrchestrator, Text: "It is on main.", Threads: []int{2}, Time: now},
+		},
+	})
+	h := newFakeHost()
+	o := New(dir, t.TempDir(), "/nonexistent-claude", h)
+	t.Cleanup(func() { o.Close(); o.Wait() })
+
+	if v := threadOf(t, o, 1); v.Status != ThreadActive {
+		t.Fatalf("a thread following a task came back %s, want active", v.Status)
+	}
+	if v := threadOf(t, o, 2); v.Status != ThreadAnswered {
+		t.Fatalf("a thread following nothing came back %s, want answered", v.Status)
+	}
+
+	// Saved, so a second restart finds nothing to do.
+	var saved state
+	b, err := os.ReadFile(filepath.Join(dir, "orchestrator.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Threads[0].Status != ThreadActive || saved.Threads[1].Status != ThreadAnswered {
+		t.Fatalf("saved statuses: %s, %s", saved.Threads[0].Status, saved.Threads[1].Status)
+	}
+
+	// And the news of its task reaches the sender.
+	o.mu.Lock()
+	o.addTo(RoleEvent, "t1", "t1's agent is working.")
+	o.mu.Unlock()
+	o.noteNews()
+	waitFor(t, func() bool {
+		for _, n := range h.noted() {
+			if n.Thread.ID == 1 && strings.Contains(n.Text, "t1's agent is working.") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestRestartLeavesThreadsStillToBeRead(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	st := state{
+		Threads: []Thread{
+			{ID: 1, Source: "cli", Text: "being read", Status: ThreadRouting, Tasks: []string{"t1"}, Created: now, Updated: now},
+			{ID: 2, Source: "cli", Text: "queued", Status: ThreadQueued, Created: now, Updated: now},
+		},
+		ThreadSeq: 2,
+		Queue:     []inboxItem{{Thread: 2, Text: "queued"}},
+		Reading:   &inboxItem{Thread: 1, Text: "being read", Attempts: 1},
+	}
+	writeState(t, dir, st)
+	o := New(dir, t.TempDir(), "/nonexistent-claude", newFakeHost())
+	t.Cleanup(func() { o.Close(); o.Wait() })
+	// The loop may be reading one already, and that brain cannot run: routing
+	// or queued are both still to be read. Settled would lose the message.
+	for _, id := range []int{1, 2} {
+		if s := threadOf(t, o, id).Status; s != ThreadQueued && s != ThreadRouting {
+			t.Fatalf("thread %d came back %s, want it still to be read", id, s)
+		}
+	}
+
+	// A reply that came in during the turn: routing, with its message queued.
+	// Checked without a loop, which would read it at once.
+	b := &Orchestrator{st: state{
+		Threads: []Thread{{ID: 3, Status: ThreadRouting, Tasks: []string{"t1"}}},
+		Queue:   []inboxItem{{Thread: 3, Text: "and also this", Reply: true}},
+	}}
+	if b.settleStranded() || b.st.Threads[0].Status != ThreadRouting {
+		t.Fatalf("a thread with a queued reply was settled: %s", b.st.Threads[0].Status)
 	}
 }
 
