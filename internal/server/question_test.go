@@ -59,7 +59,7 @@ func TestAnAnswerToAQuestionClosesTheDialogFirst(t *testing.T) {
 				_ = f.Close()
 			case declined && bytes.HasSuffix(b, []byte("\r")):
 				f, _ := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
-				_, _ = f.WriteString(`{"type":"user","uuid":"u2","message":{"role":"user","content":"Answer to your question: ..."}}` + "\n")
+				_, _ = f.WriteString(`{"type":"user","uuid":"u2","message":{"role":"user","content":"Answer to your question: Change the site repo (option 2), and push it"}}` + "\n")
 				_ = f.Close()
 				return
 			}

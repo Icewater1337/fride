@@ -170,6 +170,11 @@ func TestAnUnseenInstructionIsCounted(t *testing.T) {
 	if ts.sent != 1 || ts.unanswered != 1 {
 		t.Fatalf("state = %+v, want the unseen send counted", ts)
 	}
+	// And the thread hears it failed: it is never reported as passed on.
+	msgs := messagesOf(o)
+	if len(msgs) != 1 || msgs[0].Role != RoleError || !strings.Contains(msgs[0].Text, ErrNotSeen.Error()) {
+		t.Fatalf("messages = %+v, want the failure said", msgs)
+	}
 }
 
 // A held instruction typed at an agent stopped on an API error is what gets
