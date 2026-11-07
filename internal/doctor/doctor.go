@@ -14,6 +14,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,6 +27,7 @@ import (
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/infra"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/procgroup"
 )
 
 // Check is one requirement and its current state.
@@ -213,6 +215,9 @@ func tool(id, label, command, needed, fix string) Check {
 	c := Check{ID: id, Label: label, Needed: needed, Fix: fix}
 	if out, err := runShort(command); err != nil {
 		c.Detail = "not found"
+		if errors.Is(err, errTimedOut) {
+			c.Detail = err.Error()
+		}
 	} else {
 		c.OK = true
 		c.Detail = firstLine(out)
@@ -235,6 +240,9 @@ func requirement(i int, name, env, command, why, fix string) Check {
 	case command != "":
 		if out, err := runShort(command); err != nil {
 			c.Detail = "`" + command + "` failed"
+			if errors.Is(err, errTimedOut) {
+				c.Detail = "`" + command + "` " + err.Error()
+			}
 			if s := firstLine(out); s != "" {
 				c.Detail += ": " + s
 			}
@@ -248,10 +256,22 @@ func requirement(i int, name, env, command, why, fix string) Check {
 	return c
 }
 
+// checkTimeout bounds one check's command; a variable so a test can lower it.
+var checkTimeout = 15 * time.Second
+
+var errTimedOut = errors.New("timed out")
+
 func runShort(command string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, shell(), "-c", command).CombinedOutput()
+	cmd := exec.CommandContext(ctx, shell(), "-c", command)
+	// Without this a timeout kills only the shell; a child it started keeps the
+	// output pipe open and the check (and GET /api/env) waits for it forever.
+	procgroup.Contain(cmd)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		err = fmt.Errorf("%w after %s", errTimedOut, checkTimeout)
+	}
 	return strings.TrimSpace(string(out)), err
 }
 
