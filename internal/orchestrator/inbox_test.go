@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -373,6 +374,77 @@ func TestSendWhileAnInstructionIsHeldJoinsIt(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.sent) != 1 || h.sent[0] != "t1: write the design Then: then build it" {
 		t.Fatalf("sent %q", h.sent)
+	}
+}
+
+// A message from the inbox that joins a held instruction follows the task like
+// any other send: its sender hears the delivery, and the task's news after it.
+func TestAMessageJoiningAHeldInstructionFollowsTheTask(t *testing.T) {
+	h := newFakeHost()
+	o, _ := newStubOrch(t, h, Reply{Say: "On it.",
+		Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "then build it"}}})
+	o.mu.Lock()
+	o.st.Held = map[string]held{"t1": {Text: "write the design", Since: time.Now()}}
+	o.mu.Unlock()
+
+	v, _, _ := o.Receive("plaud", "", "t1 should then build it")
+	v = settled(t, o, v.ID)
+	if v.Status != ThreadActive || len(v.Tasks) != 1 || v.Tasks[0] != "t1" {
+		t.Fatalf("the thread did not follow the task: %+v", v.Thread)
+	}
+	if _, sent, _ := h.counts(); sent != 0 {
+		t.Fatalf("the later instruction overtook the held one: %v", h.sent)
+	}
+
+	o.deliverHeld([]Observation{{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true}})
+	o.mu.Lock()
+	o.addTo(RoleEvent, "t1", "t1 finished the design")
+	o.mu.Unlock()
+	var trail []string
+	for _, m := range threadOf(t, o, v.ID).Messages {
+		trail = append(trail, m.Text)
+	}
+	got := strings.Join(trail, "\n")
+	if !strings.Contains(got, "its agent is ready now") || !strings.Contains(got, "t1 finished the design") {
+		t.Fatalf("the thread did not hear the task's news:\n%s", got)
+	}
+}
+
+// An instruction that never showed up is a failure, said as one, but the sender
+// still follows the task: its news, what becomes of it, is theirs to hear.
+func TestAnUnseenInstructionFromTheInboxFollowsTheTask(t *testing.T) {
+	h := newFakeHost()
+	h.sendErr = fmt.Errorf("t1's agent did not take the instruction: %w", ErrNotSeen)
+	o, _ := newStubOrch(t, h, Reply{Say: "On it.",
+		Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "cover the empty state"}}})
+
+	v, _, _ := o.Receive("plaud", "", "t1 should cover the empty state")
+	v = settled(t, o, v.ID)
+	if v.Status != ThreadActive || len(v.Tasks) != 1 || v.Tasks[0] != "t1" {
+		t.Fatalf("the thread did not follow the task: %+v", v.Thread)
+	}
+	failed := false
+	for _, m := range v.Messages {
+		failed = failed || m.Role == RoleError && strings.Contains(m.Text, ErrNotSeen.Error())
+		if m.Role == RoleEvent {
+			t.Fatalf("reported as passed on: %+v", m)
+		}
+	}
+	if !failed {
+		t.Fatalf("the failure was not said in the thread: %+v", v.Messages)
+	}
+}
+
+// Any other failed send reached nothing, so there is no task to follow.
+func TestAFailedSendFromTheInboxDoesNotFollowTheTask(t *testing.T) {
+	h := newFakeHost()
+	h.sendErr = errors.New("no such session")
+	o, _ := newStubOrch(t, h, Reply{Say: "On it.",
+		Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "cover the empty state"}}})
+
+	v, _, _ := o.Receive("plaud", "", "t1 should cover the empty state")
+	if v = settled(t, o, v.ID); v.Status != ThreadAnswered || len(v.Tasks) != 0 {
+		t.Fatalf("the thread follows a task nothing reached: %+v", v.Thread)
 	}
 }
 

@@ -616,6 +616,9 @@ func (o *Orchestrator) apply(r Reply, tr turn) {
 			o.asking(o.threadsFor(a.Task))
 			o.save()
 		case later:
+			if tr.thread != 0 {
+				o.link(tr.thread, a.Task)
+			}
 			o.hold(a.Task, a.Text, append(tr.threads(), o.threadsFor(a.Task)...))
 			o.addTo(RoleEvent, a.Task, describe(a)+" (once its agent is ready)"+reason(a),
 				tr.threads()...)
@@ -630,6 +633,11 @@ func (o *Orchestrator) apply(r Reply, tr turn) {
 
 		o.mu.Lock()
 		if err != nil {
+			// A failure all the same, but the line may yet have arrived: the
+			// sender follows the task, to hear what becomes of it (#118).
+			if tr.thread != 0 && errors.Is(err, ErrNotSeen) {
+				o.link(tr.thread, slug)
+			}
 			o.addTo(RoleError, a.Task, describe(a)+" — "+err.Error(), tr.threads()...)
 		} else {
 			if tr.thread != 0 {
