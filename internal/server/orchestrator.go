@@ -2,11 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/orchestrator"
@@ -267,42 +273,153 @@ func (h orchHost) Send(slug, text string) error {
 		return fmt.Errorf("%s's agent is asking whether to trust its folder, so nothing can be "+
 			"typed at it; %s", slug, h.trustFix())
 	}
+	dir := h.s.cfg.WorkspaceDir(slug)
+	var id, tool string
 	if h.s.taskAgent(slug) == agent.Claude {
-		if id := sess.Claimed(); id != "" {
-			dir := h.s.cfg.WorkspaceDir(slug)
-			tool, err := agent.Pending(agent.Claude, h.s.cfg.Home, dir, id, sess.Created)
-			switch {
-			case err != nil && sess.Waiting():
-				return fmt.Errorf("%s's agent is stopped and its transcript could not be read (%v), "+
-					"so it could be showing a dialog; nothing was typed", slug, err)
-			case tool == agent.QuestionTool:
-				return h.answerQuestion(slug, sess, dir, id, text)
-			case tool != "" && sess.Waiting():
-				// Checked here, at the moment of typing, and not only from the
-				// last look: a look taken while the screen repainted can miss
-				// the dialog, and the keystrokes would then pick an option.
-				return fmt.Errorf("%s's agent is waiting on a %s confirmation, so nothing can be "+
-					"typed at it; answer it in the task's tab", slug, tool)
-			}
-			if sess.Waiting() && !strings.HasPrefix(strings.TrimSpace(text), "/") {
-				return h.typeLine(slug, sess, dir, id, text)
-			}
+		id = sess.Claimed()
+	}
+	if id != "" {
+		var err error
+		tool, err = agent.Pending(agent.Claude, h.s.cfg.Home, dir, id, sess.Created)
+		switch {
+		case err != nil && sess.Waiting():
+			return fmt.Errorf("%s's agent is stopped and its transcript could not be read (%v), "+
+				"so it could be showing a dialog; nothing was typed", slug, err)
+		case tool != "" && tool != agent.QuestionTool && sess.Waiting():
+			// Checked here, at the moment of typing, and not only from the
+			// last look: a look taken while the screen repainted can miss
+			// the dialog, and the keystrokes would then pick an option.
+			return fmt.Errorf("%s's agent is waiting on a %s confirmation, so nothing can be "+
+				"typed at it; answer it in the task's tab", slug, tool)
 		}
 	}
-	return sess.SendLine(text)
+	line, err := h.shortLine(slug, text)
+	if err != nil {
+		return err
+	}
+	switch {
+	case tool == agent.QuestionTool:
+		return h.answerQuestion(slug, sess, dir, id, line)
+	case id != "" && sess.Waiting() && !strings.HasPrefix(strings.TrimSpace(line), "/"):
+		return h.typeLine(slug, sess, dir, id, line)
+	}
+	return sess.SendLine(line)
 }
 
-// typeLine types text at a Claude Code agent sitting at its prompt, and makes
-// sure the agent took it. A fresh agent can drop keystrokes without a trace:
-// the first instruction to a new node's first task vanished, leaving an empty
-// prompt under Claude Code's one-time auto-mode notice (#4). That notice is a
-// line Claude Code appends shortly after it starts, not a dialog, so there is
-// no screen to wait out; the line itself is checked. When the agent goes quiet
-// without recording it as a user turn, Enter is pressed — which submits a line
-// left in the input box and does nothing at an empty prompt — and, failing
-// that, the line is typed once more. Not for a busy agent, which queues what is
-// typed, nor for a slash command, which records no prompt and would run twice.
+// longInstruction is how many characters are still typed at an agent. Longer
+// text pasted into Claude Code's prompt arrived cut off, in pieces, or as a
+// block nobody submitted (#119).
+const longInstruction = 400
+
+// shortLine returns what to type for an instruction: the text itself, or for a
+// long one a line pointing at a file holding it. The file is in the workspace's
+// sidecar folder, outside every repository, so it cannot be committed, and
+// removing the workspace removes it. A slash command has to be typed to run.
+func (h orchHost) shortLine(slug, text string) (string, error) {
+	if utf8.RuneCountInString(text) <= longInstruction || strings.HasPrefix(strings.TrimSpace(text), "/") {
+		return text, nil
+	}
+	dir := filepath.Join(h.s.cfg.WorkspaceDir(slug), ".fride", "instructions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("could not write the instruction for %s to a file: %w", slug, err)
+	}
+	for n := 1; ; n++ {
+		path := filepath.Join(dir, strconv.Itoa(n)+".md")
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err == nil {
+			_, err = f.WriteString(text + "\n")
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err == nil {
+				return fmt.Sprintf("Read and follow %s: instruction %d from the orchestrator.", path, n), nil
+			}
+			// Half an instruction must not stay where a later look could take it for one.
+			_ = os.Remove(path)
+		}
+		return "", fmt.Errorf("could not write the instruction for %s to a file: %w", slug, err)
+	}
+}
+
+// typeLine types text at a Claude Code agent sitting at its prompt and makes
+// sure it arrives. An agent can stop taking input altogether while it looks
+// idle, and nothing typed gets through until it is restarted (#119). So one that
+// did not take the line is restarted, once, and the line typed again; the
+// worktrees are not touched. The error still wraps ErrNotSeen when that fails
+// too, so that callers keep counting it against their budgets, which is what
+// bounds the restarts.
 func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string) error {
+	err := h.tryLine(slug, sess, dir, id, text)
+	if !errors.Is(err, orchestrator.ErrNotSeen) {
+		return err
+	}
+	log.Printf("task %s: restarting its agent: %v", slug, err)
+	fresh, rerr := h.restartAgent(slug, sess, id)
+	if rerr != nil {
+		return fmt.Errorf("the instruction did not arrive: %w, and restarting the agent failed: %v", err, rerr)
+	}
+	if err := h.tryLine(slug, fresh, dir, fresh.Claimed(), text); err != nil {
+		return fmt.Errorf("the instruction did not arrive, not even after FrIDE restarted the agent: %w", err)
+	}
+	return nil
+}
+
+// restartAgent stops a session and reopens its conversation, and returns the new
+// session once it sits at its prompt. A new agent that lost its first line has
+// recorded nothing and cannot be resumed; it has nothing to lose either, so it
+// is started afresh.
+func (h orchHost) restartAgent(slug string, sess *term.Session, id string) (*term.Session, error) {
+	// Before anything is stopped: without the CLI there would be no way back.
+	if err := agent.Check(agent.Claude); err != nil {
+		return nil, err
+	}
+	_, recorded := recordedIn(h.s.resumableAll(slug), id)
+	h.s.terms.Close(sess.ID)
+	var err error
+	if recorded {
+		err = h.ResumeAgent(slug, id)
+	} else {
+		err = h.StartAgent(slug)
+	}
+	if err != nil {
+		return nil, err
+	}
+	fresh := h.s.terms.AgentSession(slug)
+	deadline := time.Now().Add(restartWait)
+	for fresh == nil || !fresh.Waiting() {
+		if fresh == nil || !fresh.Alive() {
+			return nil, errors.New("it exited straight away")
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("it did not get to its prompt")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if h.atTrustDialog(slug, fresh) {
+		return nil, fmt.Errorf("it is asking whether to trust its folder; %s", h.trustFix())
+	}
+	// A resume can carry on under another id, and the line is looked for there.
+	h.s.reconcileClaims(slug)
+	return fresh, nil
+}
+
+// How long restartAgent waits for the new session to get to its prompt.
+const restartWait = time.Minute
+
+// tryLine types text at an agent sitting at its prompt and checks that it took
+// it. A fresh agent can drop keystrokes without a trace: the first instruction
+// to a new node's first task vanished, leaving an empty prompt under Claude
+// Code's one-time auto-mode notice (#4). That notice is a line Claude Code
+// appends shortly after it starts, not a dialog, so there is no screen to wait
+// out; the line itself is checked. When the agent goes quiet without recording
+// it as a user turn, Enter is pressed — which submits a line left in the input
+// box and does nothing at an empty prompt — and, failing that, the line is typed
+// once more. Not for a busy agent, which queues what is typed, nor for a slash
+// command, which records no prompt and would run twice.
+func (h orchHost) tryLine(slug string, sess *term.Session, dir, id, text string) error {
 	_, last := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, "", 1)
 	for _, try := range []func() error{
 		func() error { return sess.SendLine(text) },
@@ -312,7 +429,7 @@ func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string
 		if err := try(); err != nil {
 			return err
 		}
-		if h.tookLine(sess, dir, id, last) {
+		if h.tookLine(sess, dir, id, last, text) {
 			return nil
 		}
 	}
@@ -320,25 +437,28 @@ func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string
 		slug, orchestrator.ErrNotSeen)
 }
 
-// tookLine waits for the agent to record a user turn after the cursor last,
-// and reports false only once it has gone quiet without one. Typing cleared
-// its waiting flag, which comes back after a few quiet seconds. An agent still
-// busy at the deadline counts as having taken it: typing the line again at an
-// agent that has it would run it twice.
-func (h orchHost) tookLine(sess *term.Session, dir, id, last string) bool {
+// tookLine waits for the agent to record the whole of text as a user turn after
+// the cursor last, and reports false once it has gone quiet or exited without
+// one. A turn holding only a part is what a cut-off line looks like; one holding
+// more is several queued lines submitted together. Typing cleared its waiting
+// flag, which comes back after a few quiet seconds. An agent still busy at the
+// deadline counts as having taken it: typing the line again at an agent that has
+// it would run it twice.
+func (h orchHost) tookLine(sess *term.Session, dir, id, last, text string) bool {
+	want := strings.Join(strings.Fields(text), " ")
 	deadline := time.Now().Add(typedWait)
 	for {
 		turns, _ := agent.Tail(agent.Claude, h.s.cfg.Home, dir, id, last, 1000)
 		for _, t := range turns {
-			if t.Role == "user" {
+			if t.Role == "user" && strings.Contains(strings.Join(strings.Fields(t.Text), " "), want) {
 				return true
 			}
 		}
-		if !sess.Alive() || time.Now().After(deadline) {
-			return true
-		}
-		if sess.Waiting() {
+		if !sess.Alive() || sess.Waiting() {
 			return false
+		}
+		if time.Now().After(deadline) {
+			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
