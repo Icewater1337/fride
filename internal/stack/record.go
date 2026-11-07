@@ -2,6 +2,7 @@ package stack
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -31,12 +32,19 @@ type record struct {
 	// Stopping one needs nothing but its name — compose finds the containers
 	// by label — so neither the profile nor the worktree has to exist still.
 	Projects []string `json:"projects,omitempty"`
+	// Marked says that the services' Started means what it says. An older
+	// FrIDE wrote no marks, and "none started" must not be read into that.
+	Marked bool `json:"marked,omitempty"`
 }
 
 type recordedService struct {
 	Name string `json:"name"`
 	Mode Mode   `json:"mode"`
 	Port int    `json:"port,omitempty"`
+	// Started: this task really started the service's launcher. Only then is
+	// what holds the port Down's to kill; a refused service's port belongs to
+	// somebody else.
+	Started bool `json:"started,omitempty"`
 }
 
 func recordPath(cfg *config.Config, slug string) string {
@@ -76,7 +84,7 @@ func writeRecord(cfg *config.Config, slug string, r *record) error {
 // recordOf describes what starting the plan starts. The compose project is
 // added separately, by whoever actually starts containers.
 func recordOf(p *Plan) *record {
-	r := &record{K: p.K, Profile: p.ProfileName, Scopes: p.Opts.Scopes}
+	r := &record{K: p.K, Profile: p.ProfileName, Scopes: p.Opts.Scopes, Marked: true}
 	for _, s := range p.Ordered() {
 		r.Services = append(r.Services, recordedService{Name: s.Name, Mode: s.Mode, Port: s.Port})
 	}
@@ -117,6 +125,50 @@ func (r *record) startedPorts() []int {
 		}
 	}
 	return out
+}
+
+// settleMarks gives a record of an older FrIDE its marks, from the one thing
+// that FrIDE left to go by: every source service counts as started unless a
+// marker says it was refused. It has to run before the markers are cleared, by
+// a new start as much as by Down. A marker that cannot be read keeps the
+// service out of reach: killing is the decision that cannot be taken back.
+func (r *record) settleMarks(cfg *config.Config, slug string) {
+	if r.Marked {
+		return
+	}
+	for i, s := range r.Services {
+		if s.Mode == ModeSource {
+			_, _, refused := launchPaths(cfg, slug, s.Name)
+			_, err := os.Stat(refused)
+			r.Services[i].Started = errors.Is(err, os.ErrNotExist)
+		}
+	}
+	r.Marked = true
+}
+
+// keepMarks carries over what an earlier start of the task started: a server
+// its build forked outlives its launcher, and is still Down's to stop. A mark
+// is for one port; a service that moved has nothing of ours on its new one.
+func (r *record) keepMarks(old *record) {
+	for i, s := range r.Services {
+		r.Services[i].Started = slices.ContainsFunc(old.Services, func(o recordedService) bool {
+			return o.Started && o.Name == s.Name && o.Mode == s.Mode && o.Port == s.Port
+		})
+	}
+}
+
+// markStarted notes in the task's record that its launcher was started.
+func markStarted(cfg *config.Config, slug, name string) error {
+	r := readRecord(cfg, slug)
+	if r == nil {
+		return nil
+	}
+	for i := range r.Services {
+		if r.Services[i].Name == name {
+			r.Services[i].Started = true
+		}
+	}
+	return writeRecord(cfg, slug, r)
 }
 
 func (r *record) addProject(project string) {

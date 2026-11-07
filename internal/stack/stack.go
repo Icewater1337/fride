@@ -20,6 +20,8 @@
 //     server from a daemon, and dev servers fork children of their own, so
 //     neither is in the launcher's process group. Stop therefore reaps by port
 //     as well, or a down/up cycle silently keeps serving the previous build.
+//     Only for what the task started (record.go): what else holds such a port
+//     is somebody else's process.
 //   - A live port must never look like a fresh start: re-running up on a busy
 //     port refuses rather than reports success against the old process, and
 //     the refusal is recorded so that Wait does not either.
@@ -195,6 +197,8 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 	rec := recordOf(plan)
 	if old := readRecord(cfg, slug); old != nil {
 		rec.Projects = old.Projects // what an earlier start left is still Down's to stop
+		old.settleMarks(cfg, slug)
+		rec.keepMarks(old)
 	}
 	if ip.Owns() {
 		rec.addProject(ip.Project())
@@ -375,6 +379,9 @@ func spawn(cfg *config.Config, p *Plan, r *Resolved) (string, error) {
 	pidPath, _, _ := launchPaths(cfg, p.Slug, r.Name)
 	_ = os.WriteFile(pidPath, []byte(launcherOf(cmd.Process.Pid).String()+"\n"), 0o644)
 	go func() { _ = cmd.Wait() }() // reap; the process is detached from our lifetime
+	if err := markStarted(cfg, p.Slug, r.Name); err != nil {
+		return fmt.Sprintf("%s: could not note its start in the stack record, so stopping may leave it running: %v", r.Name, err), nil
+	}
 	return "", nil
 }
 
@@ -442,20 +449,24 @@ func openInIDE(cfg *config.Config, p *Plan, r *Resolved) ([]string, error) {
 // already.
 const launcherGrace = 10 * time.Second
 
-// Down stops the task: signal the recorded process groups, reap by port, stop
-// its own containers, and hand the slot back. It stops what Up recorded, not
-// what the task's profile says now.
+// Down stops the task: signal the recorded process groups, reap by port what
+// the task started, stop its own containers, and hand the slot back. It stops
+// what Up recorded, not what the task's profile says now.
 func Down(cfg *config.Config, slug string) (*Status, error) {
 	var warnings []string
 	k := LookupK(cfg, slug)
 	rec := readRecord(cfg, slug)
 	services := []recordedService(nil)
 	if rec != nil {
+		rec.settleMarks(cfg, slug)
 		services = rec.Services
 	} else if plan, err := Resolve(cfg, slug, k); err == nil {
 		// Started by a FrIDE that kept no record: the profile as it is now is
 		// the best guess there is.
-		services = recordOf(plan).Services
+		guess := recordOf(plan)
+		guess.Marked = false
+		guess.settleMarks(cfg, slug)
+		services = guess.Services
 	} else {
 		warnings = append(warnings, "could not resolve the profile, so only recorded processes were stopped: "+err.Error())
 	}
@@ -465,7 +476,7 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 		l.signal(syscall.SIGTERM)
 	}
 	for _, s := range services {
-		if s.Mode != ModeSource || s.Port <= 0 {
+		if s.Mode != ModeSource || s.Port <= 0 || !s.Started {
 			continue
 		}
 		if err := killPort(s.Port); err != nil {
@@ -492,6 +503,9 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 	for _, s := range services {
 		if s.Mode == ModeExternal && s.Port > 0 && infra.Held(s.Port) {
 			warnings = append(warnings, fmt.Sprintf("%s on :%d is started by something else and was left running", s.Name, s.Port))
+		}
+		if s.Mode == ModeSource && !s.Started && s.Port > 0 && infra.Held(s.Port) {
+			warnings = append(warnings, fmt.Sprintf("%s on :%d was not started by this task and was left running", s.Name, s.Port))
 		}
 	}
 

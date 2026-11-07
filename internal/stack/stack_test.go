@@ -520,3 +520,269 @@ func TestReadBootPrefixAllocatesWhatTheFileHolds(t *testing.T) {
 		t.Fatalf("read %q into a buffer of %d bytes", b, cap(b))
 	}
 }
+
+// TestHelperListen is not a test: it is a process holding a port, for the tests
+// below. Down signals what holds a port, so the test binary must not hold it.
+func TestHelperListen(t *testing.T) {
+	addr := os.Getenv("FRIDE_TEST_LISTEN")
+	if addr == "" {
+		return
+	}
+	if _, err := net.Listen("tcp", addr); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Minute)
+}
+
+func waitAccepting(t *testing.T, port int) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if infra.Accepting(port) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("nothing came to listen on :%d", port)
+}
+
+// stranger is a process that has nothing to do with the task, holding port.
+func stranger(t *testing.T, port int) *proc {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestHelperListen$")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("FRIDE_TEST_LISTEN=127.0.0.1:%d", port))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := &proc{pid: cmd.Process.Pid, cmd: cmd, done: make(chan struct{})}
+	go func() { _ = cmd.Wait(); close(p.done) }()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); <-p.done })
+	waitAccepting(t, port)
+	return p
+}
+
+// forkingLauncher makes spawn start what a build tool does: a launcher that
+// forks the real server and exits, so that only the port still leads to it.
+func forkingLauncher(t *testing.T, port int) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "launcher")
+	body := fmt.Sprintf("#!/bin/sh\nFRIDE_TEST_LISTEN=127.0.0.1:%d %q '-test.run=^TestHelperListen$' >/dev/null 2>&1 &\nexit 0\n", port, exe)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prev := launcherExe
+	launcherExe = func() (string, error) { return script, nil }
+	t.Cleanup(func() {
+		launcherExe = prev
+		_ = killPort(port)
+	})
+}
+
+// sourcePair is a profile of two source services, on base+k and base+1+k.
+func sourcePair(base int) *settings.Settings {
+	return &settings.Settings{
+		DefaultProfile: "local",
+		Profiles: map[string]*settings.Profile{"local": {Services: map[string]*settings.Service{
+			"api": {Repo: "backend", Run: "./run", Port: base},
+			"web": {Repo: "frontend", Run: "./run", Port: base + 1},
+		}}},
+	}
+}
+
+func hasWarning(st *Status, want string) bool {
+	return slices.ContainsFunc(st.Warnings, func(w string) bool { return strings.Contains(w, want) })
+}
+
+// slotAndEnv sets up a task with a slot, and returns the ports of api and web.
+func slotAndEnv(t *testing.T) (e *testEnv, api, web int) {
+	t.Helper()
+	needLsof(t)
+	base := freeBase(t)
+	e = newEnv(t, sourcePair(base), "backend", "frontend")
+	k, err := AllocK(e.cfg, "t1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, base + k, base + 1 + k
+}
+
+// Up refuses a service whose port something else holds. Down then used to reap
+// that port all the same, killing the process Up had just refused to touch.
+func TestDownLeavesAStrangerOnARefusedPort(t *testing.T) {
+	e, api, web := slotAndEnv(t)
+	fakeLauncher(t)
+	other := stranger(t, api)
+	t.Cleanup(func() { _ = killPort(web) })
+
+	st, err := Up(e.cfg, "t1", UpOptions{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(st, "api NOT started") {
+		t.Fatalf("api was not refused: %v", st.Warnings)
+	}
+	st, err = Down(e.cfg, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.exited(time.Second) {
+		t.Fatal("Down killed the process on the port of a service whose start it refused")
+	}
+	if !hasWarning(st, fmt.Sprintf("api on :%d was not started by this task and was left running", api)) {
+		t.Errorf("no warning about the port left alone: %v", st.Warnings)
+	}
+	// The slot stays with the stranger on its port, and with it the record: the
+	// refusal marker is gone by now, and the next Down must still know.
+	if _, err := Down(e.cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if other.exited(time.Second) {
+		t.Fatal("a second Down killed the process on the refused port")
+	}
+}
+
+// What Down reaps by port is there for this: the launcher is long gone, and
+// only the port leads to the server it forked.
+func TestDownStopsAForkedServerByPort(t *testing.T) {
+	e, api, _ := slotAndEnv(t)
+	forkingLauncher(t, api)
+	if _, err := Up(e.cfg, "t1", UpOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitAccepting(t, api)
+	waitLauncherGone(t, e, "api")
+	if _, err := Down(e.cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if infra.Held(api) {
+		t.Errorf("the forked server still holds :%d after Down", api)
+	}
+}
+
+// A second Up is refused by the very server the first one started, which is
+// still Down's to stop.
+func TestAnEarlierStartSurvivesARefusedUp(t *testing.T) {
+	e, api, _ := slotAndEnv(t)
+	forkingLauncher(t, api)
+	if _, err := Up(e.cfg, "t1", UpOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitAccepting(t, api)
+	waitLauncherGone(t, e, "api")
+	st, err := Up(e.cfg, "t1", UpOptions{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(st, "api NOT started") {
+		t.Fatalf("the second Up was not refused: %v", st.Warnings)
+	}
+	if _, err := Down(e.cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if infra.Held(api) {
+		t.Errorf("the first start's server still holds :%d after Down", api)
+	}
+}
+
+func waitLauncherGone(t *testing.T, e *testEnv, name string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if launchOf(e.cfg, "t1", name).state != launchRunning {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("the launcher of %s did not exit", name)
+}
+
+func refuse(t *testing.T, e *testEnv, name string) {
+	t.Helper()
+	_, _, path := launchPaths(e.cfg, "t1", name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("held\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stack an older FrIDE started has no marks to go by: everything is reaped by
+// port as it was then, except what a marker says was refused.
+func TestDownWithoutMarksSkipsOnlyTheRefused(t *testing.T) {
+	for _, withRecord := range []bool{true, false} {
+		t.Run(fmt.Sprintf("record=%v", withRecord), func(t *testing.T) {
+			e, api, web := slotAndEnv(t)
+			if withRecord {
+				rec := &record{K: LookupK(e.cfg, "t1"), Profile: "local", Services: []recordedService{
+					{Name: "api", Mode: ModeSource, Port: api},
+					{Name: "web", Mode: ModeSource, Port: web},
+				}}
+				if err := writeRecord(e.cfg, "t1", rec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			started, other := stranger(t, api), stranger(t, web)
+			refuse(t, e, "web")
+
+			st, err := Down(e.cfg, "t1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !started.exited(5 * time.Second) {
+				t.Error("a service of an older FrIDE's stack was not reaped by port")
+			}
+			if other.exited(time.Second) {
+				t.Fatal("Down killed the process on a refused port")
+			}
+			if !hasWarning(st, fmt.Sprintf("web on :%d was not started by this task", web)) {
+				t.Errorf("no warning about the port left alone: %v", st.Warnings)
+			}
+			if !withRecord {
+				return
+			}
+			// The marker went with that Down; the kept record has to remember.
+			if _, err := Down(e.cfg, "t1"); err != nil {
+				t.Fatal(err)
+			}
+			if other.exited(time.Second) {
+				t.Error("a second Down killed the process on a refused port")
+			}
+		})
+	}
+}
+
+// Up over a record without marks: what that stack started stays Down's to stop,
+// although this Up is refused by it and starts nothing.
+func TestUpOverARecordWithoutMarksKeepsItsServices(t *testing.T) {
+	e, api, web := slotAndEnv(t)
+	fakeLauncher(t)
+	t.Cleanup(func() { _ = killPort(web) })
+	rec := &record{K: LookupK(e.cfg, "t1"), Profile: "local", Services: []recordedService{
+		{Name: "api", Mode: ModeSource, Port: api},
+	}}
+	if err := writeRecord(e.cfg, "t1", rec); err != nil {
+		t.Fatal(err)
+	}
+	started := stranger(t, api)
+	st, err := Up(e.cfg, "t1", UpOptions{Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(st, "api NOT started") {
+		t.Fatalf("api was not refused: %v", st.Warnings)
+	}
+	if _, err := Down(e.cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if !started.exited(5 * time.Second) {
+		t.Error("what the older FrIDE's stack started was not reaped by port")
+	}
+}
