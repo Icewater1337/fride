@@ -362,12 +362,8 @@ func (o *Orchestrator) settleInbox(tr turn, needsUser bool) {
 	if t == nil || t.Status != ThreadRouting {
 		return // closed while it was being read; that stands
 	}
-	queued := false
-	for _, it := range o.st.Queue {
-		queued = queued || it.Thread == t.ID
-	}
 	switch {
-	case queued:
+	case o.queued(t.ID):
 		// A reply arrived while this turn ran, and is read next.
 		t.Status = ThreadQueued
 	case needsUser:
@@ -378,6 +374,37 @@ func (o *Orchestrator) settleInbox(tr turn, needsUser bool) {
 		t.Status = ThreadAnswered
 	}
 	t.Updated = time.Now()
+}
+
+// queued reports whether a message of this thread waits in the queue. Called
+// with the lock held.
+func (o *Orchestrator) queued(id int) bool {
+	for _, it := range o.st.Queue {
+		if it.Thread == id {
+			return true
+		}
+	}
+	return false
+}
+
+// settleStranded settles the threads the last process left in routing: it
+// stopped after the turn cleared Reading, while the reply's actions ran, and
+// nothing else would ever move them on, so their senders would hear no more
+// (noteNews skips a routing thread). The reply is gone, so whether it asked
+// something is not known; it counts as not having asked, because a thread
+// marked as asking would wait for an answer to a question nobody received.
+// A thread with a message in the queue is left: reading that settles it.
+// Reports whether any was settled. Called with the lock held, after Reading
+// has been requeued.
+func (o *Orchestrator) settleStranded() bool {
+	settled := false
+	for _, t := range o.st.Threads {
+		if t.Status == ThreadRouting && !o.queued(t.ID) {
+			o.settleInbox(turn{thread: t.ID}, false)
+			settled = true
+		}
+	}
+	return settled
 }
 
 // requeue puts back a message whose turn failed or was cleared. Called with the
