@@ -343,8 +343,9 @@ blocking comment came back from the agent. Opening one shows only what is left.
 **Moved code** (`moves.go`). The proposal was a tree-sitter structural diff.
 What was built instead finds runs of at least three lines (and 20
 alphanumerics, git's `--color-moved` floor) that one place of a repo lost and
-another gained, whitespace aside. Moved lines are tinted and say where they
-came from or went; a hunk that only moves code folds as a move. A block
+another gained. Lines compare as the whitespace-only check does: indentation in
+an indentation-sensitive file and spaces inside a string count, other whitespace
+does not. Moved lines are tinted and say where they came from or went; a hunk that only moves code folds as a move. A block
 re-indented in place is not a move. A removed line is the source of at most
 one move (longest runs first), so a further copy of the block is new code: it
 is not folded and goes into the AI pass. Tree-sitter would need a C toolchain and a

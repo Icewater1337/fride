@@ -358,11 +358,11 @@ func hashOf(s string) string {
 
 // indentSensitiveExt lists the files where leading indentation is syntax: a
 // dedent can move a statement out of its block. One place to extend.
-var indentSensitiveExt = map[string]bool{".py": true, ".pyi": true, ".yaml": true, ".yml": true, ".mk": true}
+var indentSensitiveExt = map[string]bool{".py": true, ".pyi": true, ".pyw": true, ".yaml": true, ".yml": true, ".mk": true}
 
 func indentSensitive(p string) bool {
-	base := path.Base(p)
-	return indentSensitiveExt[strings.ToLower(path.Ext(base))] || base == "Makefile" || base == "GNUmakefile"
+	base := strings.ToLower(path.Base(p))
+	return indentSensitiveExt[path.Ext(base)] || base == "makefile" || base == "gnumakefile"
 }
 
 // whitespaceOnly reports a hunk whose removed and added lines are the same
@@ -569,13 +569,4 @@ func gitRaw(dir string, args ...string) (string, error) {
 		return out.String(), fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
 	return out.String(), nil
-}
-
-func squash(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return -1
-		}
-		return r
-	}, s)
 }

@@ -416,3 +416,54 @@ func TestOldAIPassIsStaleWhateverItsState(t *testing.T) {
 		}
 	}
 }
+
+// A move is judged with whitespaceOnly's comparison: what that one refuses to
+// call whitespace (indentation that is syntax, spaces inside a string) is a
+// change the reader has to see, so the hunk must not fold.
+func TestDetectMovesKeepsSignificantWhitespace(t *testing.T) {
+	py := []string{"    grant_access(user, role)", "    audit_log.write(user)", "    notify_owner(user, role)"}
+	dedent := func(ls []string) []string {
+		out := []string{}
+		for _, l := range ls {
+			out = append(out, strings.TrimPrefix(l, "    "))
+		}
+		return out
+	}
+	str := []string{`	msg := format("hello world", user)`, `	audit.Write(msg, user, role)`, `	notify(owner, user, role)`}
+	strChanged := []string{`	msg := format("helloworld", user)`, `	audit.Write(msg, user, role)`, `	notify(owner, user, role)`}
+	cases := []struct {
+		name, path string
+		del, add   []string
+		want       string
+	}{
+		{"python dedent", "auth.py", py, dedent(py), ""},
+		{"pyw dedent", "auth.pyw", py, dedent(py), ""},
+		{"yaml reindent", "ci.yml", dedent(py), py, ""},
+		{"lowercase makefile", "makefile", py, dedent(py), ""},
+		{"gnumakefile any case", "GNUMakefile", py, dedent(py), ""},
+		{"string whitespace", "a.go", str, strChanged, ""},
+		{"python same indent", "auth.py", py, py, "moved"},
+		{"python inner spacing", "auth.py", []string{"x=compute(alpha, beta)", "y=compute(gamma, delta)", "z=compute(eps, zeta)"},
+			[]string{"x = compute(alpha, beta)", "y = compute(gamma, delta)", "z = compute(eps, zeta)"}, "moved"},
+		{"go reindent", "a.go", py, dedent(py), "moved"},
+	}
+	for _, c := range cases {
+		var minus, plus []string
+		for _, l := range c.del {
+			minus = append(minus, "-"+l)
+		}
+		for _, l := range c.add {
+			plus = append(plus, "+"+l)
+		}
+		files := []File{{Path: c.path, Hunks: []Hunk{
+			{OldStart: 10, NewStart: 10, Lines: minus},
+			{OldStart: 40, NewStart: 37, Lines: plus},
+		}}}
+		detectMoves(files)
+		for i, h := range files[0].Hunks {
+			if h.Mechanical != c.want {
+				t.Errorf("%s: hunk %d Mechanical = %q, want %q (moves %+v)", c.name, i, h.Mechanical, c.want, h.Moves)
+			}
+		}
+	}
+}
