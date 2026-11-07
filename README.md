@@ -251,7 +251,9 @@ A few things worth knowing:
 - **Stopping reaps by port, not just by pid.** Build tools fork the real
   server from a daemon and dev servers fork children of their own. Killing the
   launcher would leave the old build listening, and the next start would
-  silently keep serving it.
+  silently keep serving it. Only what the task started is reaped: a process
+  on the port of a service whose start was refused is left running, with a
+  warning.
 - **A stack does not start into a full machine.** When the computer, or
   Docker, has less memory left than a stack needs (`memory` in config.json),
   `stack up` refuses and says what is full; `--force`, or *Start anyway* in
