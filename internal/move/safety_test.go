@@ -301,3 +301,134 @@ func TestCheckManifest(t *testing.T) {
 		}
 	}
 }
+
+// ignoredTask is oneRepoTask with ignored files in the worktree that exist
+// only there — a task-specific .env and a dependency folder — and a staged file.
+func ignoredTask(t *testing.T) (src, dst *computer, task *store.Task, wt string) {
+	t.Helper()
+	src, dst, task = oneRepoTask(t, true)
+	repo := filepath.Join(src.cfg.Home, "repos", "app")
+	write(t, filepath.Join(repo, ".git", "info", "exclude"), ".env\nnode_modules/\n")
+	wt = src.cfg.RepoDir("t1", "app")
+	write(t, filepath.Join(wt, ".env"), "TOKEN=only-this-task\n")
+	write(t, filepath.Join(wt, "node_modules", "x"), "dep\n")
+	write(t, filepath.Join(wt, "staged.txt"), "staged\n")
+	run(t, wt, "add", "staged.txt")
+	return src, dst, task, wt
+}
+
+// #132: a move whose Finish failed lost the worktree's ignored files on the
+// source: Detach had removed the worktree, and Restore checked out a fresh one.
+func TestFailedMoveKeepsIgnoredFiles(t *testing.T) {
+	src, dst, task, wt := ignoredTask(t)
+	m, err := Snapshot(src.cfg, task, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := WriteArchive(&buf, src.cfg, m, Has(dst.cfg, m.Bases())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(dst.cfg, dst.st, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := Detach(src.cfg, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatal("Detach left the worktree in place")
+	}
+	// Finish fails: the target's workspace folder is taken.
+	if err := os.MkdirAll(dst.cfg.WorkspaceDir("t1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Finish(dst.cfg, dst.st, "t1", noLanding); err == nil {
+		t.Fatal("Finish should fail")
+	}
+	Abort(dst.cfg, "t1")
+	if err := Restore(src.cfg, m); err != nil {
+		t.Fatal(err)
+	}
+	for f, want := range map[string]string{".env": "TOKEN=only-this-task\n", "node_modules/x": "dep\n",
+		"f.txt": "1\n2\n", "dir/new.txt": "new\n"} {
+		if g := read(t, filepath.Join(wt, filepath.FromSlash(f))); g != want {
+			t.Errorf("%s = %q, want %q", f, g, want)
+		}
+	}
+	repo := filepath.Join(src.cfg.Home, "repos", "app")
+	if wl := run(t, repo, "worktree", "list", "--porcelain"); !strings.Contains(wl, "branch refs/heads/feat/t1") {
+		t.Errorf("the worktree is not registered on its branch:\n%s", wl)
+	}
+	if b := run(t, wt, "symbolic-ref", "--short", "HEAD"); b != "feat/t1" {
+		t.Errorf("branch = %q", b)
+	}
+	status := run(t, wt, "status", "--porcelain")
+	for _, want := range []string{"M f.txt", "A  staged.txt", "?? dir/"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("status lacks %q:\n%s", want, status)
+		}
+	}
+	if _, err := os.Stat(asideDir(wt)); !os.IsNotExist(err) {
+		t.Error("the aside folder is still there after the rollback")
+	}
+}
+
+// On success the worktrees set aside go, registration included.
+func TestForgetRemovesTheAsideWorktree(t *testing.T) {
+	src, dst, task, wt := ignoredTask(t)
+	m := moveIt(t, src, dst, task)
+	a := m.aside["app"]
+	if _, err := Forget(src.cfg, m); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{asideDir(wt), a.AdminAside, a.Admin} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s is still there", p)
+		}
+	}
+	if wl := run(t, filepath.Join(src.cfg.Home, "repos", "app"), "worktree", "list", "--porcelain"); strings.Contains(wl, "feat/t1") {
+		t.Errorf("the worktree is still registered:\n%s", wl)
+	}
+}
+
+// If one worktree cannot be set aside, those already set aside go back and the
+// move stops with the source as it was.
+func TestDetachFailurePutsBack(t *testing.T) {
+	src, _, task, wt := ignoredTask(t)
+	lib := filepath.Join(src.cfg.Home, "repos", "lib")
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, lib, "init", "-q", "-b", "main")
+	write(t, filepath.Join(lib, "l.txt"), "l\n")
+	run(t, lib, "add", "-A")
+	run(t, lib, "commit", "-qm", "base")
+	src.cfg.Reload()
+	libWT := src.cfg.RepoDir("t1", "lib")
+	run(t, lib, "worktree", "add", "-q", "-b", "feat/t1", libWT, "main")
+	task.Repos = append(task.Repos, store.TaskRepo{Name: "lib", BaseRef: "main", Branch: "feat/t1"})
+	m, err := Snapshot(src.cfg, task, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Something is in the way of lib's aside folder.
+	write(t, filepath.Join(asideDir(libWT), "x"), "x")
+	if err := Detach(src.cfg, m); err == nil || !strings.Contains(err.Error(), "nothing was deleted") {
+		t.Fatalf("err = %v", err)
+	}
+	if g := read(t, filepath.Join(wt, ".env")); g != "TOKEN=only-this-task\n" {
+		t.Errorf(".env = %q", g)
+	}
+	if _, err := os.Stat(asideDir(wt)); !os.IsNotExist(err) {
+		t.Error("app's aside folder is still there")
+	}
+	for _, r := range []string{"app", "lib"} {
+		w := src.cfg.RepoDir("t1", r)
+		if b := run(t, w, "symbolic-ref", "--short", "HEAD"); b != "feat/t1" {
+			t.Errorf("%s: branch = %q", r, b)
+		}
+	}
+	if status := run(t, wt, "status", "--porcelain"); !strings.Contains(status, "A  staged.txt") {
+		t.Errorf("app lost its index:\n%s", status)
+	}
+}

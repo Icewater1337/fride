@@ -3,8 +3,10 @@
 //
 // What travels, per repository: the task's branch and, as a separate commit on
 // top of it, everything not committed yet — modified, deleted and untracked
-// files alike (ignored files stay behind; the target copies its own local config
-// like any new workspace does). Both go as a git bundle straight from computer
+// files alike. Ignored files (.env, node_modules) do not travel: the target
+// copies its own local config like any new workspace does. On the source they
+// stay, set aside with the worktree, until the target confirms the arrival — a
+// failed move puts them back — and go with the worktree once it has. Both go as a git bundle straight from computer
 // to computer, so nothing is pushed anywhere and half-done work does not have to
 // be committed to move. A bundle only contains what the target is missing: the
 // target first says which base commits it has (fetching its own remote if
@@ -26,10 +28,10 @@
 //  1. source: stop the agent and the stack, Snapshot, ask the target what it
 //     Has, stream the archive to the target's Prepare (which only fetches into
 //     side refs — nothing visible changes there yet);
-//  2. source: Detach its worktrees (the branch and the snapshot stay as refs);
+//  2. source: Detach sets its worktrees aside (renamed, nothing deleted);
 //     target: Finish creates the workspace and registers the task;
-//  3. source: on success forget the task; on failure Restore the worktrees and
-//     tell the target to Abort.
+//  3. source: on success Forget the task, the worktrees set aside included; on
+//     failure Restore the worktrees as they were and tell the target to Abort.
 package move
 
 import (
@@ -82,6 +84,10 @@ type Manifest struct {
 	// the snapshot under that id, and a branch that is busy here is then
 	// continued on a branch of the new id's own.
 	Source string `json:"source,omitempty"`
+
+	// aside is, per repository, where Detach set its worktree aside. It
+	// lives only in the source's memory, between Detach and Restore or Forget.
+	aside map[string]aside
 }
 
 // RootFile is one file at the workspace root, outside the repositories. Its
@@ -407,32 +413,130 @@ func addFile(tw *tar.Writer, name, path string) error {
 	return err
 }
 
-// Detach removes the task's worktrees on the source, keeping its branches and
-// the snapshot refs — everything needed to Restore. It has to happen before the
-// target creates its worktrees: where both computers share one repository (two
-// FrIDE homes on one machine), a branch can be checked out in one worktree only.
+// Detach sets the task's worktrees aside on the source, ignored files and all,
+// so that nothing that exists only here is lost if the move fails. It has to
+// happen before the target creates its worktrees: where both computers share
+// one repository (two FrIDE homes on one machine), a branch can be checked out
+// in one worktree only.
+//
+// Each worktree folder is renamed to a sibling (asideDir), and its git admin
+// folder (<common>/worktrees/<id>) moves out of git's sight to
+// <common>/fride-aside/<task>/<repo>. That frees the branch, a `git worktree
+// prune` or gc on the target cannot drop the registration, and Restore puts
+// back the very same worktree, index and lock included. Both are renames in
+// the same folder, never copies. If any of it fails, what was already set aside
+// goes back and the move stops with nothing deleted.
 func Detach(cfg *config.Config, m *Manifest) error {
+	if m.aside == nil {
+		m.aside = map[string]aside{}
+	}
 	for _, r := range m.Repos {
-		main, ok := cfg.Repo(r.Name)
-		if !ok {
+		if _, ok := cfg.Repo(r.Name); !ok {
 			continue
 		}
 		wt := cfg.RepoDir(m.Task.Slug, r.Name)
 		if _, err := os.Stat(wt); err != nil {
 			continue
 		}
-		// As Remove does: a headless agent run leaves a stale lock behind, and
-		// --force once does not remove a locked worktree.
-		_, _ = git(main.Main, nil, "worktree", "unlock", wt)
-		if _, err := git(main.Main, nil, "worktree", "remove", "--force", wt); err != nil {
-			return fmt.Errorf("%s: %w", r.Name, err)
+		a, err := setAside(wt, m.Task.Slug, r.Name)
+		if err != nil {
+			err = fmt.Errorf("%s: setting the worktree aside: %w — the move stops, nothing was deleted", r.Name, err)
+			if rerr := Restore(cfg, m); rerr != nil {
+				err = fmt.Errorf("%w; putting back what was already set aside failed: %v", err, rerr)
+			}
+			return err
 		}
+		m.aside[r.Name] = a
 	}
 	return nil
 }
 
-// Restore puts the worktrees back after a failed move: the branch, and the
-// uncommitted work re-applied on top of it.
+// aside is where Detach put one worktree.
+type aside struct {
+	Dir, Admin, AdminAside string
+}
+
+// asideDir is the sibling a worktree folder is renamed to while it travels.
+func asideDir(wt string) string {
+	return filepath.Join(filepath.Dir(wt), "."+filepath.Base(wt)+".fride-aside")
+}
+
+func setAside(wt, slug, repo string) (aside, error) {
+	a := aside{Dir: asideDir(wt)}
+	admin, err := git(wt, nil, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return a, err
+	}
+	// Only a linked worktree's own admin folder may move, never a main .git.
+	common := filepath.Dir(filepath.Dir(admin))
+	if filepath.Base(filepath.Dir(admin)) != "worktrees" {
+		return a, fmt.Errorf("%s is not a linked worktree (git dir %s)", wt, admin)
+	}
+	a.Admin, a.AdminAside = admin, filepath.Join(common, "fride-aside", slug, repo)
+	for _, p := range []string{a.Dir, a.AdminAside} {
+		if _, err := os.Lstat(p); err == nil {
+			return a, fmt.Errorf("%s already exists, left from an earlier move — look at it, then remove it", p)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(a.AdminAside), 0o755); err != nil {
+		return a, err
+	}
+	if err := os.Rename(wt, a.Dir); err != nil {
+		return a, err
+	}
+	if err := os.Rename(a.Admin, a.AdminAside); err != nil {
+		if rerr := os.Rename(a.Dir, wt); rerr != nil {
+			return a, fmt.Errorf("%w; and %s could not be renamed back to %s: %v", err, a.Dir, wt, rerr)
+		}
+		return a, err
+	}
+	return a, nil
+}
+
+// putBack undoes setAside.
+func putBack(wt string, a aside) error {
+	for _, p := range []string{wt, a.Admin} {
+		if _, err := os.Lstat(p); err == nil {
+			return fmt.Errorf("%s is taken, the worktree is still at %s", p, a.Dir)
+		}
+	}
+	if err := os.Rename(a.AdminAside, a.Admin); err != nil {
+		return fmt.Errorf("the worktree is still at %s: %w", a.Dir, err)
+	}
+	if err := os.Rename(a.Dir, wt); err != nil {
+		return fmt.Errorf("the worktree is still at %s: %w", a.Dir, err)
+	}
+	return nil
+}
+
+// checkWorktree confirms that wt is a working worktree of its own, repairing
+// its link to the repository once when it is not.
+func checkWorktree(repo, wt string) error {
+	ok := func() bool {
+		out, err := git(wt, nil, "rev-parse", "--git-dir", "--show-toplevel")
+		if err != nil {
+			return false
+		}
+		lines := strings.Split(out, "\n")
+		top, _ := filepath.EvalSymlinks(lines[len(lines)-1])
+		want, _ := filepath.EvalSymlinks(wt)
+		return top == want
+	}
+	if ok() {
+		return nil
+	}
+	_, _ = git(repo, nil, "worktree", "repair", wt)
+	if ok() {
+		return nil
+	}
+	return fmt.Errorf("%s exists but is not a working worktree of the repository, and git worktree repair did not fix it", wt)
+}
+
+// Restore puts the worktrees back after a failed move: those Detach set aside
+// exactly as they were, ignored files and the index included. A worktree that
+// was missing already is checked out again, with the uncommitted work
+// re-applied. It returns an error naming every repository that did not come
+// back as it was.
 func Restore(cfg *config.Config, m *Manifest) error {
 	var errs []string
 	for _, r := range m.Repos {
@@ -441,7 +545,17 @@ func Restore(cfg *config.Config, m *Manifest) error {
 			continue
 		}
 		wt := cfg.RepoDir(m.Task.Slug, r.Name)
+		if a, ok := m.aside[r.Name]; ok {
+			if err := putBack(wt, a); err != nil {
+				errs = append(errs, r.Name+": "+err.Error())
+				continue
+			}
+			delete(m.aside, r.Name)
+		}
 		if _, err := os.Stat(wt); err == nil {
+			if err := checkWorktree(main.Main, wt); err != nil {
+				errs = append(errs, r.Name+": "+err.Error())
+			}
 			continue
 		}
 		if _, err := git(main.Main, nil, "worktree", "add", wt, r.Branch); err != nil {
@@ -501,6 +615,20 @@ func applyWIP(wt, wip string) error {
 // way back.
 func Forget(cfg *config.Config, m *Manifest) (kept []string, err error) {
 	ws := cfg.WorkspaceDir(m.Task.Slug)
+	// The worktrees Detach set aside: the target has the task now. Their
+	// ignored files go, as worktree removal always took them; the target has
+	// its own local config.
+	for name, a := range m.aside {
+		if err := removeUnder(ws, a.Dir); err != nil {
+			return nil, err
+		}
+		if err := removeUnder(filepath.Dir(filepath.Dir(filepath.Dir(a.AdminAside))), a.AdminAside); err != nil {
+			return nil, err
+		}
+		_ = os.Remove(filepath.Dir(a.AdminAside))
+		_ = os.Remove(filepath.Dir(filepath.Dir(a.AdminAside)))
+		delete(m.aside, name)
+	}
 	for _, f := range m.Root {
 		p := filepath.Join(ws, filepath.FromSlash(f.Path))
 		fi, err := os.Lstat(p)
