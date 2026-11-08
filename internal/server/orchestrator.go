@@ -372,6 +372,13 @@ func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string
 // recorded nothing and cannot be resumed; it has nothing to lose either, so it
 // is started afresh.
 func (h orchHost) restartAgent(slug string, sess *term.Session, id string) (*term.Session, error) {
+	// One agent per task: with another agent tab alive, StartAgent/ResumeAgent
+	// would refuse after this one was closed, leaving the task without it (#135).
+	for _, o := range h.s.terms.ForTask(slug) {
+		if o.Kind == term.KindAgent && o.Alive() && o.ID != sess.ID {
+			return nil, fmt.Errorf("another agent tab of the task is open (%q, %s), so FrIDE did not restart this one; look at the task's tab", o.Title, o.ID)
+		}
+	}
 	// Before anything is stopped: without the CLI there would be no way back.
 	if err := agent.Check(agent.Claude); err != nil {
 		return nil, err

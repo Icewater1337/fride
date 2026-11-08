@@ -145,6 +145,33 @@ func TestAnInstructionThatNeverArrivesIsAnError(t *testing.T) {
 	}
 }
 
+// With a second agent tab alive, the one that took nothing is not restarted:
+// closing it would leave the task with an agent nothing can replace, since a
+// task gets one agent (#135). Both stay, nothing new starts.
+func TestARestartLeavesTwoAgentTabsAlone(t *testing.T) {
+	s, older, typed, transcript := quietAgent(t, "f-7")
+	recordedConversation(t, s, transcript, "f-7")
+	other := typed + ".other"
+	newer, err := s.terms.Start("t1", term.KindAgent, "claude", s.cfg.WorkspaceDir("t1"),
+		[]string{"sh", "-c", `stty raw -echo; printf 'ready'; cat > "$0"`, other}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer.Claim("f-8")
+	waitQuiet(t, newer)
+
+	err = (orchHost{s}).Send("t1", "add a line")
+	if !errors.Is(err, orchestrator.ErrNotSeen) || !strings.Contains(err.Error(), "another agent tab") || !strings.Contains(err.Error(), older.ID) {
+		t.Fatalf("Send = %v, want ErrNotSeen naming the other tab", err)
+	}
+	if !older.Alive() || !newer.Alive() {
+		t.Fatalf("alive: older %v, newer %v; want both", older.Alive(), newer.Alive())
+	}
+	if _, err := os.Stat(typed + ".args"); !os.IsNotExist(err) {
+		t.Fatalf("an agent was started (%v)", err)
+	}
+}
+
 // A new agent that lost its first line has recorded nothing to resume, so it is
 // started afresh rather than left stopped.
 func TestANewAgentWithNothingRecordedIsStartedAfresh(t *testing.T) {
