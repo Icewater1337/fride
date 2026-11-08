@@ -570,7 +570,8 @@ func (s *Server) moveTask(t *store.Task, to string, startAgent, startStack bool)
 	rollback := func(cause error) (map[string]any, error) {
 		_ = s.fleet.abortImport(p, t.Slug, nil)
 		if rerr := move.Restore(s.cfg, m); rerr != nil {
-			return nil, fmt.Errorf("%v — and restoring the worktrees here failed too (%v); the work is safe in refs/fride/wip/%s/* and the task's branches", cause, rerr, t.Slug)
+			// Restore names, per repository, what did not come back as it was.
+			return nil, fmt.Errorf("%v — and not every worktree here came back as it was: %v; the committed and uncommitted work is safe in the task's branches and refs/fride/wip/%s/*", cause, rerr, t.Slug)
 		}
 		return nil, fmt.Errorf("%v — the task is unchanged on %s", cause, s.fleet.name)
 	}

@@ -80,24 +80,29 @@ In a task's header, **Continue on…** asks where it should go. From the shell:
 1. On the source computer, the task's agents and stack stop.
 2. For each repository, the uncommitted state is captured as a commit on top of
    the task's branch. This covers staged and unstaged changes, deleted files and
-   untracked files. Ignored files stay behind. The worktree and its index are
-   left untouched.
+   untracked files. Ignored files (`.env`, `node_modules`) are not sent. The
+   worktree and its index are left untouched.
 3. The target says which base commits it already has; it fetches its own remote
    if needed. The source sends git bundles with only the history after those,
    plus the decision log, the Claude Code transcripts, and every file at the
    workspace root outside the repositories: a `PLAN.md`, notes, idea pages,
    `.claude/settings.local.json`. Symlinks there are not sent.
 4. The target fetches everything into side refs and checks it. Only then does
-   the source let go of its worktrees.
+   the source let go of its worktrees: it sets each one aside, ignored files and
+   all, as a renamed sibling folder (`.<repo>.fride-aside`), and deletes nothing.
+   If one cannot be set aside, the others go back and the move stops.
 5. The target creates the workspace: the same branches, the uncommitted work
    re-applied as uncommitted work, its *own* local config copied from its own
    checkouts (`.env` and the like are never sent), the decision log, and the
    conversation with its paths rewritten. It then resumes the agent and, if
    asked, starts the stack.
-6. If anything fails after the source let go, the source restores its worktrees
-   exactly as they were. The work is never in only one half-finished place.
-7. Once the target has the task, the source deletes its copy of what was sent,
-   and nothing else. A workspace file that changed after step 2, or that was not
+6. If anything fails after the source let go, the source puts its worktrees
+   back exactly as they were, ignored files and index included. The work is
+   never in only one half-finished place. If a worktree cannot be put back, the
+   error names the repository and where its folder is.
+7. Once the target has the task, the source deletes the worktrees it set aside
+   (their ignored files with them, as removing a worktree always did) and its
+   copy of what was sent, and nothing else. A workspace file that changed after step 2, or that was not
    sent (a symlink, a file created during the move), stays where it is, and the
    move says so. The folder then holds only those files and no task.
 
