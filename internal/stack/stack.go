@@ -247,6 +247,14 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 				// Still skipped: the user asked for the IDE, and starting it
 				// headlessly now would take the port the IDE is about to want.
 				warnings = append(warnings, r.Name+": "+err.Error())
+			} else if !infra.Held(r.Port) {
+				// The IDE runs it on the task's slot port, so it is Down's to stop
+				// as much as a spawned one (#133). A port already held is left as
+				// it is: a mark kept from an earlier start stays, a stranger is
+				// never claimed.
+				if err := markStarted(cfg, slug, r.Name); err != nil {
+					warnings = append(warnings, fmt.Sprintf("%s: could not note it in the stack record, so stopping may leave it running: %v", r.Name, err))
+				}
 			}
 			continue
 		}
@@ -392,6 +400,9 @@ func clearLaunch(cfg *config.Config, slug, name string) {
 	_ = os.Remove(refused)
 }
 
+// openIDE is ide.Open, a variable so the tests need no IDE.
+var openIDE = ide.Open
+
 // openInIDE writes the run configuration into the worktree and opens the IDE.
 func openInIDE(cfg *config.Config, p *Plan, r *Resolved) ([]string, error) {
 	spec := r.Spec.IDE
@@ -433,7 +444,7 @@ func openInIDE(cfg *config.Config, p *Plan, r *Resolved) ([]string, error) {
 	if _, err := ide.Write(r.Dir, conf); err != nil {
 		notes = append(notes, r.Name+": could not write the run configuration: "+err.Error())
 	}
-	if err := ide.Open(cfg.Home, name, r.Dir); err != nil {
+	if err := openIDE(cfg.Home, name, r.Dir); err != nil {
 		return notes, err
 	}
 	notes = append(notes, fmt.Sprintf("%s: not started here — opening %s with the run configuration %q; press Run there",

@@ -786,3 +786,33 @@ func TestUpOverARecordWithoutMarksKeepsItsServices(t *testing.T) {
 		t.Error("what the older FrIDE's stack started was not reaped by port")
 	}
 }
+
+// A service handed to the IDE runs on the task's slot port, so Down stops it
+// and frees the slot, as it did before #122 (#133).
+func TestDownStopsAServiceRunInTheIDE(t *testing.T) {
+	e, api, _ := slotAndEnv(t)
+	fakeLauncher(t)
+	e.cfg.Settings.Repos = map[string]*settings.Repo{"backend": {IDE: "idea"}}
+	e.cfg.Settings.Profiles["local"].Services["api"].IDE = &settings.IDERun{Kind: "npm", Script: "dev"}
+	prev := openIDE
+	openIDE = func(string, string, string) error { return nil }
+	t.Cleanup(func() { openIDE = prev })
+
+	if _, err := Up(e.cfg, "t1", UpOptions{Force: true, ViaIDE: []string{"api"}}); err != nil {
+		t.Fatal(err)
+	}
+	ide := stranger(t, api) // the server the user starts from the IDE
+	st, err := Down(e.cfg, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ide.exited(5 * time.Second) {
+		t.Error("Down left the IDE-run server on the task's slot port")
+	}
+	if hasWarning(st, "was not started by this task") {
+		t.Errorf("warned about the task's own IDE-run server: %v", st.Warnings)
+	}
+	if k := LookupK(e.cfg, "t1"); k != 0 {
+		t.Errorf("slot %d kept after Down: %v", k, st.Warnings)
+	}
+}
