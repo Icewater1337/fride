@@ -971,10 +971,29 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 	}
 	var notes []string
 	var made []string
+	var touched []placed
 	fail := func(err error) (*Manifest, []string, error) {
 		for _, name := range made {
 			if main, ok := cfg.Repo(name); ok {
 				_, _ = git(main.Main, nil, "worktree", "remove", "--force", cfg.RepoDir(slug, name))
+			}
+		}
+		// The branches after the worktrees: a checked-out branch must not move
+		// under its worktree. Each undo is a compare-and-swap, so a branch that
+		// moved since Finish placed it keeps what was added to it.
+		for i := len(touched) - 1; i >= 0; i-- {
+			p := touched[i]
+			ref := "refs/heads/" + p.branch
+			var uerr error
+			if checkedOut(p.repo, p.branch) {
+				uerr = fmt.Errorf("checked out")
+			} else if p.old == "" {
+				_, uerr = git(p.repo, nil, "update-ref", "-d", ref, p.want)
+			} else {
+				_, uerr = git(p.repo, nil, "update-ref", ref, p.old, p.want)
+			}
+			if uerr != nil {
+				notes = append(notes, fmt.Sprintf("branch %s in %s changed after this move placed it — left as it is", p.branch, p.repo))
 			}
 		}
 		_ = removeUnder(cfg.WorkspaceRoot, ws)
@@ -987,7 +1006,10 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 		if rp.Bundle != "" {
 			target = incomingRef(slug, rp.Name)
 		}
-		branch, err := landBranch(main.Main, rp.Branch, target, m.Source != "", slug)
+		branch, p, err := landBranch(main.Main, rp.Branch, target, m.Source != "", slug)
+		if p != nil {
+			touched = append(touched, *p)
+		}
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", rp.Name, err))
 		}
@@ -1087,17 +1109,18 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 // task that arrives under a new id (rename) may share its repository with the
 // task it was taken from, whose worktree has that branch checked out; it then
 // continues on <branch>-<slug> rather than failing. A task that keeps its id
-// never changes branch: that is the user's name for the work.
-func landBranch(repo, branch, target string, rename bool, slug string) (string, error) {
+// never changes branch: that is the user's name for the work. It also returns
+// what placeBranch changed, nil when nothing.
+func landBranch(repo, branch, target string, rename bool, slug string) (string, *placed, error) {
 	if rename && checkedOut(repo, branch) {
 		branch = branch + "-" + slug
 	}
-	err := placeBranch(repo, branch, target)
+	p, err := placeBranch(repo, branch, target)
 	if err != nil && rename && !strings.HasSuffix(branch, "-"+slug) {
 		branch = branch + "-" + slug
-		err = placeBranch(repo, branch, target)
+		p, err = placeBranch(repo, branch, target)
 	}
-	return branch, err
+	return branch, p, err
 }
 
 // checkedOut reports whether a worktree of repo has branch checked out.
@@ -1113,30 +1136,39 @@ func checkedOut(repo, branch string) bool {
 
 // placeBranch makes branch point at target: created when missing, fast-
 // forwarded when behind, left alone when equal. A branch here that has commits
-// the task does not is never overwritten — that would lose them.
-func placeBranch(repo, branch, target string) error {
+// the task does not is never overwritten — that would lose them. It returns
+// what it changed, so a failed Finish can undo it; nil when nothing.
+func placeBranch(repo, branch, target string) (*placed, error) {
 	want, err := git(repo, nil, "rev-parse", target+"^{commit}")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cur, err := git(repo, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	if err != nil || cur == "" {
-		_, err := git(repo, nil, "branch", branch, want)
-		return err
+		if _, err := git(repo, nil, "branch", branch, want); err != nil {
+			return nil, err
+		}
+		return &placed{repo: repo, branch: branch, want: want}, nil
 	}
 	if cur == want {
-		return nil
+		return nil, nil
 	}
 	if _, err := git(repo, nil, "merge-base", "--is-ancestor", cur, want); err != nil {
-		return fmt.Errorf("branch %s already exists here with commits the task does not have — rename or remove it first", branch)
+		return nil, fmt.Errorf("branch %s already exists here with commits the task does not have — rename or remove it first", branch)
 	}
 	if wl, _ := git(repo, nil, "worktree", "list", "--porcelain"); strings.Contains(wl, "branch refs/heads/"+branch+"\n") ||
 		strings.HasSuffix(wl, "branch refs/heads/"+branch) {
-		return fmt.Errorf("branch %s is checked out in another worktree here", branch)
+		return nil, fmt.Errorf("branch %s is checked out in another worktree here", branch)
 	}
-	_, err = git(repo, nil, "update-ref", "refs/heads/"+branch, want, cur)
-	return err
+	if _, err := git(repo, nil, "update-ref", "refs/heads/"+branch, want, cur); err != nil {
+		return nil, err
+	}
+	return &placed{repo: repo, branch: branch, old: cur, want: want}, nil
 }
+
+// placed is a branch placeBranch changed: created (old empty) or moved
+// forward from old, in both cases to want.
+type placed struct{ repo, branch, old, want string }
 
 // installTranscripts places the conversations where Claude Code looks for them
 // on this computer, with the source's workspace path rewritten to this one's.
