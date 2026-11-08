@@ -97,6 +97,16 @@ func Append(cfg *config.Config, slug string, e Entry) error {
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}
+	// Refuse an entry Read could not return before anything is created on
+	// disk. jsonl.Scan counts the newline toward MaxLine, so reserve space
+	// for it.
+	b, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	if len(b) >= jsonl.MaxLine {
+		return fmt.Errorf("entry is %d MiB, over the %d MiB limit", len(b)>>20, jsonl.MaxLine>>20)
+	}
 	if err := os.MkdirAll(dir(cfg, slug), 0o755); err != nil {
 		return err
 	}
@@ -116,14 +126,6 @@ func Append(cfg *config.Config, slug string, e Entry) error {
 		return err
 	}
 	defer f.Close()
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
-	}
-	// jsonl.Scan counts the newline toward MaxLine, so reserve space for it.
-	if len(b) >= jsonl.MaxLine {
-		return fmt.Errorf("entry is %d MiB, over the %d MiB limit", len(b)>>20, jsonl.MaxLine>>20)
-	}
 	_, err = f.Write(append(b, '\n'))
 	return err
 }
