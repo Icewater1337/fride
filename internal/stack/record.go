@@ -116,10 +116,15 @@ func (r *record) differs(cfg *config.Config, o TaskOpts) string {
 		"`fride stack down` and `fride stack up`"
 }
 
-// startedPorts are the ports FrIDE started something on for the task.
+// startedPorts are the ports FrIDE started something on for the task. A source
+// service counts by the same Started mark Down reaps by, so the slot check and
+// Down agree; a record without marks counts as an older FrIDE did.
 func (r *record) startedPorts() []int {
 	var out []int
 	for _, s := range r.Services {
+		if s.Mode == ModeSource && r.Marked && !s.Started {
+			continue
+		}
 		if s.Mode.Started() && s.Port > 0 {
 			out = append(out, s.Port)
 		}
