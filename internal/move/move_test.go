@@ -314,10 +314,10 @@ func TestPlaceBranchRefusesToLoseCommits(t *testing.T) {
 	run(t, dir, "add", "-A")
 	run(t, dir, "commit", "-qm", "only here")
 	run(t, dir, "checkout", "-q", "main")
-	if err := placeBranch(dir, "feat/x", base); err == nil || !strings.Contains(err.Error(), "commits the task does not have") {
+	if _, err := placeBranch(dir, "feat/x", base); err == nil || !strings.Contains(err.Error(), "commits the task does not have") {
 		t.Fatalf("err = %v", err)
 	}
-	if err := placeBranch(dir, "feat/new", base); err != nil {
+	if _, err := placeBranch(dir, "feat/new", base); err != nil {
 		t.Fatal(err)
 	}
 }
