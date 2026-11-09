@@ -154,12 +154,16 @@ func Compose(cfg *config.Config, slug string, opt Options) (string, error) {
 		"> are read from git. Nothing else is inferred, except the clearly marked narrative section.\n\n",
 		time.Now().Format("2006-01-02 15:04"))
 
+	// An empty `empty` leaves the section out entirely when it has no entries.
 	section := func(k Kind, heading, empty string) {
 		var sel []Entry
 		for _, e := range entries {
 			if e.Kind == k {
 				sel = append(sel, e)
 			}
+		}
+		if len(sel) == 0 && empty == "" {
+			return
 		}
 		fmt.Fprintf(&b, "## %s\n\n", heading)
 		if len(sel) == 0 {
@@ -203,19 +207,8 @@ func Compose(cfg *config.Config, slug string, opt Options) (string, error) {
 	section(KindIssue, "Issues encountered",
 		"No issues were recorded.")
 
-	var notes []Entry
-	for _, e := range entries {
-		if e.Kind == KindNote {
-			notes = append(notes, e)
-		}
-	}
-	if len(notes) > 0 {
-		b.WriteString("## Notes\n\n")
-		for _, e := range notes {
-			fmt.Fprintf(&b, "- **[recorded]** %s — %s\n", e.Time.Format("2006-01-02 15:04"), e.Text)
-		}
-		b.WriteString("\n")
-	}
+	// Notes are optional: no notes, no section.
+	section(KindNote, "Notes", "")
 
 	b.WriteString("## What changed\n\n")
 	if len(facts) == 0 {
