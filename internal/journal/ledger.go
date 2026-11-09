@@ -245,6 +245,10 @@ var linkRe = regexp.MustCompile(`https?://\S+/(?:-/)?(?:merge_requests|pull)/(?:
 // the lock until its own merge has reached main.
 var publishMu sync.Mutex
 
+// beforePush runs right before each direct push; tests use it to let another
+// computer publish in between.
+var beforePush = func(dir string) {}
+
 // Publish writes the task's document into the ledger and pushes it.
 func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 	c, err := ledgerOf(cfg)
@@ -272,67 +276,36 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 	// By year: a flat folder of every task ever is unreadable after the first
 	// hundred.
 	rel := filepath.Join(c.dir, time.Now().Format("2006"), slug+".md")
-	full := filepath.Join(dir, rel)
-	_, statErr := os.Stat(full)
-	existed := statErr == nil
-
-	// Nothing to say is a normal outcome when a task is re-closed unchanged.
-	// What counts is the last version sent — the task's open branch if its
-	// merge is still pending, else main — and the generation time does not.
-	prev := ""
-	if c.push == "branch" {
-		if out, err := run(dir, nil, "show", "origin/"+topic+":"+filepath.ToSlash(rel)); err == nil {
-			prev = out
-		}
-	}
-	if prev == "" {
-		if b, err := os.ReadFile(full); err == nil {
-			prev = string(b)
-		}
-	}
-	if prev != "" && sameDocument(prev, doc) {
-		return &Published{Path: filepath.ToSlash(rel), Skipped: "the document is unchanged since the last publish"}, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(full, []byte(doc), 0o644); err != nil {
-		return nil, err
-	}
-	if err := writeLedgerIndex(dir, c.dir); err != nil {
-		return nil, err
-	}
-	if err := appendLedgerLog(dir, rel, title(opt, slug), existed); err != nil {
-		return nil, err
-	}
-	if _, err := run(dir, nil, "add", rel, "index.md", "log.md"); err != nil {
-		return nil, err
-	}
 	p := &Published{Path: filepath.ToSlash(rel)}
-	if _, err := run(dir, nil, "diff", "--cached", "--quiet"); err == nil {
-		p.Skipped = "the document is unchanged since the last publish"
-		return p, nil
-	}
-	if _, err := run(dir, c.env, "commit", "--quiet", "-m", "docs: record design rationale for "+slug); err != nil {
-		if strings.Contains(err.Error(), "identity unknown") {
-			return nil, fmt.Errorf("git does not know who is committing to the ledger — set ledger.author in config.json (\"Name <email>\")")
-		}
+	if p.Skipped, err = record(dir, c, rel, doc, slug, title(opt, slug), topic); err != nil {
 		return nil, err
+	} else if p.Skipped != "" {
+		return p, nil
 	}
 
 	if c.push == "direct" {
 		p.Branch = c.branch
-		// Someone else may have published meanwhile: rebase and retry once.
-		if _, err := run(dir, nil, "push", "--quiet", "origin", "HEAD:"+c.branch); err != nil {
-			if _, rerr := run(dir, c.env, "pull", "--quiet", "--rebase", "origin", c.branch); rerr != nil {
-				_, _ = run(dir, nil, "rebase", "--abort")
+		for attempt := 1; ; attempt++ {
+			beforePush(dir)
+			_, err := run(dir, nil, "push", "--quiet", "origin", "HEAD:"+c.branch)
+			if err == nil {
+				return p, nil
+			}
+			if attempt == 3 || !lostRaceRe.MatchString(err.Error()) {
 				return nil, err
 			}
-			if _, err := run(dir, nil, "push", "--quiet", "origin", "HEAD:"+c.branch); err != nil {
+			// Another computer published first. Redo on top of its push rather
+			// than rebase: both rebuilt index.md and appended to log.md at the
+			// same spot, so a rebase always conflicts.
+			if _, err := ensureClone(dir, c.remote, c.branch); err != nil {
 				return nil, err
+			}
+			if p.Skipped, err = record(dir, c, rel, doc, slug, title(opt, slug), topic); err != nil {
+				return nil, err
+			} else if p.Skipped != "" {
+				return p, nil
 			}
 		}
-		return p, nil
 	}
 
 	p.Branch = topic
@@ -369,6 +342,62 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 	p.Waiting = fmt.Sprintf("pushed, but not merged into %s after %s", c.branch, c.wait)
 	log.Printf("ledger: %s %s — check %s", topic, p.Waiting, p.Link)
 	return p, nil
+}
+
+// lostRaceRe matches a direct push rejected only because the remote moved on;
+// "[remote rejected]" (a hook) does not match, and is not retried.
+var lostRaceRe = regexp.MustCompile(`\[rejected\]|non-fast-forward|fetch first`)
+
+// record writes the document, index.md and log.md into the clone and commits
+// them. It returns why nothing was committed, if nothing was.
+func record(dir string, c *ledgerConf, rel, doc, slug, name, topic string) (string, error) {
+	const unchanged = "the document is unchanged since the last publish"
+	full := filepath.Join(dir, rel)
+	_, statErr := os.Stat(full)
+	existed := statErr == nil
+
+	// Nothing to say is a normal outcome when a task is re-closed unchanged.
+	// What counts is the last version sent — the task's open branch if its
+	// merge is still pending, else main — and the generation time does not.
+	prev := ""
+	if c.push == "branch" {
+		if out, err := run(dir, nil, "show", "origin/"+topic+":"+filepath.ToSlash(rel)); err == nil {
+			prev = out
+		}
+	}
+	if prev == "" {
+		if b, err := os.ReadFile(full); err == nil {
+			prev = string(b)
+		}
+	}
+	if prev != "" && sameDocument(prev, doc) {
+		return unchanged, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(full, []byte(doc), 0o644); err != nil {
+		return "", err
+	}
+	if err := writeLedgerIndex(dir, c.dir); err != nil {
+		return "", err
+	}
+	if err := appendLedgerLog(dir, rel, name, existed); err != nil {
+		return "", err
+	}
+	if _, err := run(dir, nil, "add", rel, "index.md", "log.md"); err != nil {
+		return "", err
+	}
+	if _, err := run(dir, nil, "diff", "--cached", "--quiet"); err == nil {
+		return unchanged, nil
+	}
+	if _, err := run(dir, c.env, "commit", "--quiet", "-m", "docs: record design rationale for "+slug); err != nil {
+		if strings.Contains(err.Error(), "identity unknown") {
+			return "", fmt.Errorf("git does not know who is committing to the ledger — set ledger.author in config.json (\"Name <email>\")")
+		}
+		return "", err
+	}
+	return "", nil
 }
 
 // CheckRemote reports whether a publishing repository (the ledger, the ideas
