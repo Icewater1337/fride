@@ -118,9 +118,9 @@ func TestPublishDirectIntoAnEmptyLedger(t *testing.T) {
 	}
 }
 
-// A publish whose rebase conflicts must not leave the clone stuck mid-rebase
-// for every publish after it.
-func TestPublishDirectRecoversFromAConflictingRebase(t *testing.T) {
+// A publish whose push a hook rejects must not leave the clone stuck for
+// every publish after it.
+func TestPublishDirectRecoversFromARejectedPush(t *testing.T) {
 	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, true)
 	if _, err := Publish(cfg, "proj-42", Options{}); err != nil {
 		t.Fatal(err)
@@ -139,13 +139,13 @@ func TestPublishDirectRecoversFromAConflictingRebase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Publish(cfg, "proj-42", Options{}); err == nil {
-		t.Fatal("a conflicting rebase was reported as published")
+		t.Fatal("a rejected push was reported as published")
 	}
 	if err := Append(cfg, "proj-42", Entry{Kind: KindDecision, Text: "third", Why: "more", Time: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Publish(cfg, "proj-42", Options{}); err != nil {
-		t.Fatalf("the publish after a failed rebase failed too: %v", err)
+		t.Fatalf("the publish after a rejected push failed too: %v", err)
 	}
 }
 
@@ -170,5 +170,98 @@ func TestCredentialsNeverShown(t *testing.T) {
 	}
 	if got := redact("fatal: unable to access 'https://oauth2:tok@git.example.com/x.git/'"); strings.Contains(got, "tok@") {
 		t.Fatalf("redact = %q", got)
+	}
+}
+
+// otherComputer publishes slug into bare the way another FrIDE would: its own
+// clone, the same index.md and log.md rebuild, a direct push.
+func otherComputer(t *testing.T, bare, slug string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "other")
+	gitT(t, "", "clone", "-q", bare, dir)
+	rel := filepath.Join("rationale", time.Now().Format("2006"), slug+".md")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	doc := "---\ntype: rationale\ntitle: " + slug + "\n---\n\n# " + slug + "\n"
+	if err := os.WriteFile(filepath.Join(dir, rel), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLedgerIndex(dir, "rationale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendLedgerLog(dir, rel, slug, false); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "docs: record design rationale for "+slug)
+	gitT(t, dir, "push", "-q", "origin", "HEAD:main")
+}
+
+func withBeforePush(t *testing.T, f func(dir string)) {
+	old := beforePush
+	beforePush = f
+	t.Cleanup(func() { beforePush = old })
+}
+
+// Issue #142: a publish that loses the race is redone on top of the winner's
+// push, not rebased (which always conflicts on index.md and log.md).
+func TestPublishDirectRedoesALostRace(t *testing.T) {
+	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, true)
+	calls := 0
+	withBeforePush(t, func(string) {
+		if calls++; calls == 1 {
+			otherComputer(t, bare, "proj-43")
+		}
+	})
+	if _, err := Publish(cfg, "proj-42", Options{}); err != nil {
+		t.Fatalf("the publish that lost the race failed: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("pushed %d times, want 2", calls)
+	}
+	logMd := gitT(t, bare, "show", "main:log.md")
+	today := "## " + time.Now().Format("2006-01-02")
+	section := logMd[strings.Index(logMd, today):]
+	for _, want := range []string{"proj-42.md", "proj-43.md"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("log.md lacks %s under %s:\n%s", want, today, logMd)
+		}
+	}
+	idx := gitT(t, bare, "show", "main:index.md")
+	for _, want := range []string{"proj-42", "proj-43"} {
+		if !strings.Contains(idx, want) {
+			t.Errorf("index.md lacks %s:\n%s", want, idx)
+		}
+	}
+}
+
+func TestPublishDirectGivesUpAfterThreeLostRaces(t *testing.T) {
+	cfg, bare := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, true)
+	calls := 0
+	withBeforePush(t, func(string) {
+		calls++
+		otherComputer(t, bare, "other-"+string(rune('a'+calls)))
+	})
+	if _, err := Publish(cfg, "proj-42", Options{}); err == nil {
+		t.Fatal("a publish that lost every race was reported as published")
+	}
+	if calls != 3 {
+		t.Errorf("pushed %d times, want 3", calls)
+	}
+}
+
+func TestPublishDirectOtherPushErrorIsNotRetried(t *testing.T) {
+	cfg, _ := ledgerCfg(t, &settings.Ledger{Push: "direct", Author: "Jane Doe <jane@example.com>"}, true)
+	calls := 0
+	withBeforePush(t, func(dir string) {
+		calls++
+		gitT(t, dir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	})
+	if _, err := Publish(cfg, "proj-42", Options{}); err == nil {
+		t.Fatal("a push to a missing origin was reported as published")
+	}
+	if calls != 1 {
+		t.Errorf("pushed %d times, want 1", calls)
 	}
 }
