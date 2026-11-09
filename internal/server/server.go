@@ -485,6 +485,8 @@ func (s *Server) launchAgent(slug string, kind agent.Kind, title string, o agent
 		o.SessionID = id
 	}
 
+	// A companion FrIDE's agents run with nobody watching their tabs.
+	o.Unattended = s.companion != nil
 	sess, err := s.terms.Start(slug, term.KindAgent, title, s.cfg.WorkspaceDir(slug),
 		s.cfg.AgentArgv(kind, o), s.taskGitEnv(slug))
 	if err != nil {
