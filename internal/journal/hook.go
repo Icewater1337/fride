@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/Icewater1337/fride/internal/config"
 )
@@ -83,6 +85,7 @@ func PreCompact(cfg *config.Config, slugFor func(dir string) string) {
 // capture: a PostToolUse hook that records each agent edit as it lands, which
 // the Review tab's provenance gutter reads (review.RecordEdit).
 func InstallHook(cfg *config.Config, slug, frideBin string) error {
+	frideBin = shellQuote(frideBin)
 	dir := filepath.Join(cfg.WorkspaceDir(slug), ".claude")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -115,4 +118,17 @@ func InstallHook(cfg *config.Config, slug, frideBin string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "settings.json"), b, 0o644)
+}
+
+var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
+
+// shellQuote quotes s for sh, as gitid's shellQuote does, but leaves a plain
+// path untouched so existing settings files keep their exact command. Claude
+// Code runs a hook command through the shell, and the binary's path can hold
+// spaces (fride#143).
+func shellQuote(s string) string {
+	if shellSafe.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
