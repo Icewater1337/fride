@@ -63,6 +63,14 @@ type Options struct {
 	// argument, unlike --allowedTools, which would take the prompt after it
 	// for a rule). The other agents ignore them.
 	AllowRules []string
+	// Unattended is a session nobody watches, as a companion FrIDE's are.
+	// In auto mode Claude Code then never offers /auto-mode-setup ("Teach
+	// auto mode about your environment?"): that offer comes at the end of
+	// a turn after auto mode refused a few actions, and waits for a
+	// keypress, so an unattended agent would stop on it for good. It goes
+	// into the same --settings argument, as skillOverrides. The other
+	// agents ignore it.
+	Unattended bool
 }
 
 type spec struct {
@@ -140,8 +148,15 @@ func claudeArgv(o Options) []string {
 	for _, d := range o.PluginDirs {
 		argv = append(argv, "--plugin-dir", d)
 	}
+	settings := map[string]any{}
 	if len(o.AllowRules) > 0 {
-		js, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": o.AllowRules}})
+		settings["permissions"] = map[string]any{"allow": o.AllowRules}
+	}
+	if o.Unattended && !o.Dangerous && o.PermissionMode == "auto" {
+		settings["skillOverrides"] = map[string]string{"auto-mode-setup": "off"}
+	}
+	if len(settings) > 0 {
+		js, _ := json.Marshal(settings)
 		argv = append(argv, "--settings", string(js))
 	}
 	if o.ResumeID != "" {

@@ -31,6 +31,15 @@ func TestClaudeArgvUnchanged(t *testing.T) {
 		// Allow rules are one --settings argument, on resume too.
 		{"allow rules", Options{PermissionMode: "auto", ResumeID: "abc", AllowRules: []string{"Bash(gh pr merge:*)"}},
 			`claude --permission-mode auto --settings {"permissions":{"allow":["Bash(gh pr merge:*)"]}} --resume abc`},
+		// An unattended session never offers /auto-mode-setup, which would
+		// wait for a keypress; in the same --settings as the allow rules.
+		{"unattended", Options{PermissionMode: "auto", Unattended: true, AllowRules: []string{"Bash(gh pr merge:*)"}},
+			`claude --permission-mode auto --settings {"permissions":{"allow":["Bash(gh pr merge:*)"]},"skillOverrides":{"auto-mode-setup":"off"}}`},
+		{"unattended alone", Options{PermissionMode: "auto", Unattended: true, ResumeID: "abc"},
+			`claude --permission-mode auto --settings {"skillOverrides":{"auto-mode-setup":"off"}} --resume abc`},
+		// Without auto mode there is no such offer to turn off.
+		{"unattended dangerous", Options{PermissionMode: "auto", Unattended: true, Dangerous: true},
+			"claude --dangerously-skip-permissions"},
 	}
 	for _, c := range cases {
 		if got := strings.Join(Argv(Claude, c.o), " "); got != c.want {

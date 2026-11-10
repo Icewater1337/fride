@@ -354,6 +354,17 @@ commands you want every task to run on its own. Rules that grant any command
 (`Bash`, `Bash(*)`) are dropped by auto mode (`fride config check` warns).
 Agents started after the next reload of config.json have them.
 
+A rule matches the command as written: `Bash(gh pr merge:*)` does not cover
+`env -u GH_TOKEN gh pr merge …`, which auto mode refuses as a bypass. An agent
+that needs a permission its GitHub token lacks (rerunning a failed check needs
+*Actions: Read and write* on fridolin's GitHub App) should say so rather than
+switch to another login.
+
+Nobody watches a companion's tabs, so its agents never get Claude Code's offer
+to run `/auto-mode-setup` ("Teach auto mode about your environment?"), which
+comes after auto mode refused a few actions and waits for a keypress: their
+`--settings` carries `"skillOverrides":{"auto-mode-setup":"off"}`.
+
 ## Moving a task with files
 
 `fride task export <task> <file>` writes the task as one file (a gzip'd tar):
