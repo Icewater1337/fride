@@ -367,6 +367,15 @@ func TestWhitespaceOnly(t *testing.T) {
 		{"string literal", "a.go", []string{`-s := "a b"`, `+s := "a  b"`}, false},
 		{"go reindent", "a.go", []string{"-\tx := 1", "+    x := 1"}, true},
 		{"trailing in python", "a.py", []string{"-x = 1", "+x = 1  "}, true},
+		{"split path", "deploy.sh", []string{"-rm -rf /a/b", "+rm -rf /a /b"}, false},
+		{"join words", "a.py", []string{"-if not x:", "+if notx:"}, false},
+		{"yaml key", "c.yml", []string{"-enabled: true", "+enabled:true"}, false},
+		{"join lines", "run.sh", []string{"-cd /tmp", "-rm -rf build", "+cd /tmprm -rf build"}, false},
+		{"shell word after quote", "run.sh", []string{`-echo "a" b`, `+echo "a"b`}, false},
+		{"collapse inner run", "a.go", []string{"-x  := 1", "+x := 1"}, true},
+		{"blank line added", "a.go", []string{"+", "+x := 1"}, false},
+		{"only blank lines", "a.go", []string{"+", "+  "}, true},
+		{"spacing around punctuation", "a.go", []string{"-f(a,b)", "+f( a, b )"}, true},
 	}
 	for _, c := range cases {
 		if got := whitespaceOnly(c.path, c.lines); got != c.want {
