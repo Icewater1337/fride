@@ -34,9 +34,10 @@ type lineAt struct {
 
 // detectMoves finds blocks that one file of a repository lost and another
 // place gained, and folds a hunk that only moves code. Lines compare as in
-// whitespaceOnly: indentation that is syntax and spaces inside a string count,
-// other whitespace does not. Each side keys by its own file, so a block moved
-// between an indent-sensitive file and another one is not a move.
+// whitespaceOnly: indentation that is syntax, spaces inside a string and the
+// space between two words count, other whitespace does not. Each side keys by
+// its own file, so a block moved between an indent-sensitive file and another
+// one is not a move.
 //
 // A match inside one hunk is not a move: that is a block re-indented where it
 // stands, and the reader has to see what wraps it now.

@@ -379,36 +379,45 @@ func whitespaceOnly(p string, lines []string) bool {
 		if l == "" {
 			continue
 		}
+		var b *strings.Builder
 		switch l[0] {
 		case '-':
-			changed = true
-			minus.WriteString(squashLine(l[1:], sens))
+			b = &minus
 		case '+':
-			changed = true
-			plus.WriteString(squashLine(l[1:], sens))
+			b = &plus
+		default:
+			continue
+		}
+		changed = true
+		// A line break between two lines is kept: joining "cd /tmp" and
+		// "rm -rf build" into one line is not a whitespace change.
+		if k := squashLine(l[1:], sens); k != "" {
+			b.WriteString(k)
+			b.WriteByte('\n')
 		}
 	}
 	return changed && minus.String() == plus.String()
 }
 
-// squashLine drops the whitespace of one line except inside quotes. With indent
-// set, the leading whitespace is kept (a line break marks each line's start).
+// squashLine drops the whitespace of one line except inside quotes and
+// between two word characters (see wordRune), where a run becomes one space:
+// "rm -rf /a /b" is not "rm -rf /a/b", nor "if notx" "if not x". Next to
+// punctuation it is dropped, so "f( a, b )" keys as "f(a,b)". A blank line
+// squashes to "". With indent set, the leading whitespace is kept.
 // shortcut: quotes are tracked per line, so an apostrophe in a comment only
 // makes the check stricter and a multi-line string is not seen; upgrade with
 // a real lexer if that bites.
 func squashLine(s string, indent bool) string {
+	rest := strings.TrimLeftFunc(s, unicode.IsSpace)
+	if rest == "" {
+		return ""
+	}
 	var b strings.Builder
-	rest := s
 	if indent {
-		rest = strings.TrimLeftFunc(s, unicode.IsSpace)
-		if rest == "" {
-			return ""
-		}
-		b.WriteString("\n")
 		b.WriteString(s[:len(s)-len(rest)])
 	}
-	var q rune
-	esc := false
+	var q, last rune
+	esc, space := false, false
 	for _, r := range rest {
 		switch {
 		case q != 0:
@@ -420,14 +429,31 @@ func squashLine(s string, indent bool) string {
 			} else if r == q {
 				q = 0
 			}
-		case r == '"' || r == '\'' || r == '`':
-			q = r
-			b.WriteRune(r)
-		case !unicode.IsSpace(r):
+		case unicode.IsSpace(r):
+			space = true
+			continue
+		default:
+			if space && wordRune(last) && wordRune(r) {
+				b.WriteByte(' ')
+			}
+			if r == '"' || r == '\'' || r == '`' {
+				q = r
+			}
 			b.WriteRune(r)
 		}
+		last, space = r, false
 	}
 	return b.String()
+}
+
+// wordRune reports a character that can sit on either side of whitespace
+// that matters: letters, digits, '_', the characters of a shell word or
+// path ('-', '/', '.', '~', '$'), ':' (YAML's "key: value" is not
+// "key:value") and quotes ('echo "a" b' is not 'echo "a"b'). In doubt a
+// character counts as a word: a hunk wrongly shown costs a glance, one
+// wrongly folded hides a change.
+func wordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("_-/.~$:\"'`", r)
 }
 
 // untrackedFile builds the review of a file git does not know yet: all added.
