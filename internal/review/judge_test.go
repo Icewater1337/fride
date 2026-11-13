@@ -443,8 +443,10 @@ func TestDetectMovesKeepsSignificantWhitespace(t *testing.T) {
 		{"gnumakefile any case", "GNUMakefile", py, dedent(py), ""},
 		{"string whitespace", "a.go", str, strChanged, ""},
 		{"python same indent", "auth.py", py, py, "moved"},
-		{"python inner spacing", "auth.py", []string{"x=compute(alpha, beta)", "y=compute(gamma, delta)", "z=compute(eps, zeta)"},
-			[]string{"x = compute(alpha, beta)", "y = compute(gamma, delta)", "z = compute(eps, zeta)"}, "moved"},
+		{"python inner spacing", "auth.py", []string{"x = compute(alpha,beta)", "y = compute(gamma,delta)", "z = compute(eps,zeta)"},
+			[]string{"x = compute( alpha, beta )", "y = compute( gamma, delta )", "z = compute( eps, zeta )"}, "moved"},
+		{"python operator spacing", "auth.py", []string{"x=compute(alpha, beta)", "y=compute(gamma, delta)", "z=compute(eps, zeta)"},
+			[]string{"x = compute(alpha, beta)", "y = compute(gamma, delta)", "z = compute(eps, zeta)"}, ""},
 		{"go reindent", "a.go", py, dedent(py), "moved"},
 	}
 	for _, c := range cases {
