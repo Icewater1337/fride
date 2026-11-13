@@ -141,3 +141,44 @@ func TestTermSocketClosesWhenTheProcessExits(t *testing.T) {
 		}
 	}
 }
+
+// A socket opened to an exited session gets the scrollback and then the close
+// frame; before #150 it stayed open and the tab never showed as ended.
+func TestTermSocketToExitedSessionCloses(t *testing.T) {
+	s := &Server{terms: term.NewManager(), port: 7777}
+	sess, err := s.terms.Start("t1", term.KindAgent, "agent", t.TempDir(), []string{"echo", "hi"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.terms.Close(sess.ID)
+	for deadline := time.Now().Add(5 * time.Second); sess.Alive(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the process never exited")
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(s.handleTermWS))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/term?id="+sess.ID,
+		&websocket.DialOptions{Host: "127.0.0.1:7777"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	var seen strings.Builder
+	for {
+		_, msg, err := conn.Read(ctx)
+		if err != nil {
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+				t.Fatalf("no close frame (scrollback %q): %v", seen.String(), err)
+			}
+			break
+		}
+		seen.Write(msg)
+	}
+	if !strings.Contains(seen.String(), "hi") {
+		t.Fatalf("closed without the scrollback: %q", seen.String())
+	}
+}
