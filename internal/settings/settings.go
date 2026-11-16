@@ -147,11 +147,21 @@ type Service struct {
 	Repo string `json:"repo,omitempty"`
 	// Dir is the working directory, templated. Default {{repo.<Repo>}}.
 	Dir string `json:"dir,omitempty"`
-	// Run is the shell command that starts the service in the foreground.
+	// Run is the shell command that starts the service in the foreground. A
+	// Run that hands the service to a launcher of the project's own, which
+	// starts it detached and returns once it is ready, works too: a process
+	// that exited counts as failed only while nothing listens on its port.
+	// Such a service needs Stop.
 	Run string `json:"run,omitempty"`
 	// Pre runs before Run, every time (clean up a stale sidecar, generate a
 	// file). Its failure is reported but does not stop the start.
 	Pre string `json:"pre,omitempty"`
+	// Stop runs on `stack down`, in Dir, before FrIDE signals the service's
+	// processes and reaps its port: the command that tells a launcher Run
+	// handed the service to to stop what it started (its detached processes,
+	// containers, a claim it holds). Its failure is reported; the reaping
+	// still happens.
+	Stop string `json:"stop,omitempty"`
 	// Port is the base port. A task in slot k gets Port+k; slot 0 (Port itself)
 	// is left to the main checkout, so a task never collides with it.
 	Port int `json:"port,omitempty"`
