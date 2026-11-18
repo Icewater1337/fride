@@ -141,6 +141,15 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
                                         have caught them? Spends model calls
   review eval cases|runs [--json]       the eval set; past runs, for the trend
 
+  proof [task] [--json]                 run each changed repo's build and test commands
+                                        (repos.<name>.build/.test) in its worktree; prints
+                                        the proof as Markdown for a pull request
+  pr [task] [--title "..."] [--body "..." | --body-file <f>]
+                                        prove the committed change, push, open its pull
+                                        request as a draft with the proof attached, and
+                                        mark it ready once a fresh-context review finds
+                                        nothing red (config: pr.review)
+
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
   orch watch <task>... [--ask]          supervise these; --ask makes it propose
@@ -274,6 +283,10 @@ func main() {
 		cmdIncident(cfg, os.Args[2:])
 	case "review":
 		cmdReview(cfg, st, os.Args[2:])
+	case "proof":
+		cmdProof(cfg, st, os.Args[2:])
+	case "pr":
+		cmdPR(cfg, st, os.Args[2:])
 	case "repos":
 		cmdRepos(cfg)
 	default:

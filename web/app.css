@@ -1088,6 +1088,9 @@ button.xs.on { color: var(--accent-fg); background: var(--accent-soft); }
 .rv-subh { margin: 10px 0 2px; font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; cursor: help; }
 .rv-rrepo { font-weight: 600; flex: none; }
 .rv-reverts .rv-ctext { font-family: var(--font); font-size: 12px; white-space: normal; }
+.rv-proof .rv-psum { font-family: var(--font); font-size: 12px; white-space: normal; }
+.rv-proof .rv-pline { margin: 6px 6px 0; font-size: 11.5px; overflow-wrap: anywhere; }
+.rv-proof .rv-chead > .dim { flex: none; }
 .rv-stale { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin-bottom: 6px; }
 .rv-cap { flex-wrap: wrap; }
 .rv-delta { font-size: 12px; margin-bottom: 6px; }

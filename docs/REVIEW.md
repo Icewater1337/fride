@@ -10,7 +10,9 @@ Status: the MVP, phase 2 and phase 3 are implemented: the **Review** tab of a
 task, and the **Reviews** view across tasks. Where the build differs from the
 first proposal, the phase sections below say how and why. On top of them,
 [review tiers](#review-tiers-and-approvals) decide how many human approvals a
-change needs before its task can be Done. What happens to a change after it
+change needs before its task can be Done, and agents open pull requests
+through a gate built on them: [proof before a pull
+request](#proof-before-a-pull-request). What happens to a change after it
 merges, and the eval replay of the AI review, are in
 [Outcomes and evals](#outcomes-and-evals).
 
@@ -179,6 +181,8 @@ $FRIDE_HOME/review/<slug>/
   rounds.json    { "rounds": [Round], "escalation": thread id }
   revert.json    { "<repo>": RevertCheck }
   edits.jsonl    Capture, one line per agent edit, appended by the hook
+  proof.json     Proof (the last `fride proof`, and what `fride pr` did with it),
+                 written by the CLI in the agent's process; the server only reads it
   approvals.json { "accountable": Accountable, "approvals": [Approval] }
 ```
 
@@ -187,7 +191,7 @@ Computed per request, not stored:
 ```
 Changes  { repos: [RepoChanges], focus: [Focus], evidence: Evidence, traced: bool,
            threads: [Thread], ai: AI, revert: {repo: RevertCheck}, size: Size,
-           risk: Risk, rounds: Rounds, gate: Gate, lastReview }
+           risk: Risk, rounds: Rounds, gate: Gate, lastReview, proof: Proof }
 RepoChanges { repo, base, mergeBase, head, branch, files: [File], err }
 File     { path, oldPath, status (A|M|D|R|T), added, deleted, binary, hash,
            noise ("" | generated | vendored | lockfile), noiseWhy, layer,
@@ -215,6 +219,12 @@ Round    { n, at, anchors: {repo: {head, hash}}, by: [ai|agent], forced }
 Rounds   { done: [Round], max, next, capped, escalation }
 RevertCheck { repo, state, command, caught, exitCode, output, tests, err, anchor, stale }
 Risk     { score (0-100), level (low|medium|high), reasons }
+Proof    { taken, finished, ok, err, stale, repos: [{repo, head, tree, dirty, unchanged,
+           err, stale, checks: [{kind (build|test), command, exitCode, ok, seconds,
+           output (tail), err}]}],
+           pr: {at, links: [{repo, url}],
+                review (off|running|clean|findings|failed|capped),
+                red, err, ready (for review), needs (what the tier still asks of people)} }
 Gate     { tier, need, have, ready, repos: [{repo, tier, need, err}],
            why: [{repo, path, tier, why, rule}], more, version: {repo: {head, hash}},
            approvals: [Approval], accountable: Accountable, you }
@@ -263,8 +273,9 @@ tab's count current. When the change moved on, the review offers a refresh
   can be credited to the wrong one of them.
 - **Big diffs are capped**: 3,000 lines per file and 40,000 in total. The cap
   is stated in the UI, and the file can still be opened in full.
-- Evidence is what the agent *ran*. The revert check (phase 2) is the one
-  thing FrIDE runs itself, and only when asked.
+- Evidence is what the agent *ran*. The revert check (phase 2) and the proof
+  (`fride proof`, see [below](#proof-before-a-pull-request)) are what FrIDE
+  runs itself.
 
 ## Phase 2: judgement
 
@@ -586,6 +597,96 @@ independently (`consensus.go`).
 
 `finders: 1` is the pass as it was: one finder with no focus, no vote, every
 cited finding kept for the verifier.
+
+## Proof before a pull request
+
+An agent that thinks it is done opens a pull request: on its own judgement,
+with nothing attached that shows the build and the tests passed, and read by
+nobody but the agent that wrote it, which remembers what it meant rather than
+what it wrote. Two rules close that gap: no pull request without
+the test and build output attached, and a review with a fresh context before
+the pull request is marked ready. The Review tab already had both halves,
+evidence and an AI pass, but only on demand.
+
+**`fride proof`** (`proof.go`) runs, for every repository of the task whose
+working tree differs from its merge-base, the `build` and then the `test`
+command of `repos.<name>` in config.json, in the task's worktree, and stops a
+repository at its first failure. It keeps each command's exit code, duration
+and the last 4,000 characters of its output, and prints the result as a
+Markdown block for a pull request's description. A changed repository with
+neither command fails the proof, saying which keys to set: a proof that ran
+nothing proves nothing.
+
+*Which version.* A proof is anchored to a tree, not a commit: the working
+tree as `git add -A` would commit it (built in an index of its own, from a
+copy of the real one that keeps its date, so git still re-reads a file edited
+in the same second). So committing exactly what was proven keeps the proof,
+and any edit, rebase or new file afterwards makes it stale, in the tab and for
+`fride pr`. Commands that change the tree they prove (a build writing a file
+that is not git-ignored) fail the proof, since what they proved is gone.
+
+**`fride pr`** (`pr.go`, `pr_cli.go`) is how an agent opens a pull request;
+the workspace guide tells it so, and never to use `gh` or `glab` for it:
+
+1. It refuses while anything is uncommitted: the proof has to be of what the
+   pull request carries.
+2. It reuses a proof that passed on this very tree, or takes a new one, and
+   refuses on failure. Nothing is pushed then.
+3. For each changed repository it pushes the branch and opens its pull
+   request, or updates the open one: the proof block goes after the
+   description, or replaces the block an earlier run wrote. `gh` or `glab` is
+   picked by the kind of the git identity of the remote's host, else by the
+   host's name. The task's git identity is in the environment of both.
+4. With `pr.review` on (the default), the pull request opens as a draft (an
+   open one marked ready goes back to draft) and the AI pass of phase 2 runs
+   over the change. That pass is the fresh context: headless turns that see
+   the diff and the workspace, never the agent's conversation. It runs in the
+   server through the tab's own entry point, `POST …/changes/ai`, so whatever
+   bounds it there bounds this too, and `fride pr` waits for it. A pass already
+   done on this version is used as it is, and one already running is waited
+   for rather than doubled.
+5. No red finding left (one a person dismissed, or whose hunk is gone, does
+   not count): the pull request is marked ready *for review*. Red findings: it
+   stays a draft, and `fride pr` prints them for the agent and exits 1. The
+   agent fixes them, commits, and runs `fride pr` again. A review that cannot
+   run (no server, a refused or failed pass) leaves the draft for a person.
+   The round cap's refusal (the API flags it, `"roundCap": true`) is a state
+   of its own, *capped*: `fride pr` tells the agent to stop and tell the user,
+   since the cap has already handed the change to its owner.
+6. Ready for review is not approved. The proof and the AI pass are no
+   person's approval and `fride pr` records none: once the pull request is
+   ready it reads the task's [gate](#review-tiers-and-approvals) and, when the
+   tier still wants people, says what is missing (`needs` in the record), so
+   the agent and the orchestrator report that the task waits for them. Done
+   stays behind the gate as before.
+
+What happened is kept with the proof (`pr` in `proof.json`) and noted in the
+decision log, so the rationale document says which pull request went out with
+what proof.
+
+**In the Review tab**, *Evidence* starts with the proof: passed or failed,
+when, the commit each repository was at, *this version* or *stale*, each
+command with its output, and the pull requests with their state. A proof
+that holds replaces the transcript's evidence items in the Focus list (it ran
+on the change as it is); one that failed is a high item.
+
+**The orchestrator** is given a PROOF line in its observation of a task: none,
+failed, passed, or passed on an earlier version; what `fride pr` did; and any
+`gh pr create`, `gh pr ready`, `glab mr create` or `glab mr update --ready`
+the agent ran itself since, read from its transcript. Its prompt treats a pull
+request without a passing proof like a skipped test: the agent is sent back
+to run `fride pr`. Findings go back the same way; a review that could not run,
+or that the round cap stopped, goes to the user, not round again; and a pull
+request ready for review that its tier holds for approval is reported as
+waiting for a person, not as done.
+
+*Bounds.* Each `fride pr` costs at most one AI pass, none when the change has
+not moved since the last one, and each pass is a [review round](#review-rounds)
+like one started from the tab. Past `review.maxRounds` the pass refuses to
+start, `fride pr` reports that the pull request stays a draft, and the round
+cap's blocking thread hands the change to its owner; `fride pr` never forces
+a round (it asks with no body, a plain start). The orchestrator is told not to
+loop on a review that could not run or was capped.
 
 ## Outcomes and evals
 

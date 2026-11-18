@@ -411,6 +411,9 @@ func renderObservation(ob Observation) string {
 		for _, r := range d.Repos {
 			b.WriteString("  " + renderRepo(r) + "\n")
 		}
+		if d.Proof != "" {
+			b.WriteString(d.Proof + "\n")
+		}
 		if len(d.Resumable) > 0 {
 			b.WriteString("Conversations you could reopen with resume_agent:\n")
 			for _, c := range d.Resumable {

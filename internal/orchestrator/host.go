@@ -123,6 +123,11 @@ type Detail struct {
 	// makes picking work back up possible: a fresh session starts with no
 	// memory, and for a task that is half-done that is a real loss.
 	Resumable []Conversation `json:"resumable,omitempty"`
+	// Proof says whether the change was proven (`fride proof`), what `fride
+	// pr` did with it, and whether the agent opened a pull request around it.
+	// A pull request without proof is unfinished work, and from the agent's
+	// words alone it looks finished. Empty when there is nothing to say.
+	Proof string `json:"proof,omitempty"`
 }
 
 // BlockedTrust is Observation.Blocked while a Claude Code agent waits at its

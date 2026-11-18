@@ -467,7 +467,7 @@ Two things make such an entry worth having, so put both in:
 
 Use ` + "`--source user`" + ` only for what the user actually decided. Your own
 choices stay unmarked, so that a reader can tell which calls were theirs.
-` + ideaSection(cfg)
+` + prSection(cfg) + ideaSection(cfg)
 	return os.WriteFile(filepath.Join(cfg.WorkspaceDir(slug), agent.GuideFile(agent.Normalize(agentKind))), []byte(body), 0o644)
 }
 
@@ -487,6 +487,42 @@ When this task is about trying something NEW — a proof of concept, a spike,
 agent does not load skills). It keeps a living idea page under ` + "`" + journal.IdeaFolder + "/`" + `, in the
 layout of the team's ideas repository, and the person publishes it with
 *Publish idea* in FrIDE. Ticket work stays in the decision log above.
+`
+}
+
+const prHeading = "## Opening a pull request"
+
+// prSection tells the agent that a pull request goes out through `fride pr`,
+// never through the forge's tool directly. Left to itself an agent opens one
+// as soon as it believes it is done, with nothing attached that shows the
+// build and the tests passed, and nobody but itself has read the diff.
+func prSection(cfg *config.Config) string {
+	ready := "It opens it as a draft, and marks the pull request ready only once a review\n" +
+		"that never saw this conversation finds nothing red in the diff. If it reports\n" +
+		"findings, fix them, commit, and run `fride pr` again: it updates the same pull\n" +
+		"request. If it says the review round cap is reached, stop: the change's owner\n" +
+		"decides what comes next, so tell the user instead of trying again."
+	if !cfg.Settings.PRReview() {
+		ready = "It opens the pull request ready; run it again after a change, and it\n" +
+			"updates the same pull request with a new proof."
+	}
+	return `
+` + prHeading + `
+
+Never open a pull request (or merge request) with ` + "`gh`" + ` or ` + "`glab`" + ` yourself, and
+never mark one ready by hand. Commit your work, then run, from this workspace:
+
+` + "```bash" + `
+fride pr --title "..." --body-file DESCRIPTION.md
+` + "```" + `
+
+It runs each changed repository's build and test commands on exactly what you
+committed, and refuses while one fails or while anything is uncommitted. Then it
+pushes the branch and opens the pull request with the commands' output attached
+as proof. ` + ready + `
+Ready for review is not approved: when the change's review tier needs a person's
+approval, ` + "`fride pr`" + ` says so, and the task waits for them.
+` + "`fride proof`" + ` runs the build and the tests alone, without opening anything.
 `
 }
 
@@ -517,24 +553,35 @@ Open the app on the entry URL ` + "`stack status`" + ` prints. Logs live in
 `
 }
 
-// EnsureGuide adds the stack section to a guide written before the section
-// existed, so older workspaces learn it too the next time an agent starts in
-// them. It only appends: the rest of the file may have been edited by hand.
+// EnsureGuide adds the stack and pull request sections to a guide written
+// before they existed, so older workspaces learn them too the next time an
+// agent starts in them. It only appends: the rest of the file may have been
+// edited by hand.
 func EnsureGuide(cfg *config.Config, slug, agentKind string) error {
 	path := filepath.Join(cfg.WorkspaceDir(slug), agent.GuideFile(agent.Normalize(agentKind)))
 	b, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) || (err == nil && strings.Contains(string(b), stackHeading)) {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	var add string
+	if !strings.Contains(string(b), stackHeading) {
+		add += "\n" + stackSection(cfg, slug)
+	}
+	if !strings.Contains(string(b), prHeading) {
+		add += prSection(cfg)
+	}
+	if add == "" {
+		return nil
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = f.WriteString("\n" + stackSection(cfg, slug))
+	_, err = f.WriteString(add)
 	return err
 }
 

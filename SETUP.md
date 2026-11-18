@@ -103,6 +103,11 @@ service needs at runtime, find out:
 - **What a fresh worktree needs first**: dependency installs and code
   generation. Those go in `repos.<name>.setup`, each with `creates` so it is
   skipped when done.
+- **How to build it and run its tests** in a worktree: `go build ./...`,
+  `npm run build`, `npm test`, `./gradlew test`. Those go in
+  `repos.<name>.build` and `repos.<name>.test`. A task's agent opens its pull
+  requests with `fride pr`, which runs both first and refuses a change to a
+  repository that has neither. A build must only write git-ignored files.
 - **Whether it starts other listeners itself**, such as a dev server that also
   spawns an auth proxy or a mock. Model those as `external` services on their
   own base port, with the spawning service told that port.
