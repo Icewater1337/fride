@@ -352,6 +352,12 @@ func renderObservation(ob Observation) string {
 			"typed at it — a dialog reads keystrokes as a selection, so send_to_agent is "+
 			"refused here. Only the user can answer it, in the task's own tab. Tell them "+
 			"what is being asked and leave it.\n", ob.Blocked, round(ob.Idle)))
+	case ob.Waiting && ob.Failed != nil && ob.Failed.Reset.Add(resetMargin).After(time.Now()):
+		b.WriteString(fmt.Sprintf("The agent's turn ENDED ON ITS USAGE LIMIT (%s), which resets at %s; "+
+			"it is at its prompt (quiet for %s). FrIDE waits for the reset and then tells it to continue "+
+			"by itself. Do not ask the user whether to continue it. Anything sent to it before then "+
+			"meets the same limit, and is picked up when it continues.\n",
+			clip(ob.Failed.Text, 200), clock(ob.Failed.Reset, time.Now()), round(ob.Idle)))
 	case ob.Waiting && ob.Failed != nil:
 		b.WriteString(fmt.Sprintf("The agent's turn ENDED ON AN API ERROR (%s) and it is at its "+
 			"prompt (quiet for %s); its work was cut off, not finished. FrIDE tells it to continue "+
