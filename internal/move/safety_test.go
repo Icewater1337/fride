@@ -56,7 +56,7 @@ func moveIt(t *testing.T, src, dst *computer, task *store.Task) *Manifest {
 	if err := WriteArchive(&buf, src.cfg, m, Has(dst.cfg, m.Bases())); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Prepare(dst.cfg, dst.st, &buf); err != nil {
+	if _, err := Prepare(dst.cfg, dst.st, &buf, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := Detach(src.cfg, m); err != nil {
@@ -329,7 +329,7 @@ func TestFailedMoveKeepsIgnoredFiles(t *testing.T) {
 	if err := WriteArchive(&buf, src.cfg, m, Has(dst.cfg, m.Bases())); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Prepare(dst.cfg, dst.st, &buf); err != nil {
+	if _, err := Prepare(dst.cfg, dst.st, &buf, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := Detach(src.cfg, m); err != nil {

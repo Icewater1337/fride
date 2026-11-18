@@ -822,13 +822,10 @@ func isCommitID(s string) bool {
 
 // Prepare receives the archive and fetches its bundles into side refs. Nothing
 // a user sees changes yet; Finish makes it real, Abort throws it away.
-func Prepare(cfg *config.Config, st *store.Store, r io.Reader) (*Manifest, error) {
-	return PrepareAs(cfg, st, r, "")
-}
-
-// PrepareAs is Prepare under another task id: as, when it is not empty. It is
-// how a bundle lands next to the task it was taken from, which keeps its id.
-func PrepareAs(cfg *config.Config, st *store.Store, r io.Reader, as string) (*Manifest, error) {
+//
+// as, when it is not empty, is another task id to land it under. It is how a
+// bundle lands next to the task it was taken from, which keeps its id.
+func Prepare(cfg *config.Config, st *store.Store, r io.Reader, as string) (*Manifest, error) {
 	tmp, err := os.MkdirTemp(cfg.StateDir, "incoming-*")
 	if err != nil {
 		return nil, err

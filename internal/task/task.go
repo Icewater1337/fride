@@ -86,7 +86,7 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 	}
 	// Create refuses an existing folder too, atomically; this only says it
 	// in the user's terms.
-	created, err := workspace.CreateWith(cfg, slug, req.Repos, string(req.Agent), branch, env)
+	created, err := workspace.Create(cfg, slug, req.Repos, string(req.Agent), branch, env)
 	if errors.Is(err, workspace.ErrExists) {
 		return nil, nil, fmt.Errorf("%s already exists — choose another name", cfg.WorkspaceDir(slug))
 	}
