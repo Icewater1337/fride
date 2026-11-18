@@ -214,10 +214,12 @@ func (h orchHost) ResumeAgent(slug, id string) error {
 // for itself, and which conversations could be picked back up.
 func (h orchHost) Detail(slug string) orchestrator.Detail {
 	var d orchestrator.Detail
-	if _, err := h.s.st.Get(slug); err != nil {
+	t, err := h.s.st.Get(slug)
+	if err != nil {
 		return d
 	}
 	d.Repos = h.GitState(slug)
+	d.Proof = h.s.proofBrief(t, d.Repos)
 	// Only worth listing when there is nothing running: while an agent is live,
 	// resuming is not an option and the list is noise in every prompt.
 	if h.s.terms.AgentSession(slug) != nil {

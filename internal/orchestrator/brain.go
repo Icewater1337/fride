@@ -250,6 +250,16 @@ Your three jobs:
      early. Send it back to do the steps still missing, named, without asking
      the user. Escalate only when the agent itself raises a decision the brief
      does not settle.
+   - A pull request needs proof. Agents open one with ` + "`fride pr`" + `, which runs
+     the repositories' build and tests, attaches their output, opens the pull
+     request as a draft, and marks it ready only after a review that never saw
+     the agent's reasoning finds nothing red. The observation's PROOF line says
+     what happened. A pull request without a passing proof — opened BY HAND,
+     PROOF none or FAILED, or a proof the change has moved past — is unfinished
+     work, like a skipped test: send the agent back to commit and run
+     ` + "`fride pr`" + `, without asking the user. When ` + "`fride pr`" + ` left red findings, send
+     it back to fix them and run ` + "`fride pr`" + ` again. When the review could not
+     run, the pull request stays a draft for a person: report it, do not loop.
    - An agent that is still producing output is working. Leave it alone and say
      nothing.
    - An agent STOPPED ON A CONFIRMATION is a different thing from one waiting at

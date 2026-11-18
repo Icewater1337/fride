@@ -12,6 +12,7 @@ import (
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/orchestrator"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/store"
 	"github.com/Icewater1337/fride/internal/workspace"
@@ -50,6 +51,27 @@ func (s *Server) changes(t *store.Task) review.Changes {
 		log.Printf("task %s: review without the decision log: %v", t.Slug, err)
 	}
 	return review.Build(s.repoSpecs(t), review.LoadKept(s.cfg, t.Slug), tr, entries)
+}
+
+// proofBrief is the task's proof and pull request in a line for the
+// orchestrator, with any pull request the agent opened or readied by hand
+// since `fride pr` last ran. repos is the task's git state, which says
+// whether there is a change to prove at all.
+func (s *Server) proofBrief(t *store.Task, repos []orchestrator.RepoState) string {
+	p := review.LoadProof(s.cfg, t.Slug)
+	if !p.Taken.IsZero() {
+		review.MarkStale(&p, s.repoSpecs(t))
+	}
+	var since time.Time
+	if p.PR != nil {
+		since = p.PR.At
+	}
+	tr := agent.ClaudeTrace(s.cfg.Home, s.cfg.WorkspaceDir(t.Slug))
+	changed := false
+	for _, r := range repos {
+		changed = changed || r.Ahead > 0 || r.Dirty > 0
+	}
+	return p.Brief(review.ByHand(tr.Commands, since), changed)
 }
 
 func repoChanges(c review.Changes, name string) (review.RepoChanges, bool) {
