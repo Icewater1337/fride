@@ -245,11 +245,12 @@ func sessionIDFor(byID map[string]*Recorded, path string) string {
 
 // --- codex ---------------------------------------------------------------------
 
-// Codex writes ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl, whose
-// first line carries the session id and the cwd. Only that line is parsed; the
-// rest is counted, as a rough size, and never decoded.
+// Codex writes $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+// (~/.codex without CODEX_HOME), whose first line carries the session id and
+// the cwd. Only that line is parsed; the rest is counted, as a rough size, and
+// never decoded.
 func codexSessions(home, workspaceDir string) []Recorded {
-	root := filepath.Join(home, ".codex", "sessions")
+	root := filepath.Join(codexDir(home), "sessions")
 	var out []Recorded
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || filepath.Ext(p) != ".jsonl" {

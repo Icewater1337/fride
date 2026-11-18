@@ -174,3 +174,40 @@ func TestClaudeDirFollowsConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	check(filepath.Join(home, ".claude"), place(filepath.Join(home, ".claude")))
 }
+
+// With CODEX_HOME set, Codex keeps its rollouts under $CODEX_HOME/sessions, and
+// the sessions are read from there as the model list is, not from ~/.codex
+// (#161).
+func TestCodexSessionsFollowCodexHome(t *testing.T) {
+	home, alt := t.TempDir(), t.TempDir()
+	ws := filepath.Join(home, "ws")
+	const id = "22222222-2222-2222-2222-222222222222"
+	place := func(dir string) {
+		t.Helper()
+		day := filepath.Join(dir, "sessions", "2026", "01", "02")
+		if err := os.MkdirAll(day, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		head := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":%q,"timestamp":"2026-01-02T03:04:05Z"}}`, id, ws)
+		if err := os.WriteFile(filepath.Join(day, "rollout-2026-01-02T03-04-05-"+id+".jsonl"),
+			[]byte(head+"\n{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Setenv("CODEX_HOME", alt)
+	place(alt)
+	if got := Sessions(Codex, home, ws); len(got) != 1 || got[0].ID != id {
+		t.Errorf("sessions not read from CODEX_HOME: %+v", got)
+	}
+
+	// Set but empty means unset: ~/.codex.
+	t.Setenv("CODEX_HOME", "")
+	if got := Sessions(Codex, home, ws); len(got) != 0 {
+		t.Errorf("read from CODEX_HOME although it is unset: %+v", got)
+	}
+	place(filepath.Join(home, ".codex"))
+	if got := Sessions(Codex, home, ws); len(got) != 1 || got[0].ID != id {
+		t.Errorf("sessions not read from ~/.codex: %+v", got)
+	}
+}

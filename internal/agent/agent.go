@@ -232,18 +232,22 @@ func codexArgv(o Options) []string {
 	return argv
 }
 
+// codexDir is where Codex keeps its state: $CODEX_HOME, else ~/.codex.
+func codexDir(home string) string {
+	if d := os.Getenv("CODEX_HOME"); d != "" {
+		return d
+	}
+	return filepath.Join(home, ".codex")
+}
+
 // codexModels reads the model list Codex caches for its own picker, keeping
 // the ones it shows there.
 func codexModels() []string {
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return nil
-		}
-		home = filepath.Join(h, ".codex")
+	home, err := os.UserHomeDir()
+	if err != nil && os.Getenv("CODEX_HOME") == "" {
+		return nil
 	}
-	b, err := os.ReadFile(filepath.Join(home, "models_cache.json"))
+	b, err := os.ReadFile(filepath.Join(codexDir(home), "models_cache.json"))
 	if err != nil {
 		return nil
 	}
