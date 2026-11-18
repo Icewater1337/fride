@@ -171,6 +171,7 @@ $FRIDE_HOME/review/<slug>/
   viewed.json    { "files": { "<repo>/<path>": { "hash", "at", "hunks": [ids seen] } } }
   threads.json   [Thread]
   ai.json        AI (the last pass, and the reviewer's marks on its findings)
+  rounds.json    { "rounds": [Round], "escalation": thread id }
   revert.json    { "<repo>": RevertCheck }
   edits.jsonl    Capture, one line per agent edit, appended by the hook
 ```
@@ -180,7 +181,7 @@ Computed per request, not stored:
 ```
 Changes  { repos: [RepoChanges], focus: [Focus], evidence: Evidence, traced: bool,
            threads: [Thread], ai: AI, revert: {repo: RevertCheck}, size: Size,
-           risk: Risk, lastReview }
+           risk: Risk, rounds: Rounds, lastReview }
 RepoChanges { repo, base, mergeBase, head, branch, files: [File], err }
 File     { path, oldPath, status (A|M|D|R|T), added, deleted, binary, hash,
            noise ("" | generated | vendored | lockfile), noiseWhy, layer,
@@ -197,9 +198,12 @@ Command  { session, time, command, kind (test|build|lint|typecheck),
 Thread   { id, repo, path, hunk, line, quote, blocking, satisfied, outdated,
            comments: [{at, text, sent, sendErr}] }
 AI       { state (running|done|failed), started, finished, err, anchors: {repo: {head, hash}},
-           groups: [{title, intent, hunks, significance, criticality, why, check}],
+           groups: [{title, intent, hunks, significance, criticality, why, check, round}],
            findings: [{id, grade (red|yellow|gray), title, detail, repo, path, hunk,
-                       quote, verdict, dismissed, vote, stale}], unverified, stale }
+                       quote, verdict, round, again, dismissed, vote, stale}],
+           unverified, preExisting, round, read, skipped, stale }
+Round    { n, at, anchors: {repo: {head, hash}}, by: [ai|agent], forced }
+Rounds   { done: [Round], max, next, capped, escalation }
 RevertCheck { repo, state, command, caught, exitCode, output, tests, err, anchor, stale }
 Risk     { score (0-100), level (low|medium|high), reasons }
 ```
@@ -210,7 +214,8 @@ through the node proxy:
 ```
 GET  /api/tasks/<slug>/changes              the whole review
 PUT  /api/tasks/<slug>/changes/viewed       {repo, path, hash, hunks, viewed}
-POST /api/tasks/<slug>/changes/ai           start an AI pass (202; 409 while one runs)
+POST /api/tasks/<slug>/changes/ai           {force?}: start an AI pass (202; 409 while one runs,
+                                            or past the round cap with roundCap: true)
 PUT  /api/tasks/<slug>/changes/ai/finding   {id, dismissed?, vote?: up|down|""}
 POST /api/tasks/<slug>/changes/threads      {repo, path, hunk, line, quote, text, blocking, send}
 PUT  /api/tasks/<slug>/changes/threads/<id> {text?, blocking?, satisfied?, send?}
@@ -354,6 +359,67 @@ is not folded and goes into the AI pass. Tree-sitter would need a C toolchain an
 grammar per language in a binary that is otherwise self-contained; line runs
 catch the common case (a function moved to another file) and miss a function
 moved and edited in the middle, which shows as two moved runs around the edit.
+
+## Review rounds
+
+A review that finds something, a fix, another review: left alone, that loop
+does not converge. One change was seen to go through more than fifty AI
+review rounds overnight, and most of their findings were about old code
+outside the change. So FrIDE counts rounds, caps them, and narrows each one
+(`rounds.go`).
+
+**A round** is one review of one version of the change, by the AI pass, the
+agent reviewer (*Agent review*), or both. A version is the per-repo diff hash
+against the merge-base, the same hash the AI pass is anchored to: a commit
+that only records work already reviewed changes the head and not the hash,
+and is not a new round. Reviewing the version of the last round again (a
+re-run) is that round again. An AI pass that fails read nothing and gives its
+round back; one that finds nothing new to read (below) uses none.
+
+**The cap.** At most `review.maxRounds` rounds (default 3, `0` for no cap; see
+[CONFIG.md](CONFIG.md#review)). A review of a new version past the cap is
+refused, for the AI pass from the tab, the API, code (`StartAI` returns an
+error wrapping `ErrRoundCap`) and the agent reviewer alike. The refusal
+escalates to the owner where a task already asks them for a decision: a
+blocking thread on the task as a whole, "rethink the approach", which keeps the
+task out of Done on every path (the board, `fride task status`, the
+orchestrator's `set_status`) and makes it the owner's turn in the Reviews
+view. A loop that keeps knocking opens one thread, not one per attempt. The
+owner can start the round anyway (*Run anyway* in the AI section, after a
+confirmation; `{"force": true}` in the API), which settles the thread; every
+further round past the cap needs them again. Automation never forces.
+
+**Later rounds read only the delta.** Round 2 and later read only the hunks no
+earlier round read. Hunk ids are hashes of the hunk's lines against the
+merge-base, so a hunk nobody touched keeps its id across commits, and one the
+agent edited, or that an edit next to it grew, gets a new one; the delta is
+therefore still limited to the change against the merge-base. The heads of
+the previous round are not used for the AI pass, because most of an agent's
+work is uncommitted when it is reviewed: the previous head does not say what
+was read. Earlier rounds' groups are carried, cut to the hunks still in the
+change, and so are their findings, as they were and with their marks. The
+finder is told the round and shown the earlier findings, and asked to raise
+one again only where the code still has the problem. Nothing is listed twice:
+a new finding with the id of an earlier one, or on the same file with the same
+title or quote, is folded into the earlier one, which keeps its id, round,
+text and marks (a dismissal holds), moves to where the problem is now and
+says *still there in round N*. A version with nothing new to read (it only
+lost hunks) refreshes the pass at once, without a model and without a round.
+
+The agent reviewer gets the same rules in its prompt and skill: the round of
+how many, and from its second round on the commits its previous round
+reviewed, so it reviews `git diff <then> origin/<branch>` within the merge
+request and reports what became of the previous `REVIEW.md` instead of
+repeating it. In the last round it ends with what the owner has to decide.
+
+**Pre-existing findings are dropped.** A finding has to quote a line the
+change added or removed. The quote check used to accept any line of the hunk,
+unchanged context lines included; a finding that quotes only a context line
+is about code the change did not touch, and is now dropped and counted as
+*pre-existing* next to *unverified*. Dropped rather than shown with a mark:
+the point is a list the reader can trust to be about this change. The
+reviewer skill says the same: a problem in untouched code that the change did
+not cause is out of scope, one line at most.
 
 ## Effort
 

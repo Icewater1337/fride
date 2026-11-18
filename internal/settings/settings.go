@@ -69,6 +69,8 @@ type Settings struct {
 	Companion *Companion `json:"companion,omitempty"`
 	// Git is the git identities a task can be created with (GIT.md).
 	Git *Git `json:"git,omitempty"`
+	// Review tunes the AI review pass and caps review rounds (REVIEW.md).
+	Review *Review `json:"review,omitempty"`
 
 	mu   sync.Mutex
 	path string

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Icewater1337/fride/internal/config"
@@ -48,6 +49,43 @@ func Prompt(repos []Repo) string {
 	b.WriteString("Repositories (workspace folder: branch, branched from):\n")
 	for _, r := range repos {
 		fmt.Fprintf(&b, "- %s: %s, from %s\n", r.Name, orUnknown(r.Branch), orUnknown(r.BaseRef))
+	}
+	return b.String()
+}
+
+// PromptRound is Prompt for one review round (see BeginRound): which round of
+// how many, and from the reviewer's second round on where its previous round
+// stood, so it reviews what changed since instead of the whole change again.
+func PromptRound(repos []Repo, st RoundStart) string {
+	p := Prompt(repos)
+	if st.N == 0 {
+		return p
+	}
+	var b strings.Builder
+	b.WriteString(p)
+	fmt.Fprintf(&b, "\nThis is review round %d", st.N)
+	if st.Max > 0 {
+		fmt.Fprintf(&b, " of at most %d", st.Max)
+	}
+	b.WriteString(".")
+	if len(st.Since) > 0 {
+		b.WriteString(" Your previous round reviewed these commits; review only what changed since them, within the " +
+			"merge request's own changes, and do not report again what the previous REVIEW.md reported unless it is " +
+			"still there:\n")
+		names := make([]string, 0, len(st.Since))
+		for name := range st.Since {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			fmt.Fprintf(&b, "- %s: %s\n", name, orUnknown(st.Since[name].Head))
+		}
+	} else {
+		b.WriteString("\n")
+	}
+	if st.Max > 0 && st.N >= st.Max {
+		b.WriteString("It is the last round FrIDE starts on its own. If problems remain, end the report with what the " +
+			"owner has to decide, and whether the approach needs rethinking rather than another fix.\n")
 	}
 	return b.String()
 }

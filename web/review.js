@@ -887,25 +887,44 @@ async function rvRevert(repo, btn) {
 // rvAI: the AI pass. Groups by intent, rated; findings a second model confirmed.
 function rvAI(d) {
   const a = d.ai || {};
+  const rounds = d.rounds || {};
   const aside = el('span', 'dim');
   const s = rvSection('AI review', 'sparkle', aside);
+  s.dataset.card = 'ai';
+  // Past the round cap a pass on a new version is the owner's call: the
+  // button says so and asks before it starts the round anyway.
   const run = (label) => {
+    const capped = !!rounds.capped;
     const b = el('button', 'ghost sm');
     b.appendChild(icon('sparkle'));
-    b.appendChild(el('span', null, label));
-    b.title = 'Groups the hunks by intent (haiku), rates each group and lists findings (opus), and keeps only the ' +
-      'findings that quote their hunk and that a second look confirms (sonnet). Read-only, in this workspace.';
+    b.appendChild(el('span', null, capped ? 'Run anyway' : label));
+    b.title = capped
+      ? `Round ${rounds.next} is past the cap of ${rounds.max} review rounds: only you can start it.`
+      : 'Groups the hunks by intent (haiku), rates each group and lists findings (opus), and keeps only the ' +
+        'findings that quote their hunk and that a second look confirms (sonnet). Read-only, in this workspace.';
     b.addEventListener('click', async () => {
       const p = pin();
+      if (capped && !await ask({
+        title: `Start review round ${rounds.next}?`,
+        body: `${rounds.next - 1} review rounds are done, the cap is ${rounds.max}, and the change moved on again. ` +
+          'A change that keeps drawing findings usually needs a different approach more than another round.',
+        ok: `Start round ${rounds.next}`,
+      })) return;
       b.disabled = true;
-      try { d.ai = await api.post(`${p.base}/tasks/${p.slug}/changes/ai`); }
-      catch (e) { toast(e.message); b.disabled = false; return; }
+      try { d.ai = await api.post(`${p.base}/tasks/${p.slug}/changes/ai`, capped ? { force: true } : undefined); }
+      catch (e) {
+        toast(e.message);
+        b.disabled = false;
+        if (e.data && e.data.roundCap && !stale(p)) loadReview(p, false).catch(() => {});
+        return;
+      }
       if (stale(p)) return;
       rvDrawSummary(d);
       rvSoon(p);
     });
     return b;
   };
+  if (rounds.capped || rounds.escalation) s.appendChild(rvRoundCap(d));
   if (!a.state) {
     s.appendChild(el('div', 'rv-quiet', 'Not run yet. It groups the change by intent, rates each group for reading effort ' +
       'and blast radius, and lists only findings a second model could reproduce.'));
@@ -922,12 +941,19 @@ function rvAI(d) {
     s.appendChild(run('Run again'));
     return s;
   }
-  aside.textContent = rvTime(a.finished);
+  aside.textContent = (a.round ? `round ${a.round}${rounds.max ? ' of ' + rounds.max : ''} · ` : '') + rvTime(a.finished);
   if (a.stale) {
     const st = el('div', 'rv-stale');
     st.appendChild(el('span', null, 'The change moved on since this pass. Findings on hunks that changed are marked.'));
     st.appendChild(run('Run again'));
     s.appendChild(st);
+  }
+  if (a.round > 1 && a.read) {
+    s.appendChild(el('div', 'dim rv-delta', `Round ${a.round} read only the ${a.read} hunk${a.read === 1 ? '' : 's'} new ` +
+      `since the earlier rounds. The ${a.skipped} they read ${a.skipped === 1 ? 'is' : 'are'} not read again; ` +
+      'their groups and findings are carried as they were.'));
+  } else if (a.skipped && !a.read) {
+    s.appendChild(el('div', 'dim rv-delta', 'Nothing new to read: every hunk of this version was read in an earlier round.'));
   }
   const groups = el('div', 'rv-groups');
   for (const g of a.groups || []) {
@@ -937,6 +963,7 @@ function rvAI(d) {
     if (g.significance) top.appendChild(rvScale('Effort', g.significance, 'Significance: how much reading it needs, 1 to 5'));
     if (g.criticality) top.appendChild(rvScale('Impact', g.criticality, 'Criticality: the blast radius if it is wrong, 1 to 5'));
     top.appendChild(el('span', 'dim', `${g.hunks.length} hunk${g.hunks.length === 1 ? '' : 's'}`));
+    if (g.round && a.round && g.round < a.round) top.appendChild(rvTag(`round ${g.round}`, 'muted', 'Read in an earlier round, unchanged since'));
     row.appendChild(top);
     if (g.intent) row.appendChild(el('div', 'why', g.intent));
     if (g.why) row.appendChild(el('div', 'why crit', g.why));
@@ -953,7 +980,7 @@ function rvAI(d) {
   const all = a.findings || [];
   const live = all.filter(f => !f.dismissed);
   const list = el('div', 'rv-findings');
-  for (const f of rv.showDismissed ? all : live) list.appendChild(rvFinding(f));
+  for (const f of rv.showDismissed ? all : live) list.appendChild(rvFinding(f, a));
   if (!all.length) list.appendChild(el('div', 'rv-quiet', 'No finding survived verification.'));
   s.appendChild(list);
   const foot = el('div', 'dim rv-afoot');
@@ -961,6 +988,9 @@ function rvAI(d) {
   if (a.unverified) notes.push(a.unverified === 1
     ? '1 finding left out: it did not quote its hunk exactly, or a second look did not confirm it'
     : `${a.unverified} findings left out: they did not quote their hunk exactly, or a second look did not confirm them`);
+  if (a.preExisting) notes.push(a.preExisting === 1
+    ? '1 finding on code the change did not touch left out as pre-existing'
+    : `${a.preExisting} findings on code the change did not touch left out as pre-existing`);
   if (notes.length) foot.appendChild(el('span', null, notes.join(' · ')));
   if (all.length > live.length) {
     const b = el('button', 'ghost xs', rv.showDismissed ? 'Hide dismissed' : `Show ${all.length - live.length} dismissed`);
@@ -972,17 +1002,39 @@ function rvAI(d) {
   return s;
 }
 
+// rvRoundCap: the review round cap stopped the loop. The owner decides: start
+// another round anyway (the run buttons), or mark the cap's thread Satisfied.
+function rvRoundCap(d) {
+  const r = d.rounds;
+  const box = el('div', 'rv-stale rv-cap');
+  box.appendChild(icon('alert'));
+  box.appendChild(el('span', null, `Round cap: ${r.next - 1} review round${r.next === 2 ? '' : 's'} done, the cap is ${r.max}` +
+    (r.capped ? ', and the change moved on again' : '') + '. No further round starts on its own. ' +
+    'A change that keeps drawing findings usually needs its approach rethought rather than another fix.'));
+  const th = (d.threads || []).find(t => t.id === r.escalation);
+  if (th) {
+    const b = el('button', 'ghost xs', 'Satisfied');
+    b.title = 'You looked and decided: this no longer keeps the task out of Done';
+    b.addEventListener('click', () => rvThreadPut(th, { satisfied: true }));
+    box.appendChild(b);
+  }
+  return box;
+}
+
 function rvScale(label, n, title) {
   const t = rvTag(`${label} ${n}/5`, n >= 4 ? 'red' : n === 3 ? 'amber' : 'muted', title);
   return t;
 }
 
-function rvFinding(f) {
+function rvFinding(f, a) {
   const row = el('div', 'rv-finding grade-' + f.grade + (f.dismissed ? ' dismissed' : ''));
   row.appendChild(el('span', 'dot'));
   const txt = el('div', 'txt');
   const ttl = el('div', 'ttl', f.title);
   if (f.stale) ttl.appendChild(rvTag('hunk changed', 'amber', 'The hunk this is about is no longer in the change'));
+  if (f.again) ttl.appendChild(rvTag(`still there in round ${f.again}`, 'amber',
+    `Round ${f.round} raised this, and round ${f.again} found it again where the code is now`));
+  else if (f.round && a && a.round && f.round < a.round) ttl.appendChild(rvTag(`round ${f.round}`, 'muted', 'Raised in an earlier round'));
   txt.appendChild(ttl);
   txt.appendChild(el('div', 'why', f.detail));
   const where = el('a', 'rv-fwhere', `${f.repo}/${f.path}`);
@@ -1036,7 +1088,8 @@ function rvThreads(d) {
     const row = el('div', 'rv-tsum ' + (t.blocking && !t.satisfied ? 'blocking' : t.satisfied ? 'satisfied' : ''));
     row.appendChild(el('span', 'dot'));
     const txt = el('div', 'txt');
-    const where = el('div', 'ttl', `${t.repo}/${t.path}${t.line ? ':' + t.line : ''}`);
+    // A thread on no file is about the task as a whole: the round cap's.
+    const where = el('div', 'ttl', t.path ? `${t.repo}/${t.path}${t.line ? ':' + t.line : ''}` : 'Review rounds');
     if (t.outdated) where.appendChild(rvTag('earlier version', 'muted'));
     txt.appendChild(where);
     const last = t.comments[t.comments.length - 1];
@@ -1046,7 +1099,11 @@ function rvThreads(d) {
       (sent ? ' · sent to the agent' : last.sendErr ? ' · not sent' : '')));
     row.appendChild(txt);
     row.title = 'Go to the comment';
-    row.addEventListener('click', () => rvGo(t.repo + '/' + t.path, true, t.hunk, t.id));
+    row.addEventListener('click', () => {
+      if (t.path) { rvGo(t.repo + '/' + t.path, true, t.hunk, t.id); return; }
+      const card = $('#rv-main [data-card="ai"]');
+      if (card) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
     list.appendChild(row);
   }
   s.appendChild(list);

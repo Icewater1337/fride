@@ -130,6 +130,7 @@ backend's compose file.
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
+| `review` | `{ "maxRounds": 3 }`: the cap on a task's review rounds. See [review](#review). |
 
 ## repos.&lt;name&gt;
 
@@ -420,6 +421,21 @@ sets are in `$FRIDE_HOME/git-identities.companion.json`, and one of yours
 with the same id wins. `fride config check` checks each identity, that ids
 are unique, and that `default` names one of them. Edits apply from the next
 reload of config.json, to tasks created and sessions started after it.
+
+## review
+
+The Review tab's AI pass and the review rounds of a task; see
+[REVIEW.md](REVIEW.md#review-rounds).
+
+```json
+"review": { "maxRounds": 3 }
+```
+
+| field | meaning |
+|---|---|
+| `maxRounds` | The most review→fix rounds of one task. A round is one review of a new version of the change, by the AI pass or the agent reviewer. Past the cap a review of a new version is refused, the owner gets a blocking thread suggesting to rethink the approach, and only they can start another round (*Run anyway*). Default 3; `0` turns the cap off; at most 20. |
+
+Edits apply from the next reload of config.json.
 
 ## requirements
 
