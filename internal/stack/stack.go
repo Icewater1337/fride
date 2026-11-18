@@ -505,7 +505,7 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 	// Only this task's own containers. The shared ones are left on purpose:
 	// another task is very likely using them.
 	var left []string
-	for _, project := range taskProjects(cfg, slug, rec) {
+	for _, project := range rec.projects() {
 		if _, err := composeDown(project); err != nil {
 			warnings = append(warnings, err.Error())
 			left = append(left, project)
@@ -960,7 +960,7 @@ func InfraDown(cfg *config.Config, slug string) error {
 	rec := readRecord(cfg, slug)
 	var errs []error
 	var left []string
-	for _, project := range taskProjects(cfg, slug, rec) {
+	for _, project := range rec.projects() {
 		if _, err := composeDown(project); err != nil {
 			errs = append(errs, err)
 			left = append(left, project)
