@@ -464,12 +464,9 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 	// stdout and stderr, and the controlling terminal of a session it leads.
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	err = cmd.Start()
-	// The process has its own copy now. Ours would keep the terminal open
-	// after it exits, so the reader would never see EOF.
-	_ = tty.Close()
-	if err != nil {
+	if err := cmd.Start(); err != nil {
 		// With no copy of the terminal left, the reader's read returns and it ends.
+		_ = tty.Close()
 		_ = ptmx.Close()
 		return nil, fmt.Errorf("start %s: %w", argv[0], err)
 	}
@@ -481,6 +478,16 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 	// background child that inherited the terminal keeps it open indefinitely.
 	go func() {
 		err := cmd.Wait()
+		// Our copy of the terminal is let go only now, so that the process's
+		// exit is never the terminal's last close. On macOS that exit then
+		// waits for the reader to take what is queued, however long the reader
+		// needs to get a turn, and hangs the terminal up after. Closed straight
+		// after cmd.Start, ours was the last close whenever the process was
+		// done first: a close that waits at most 0.6 s, and less when a signal
+		// interrupts it (the Go runtime preempts goroutines with one), before
+		// it throws the output away. Kept open longer, it would hide the EOF
+		// that ends the reader on Linux.
+		_ = tty.Close()
 		// Let the reader deliver what is still queued, but only for a moment;
 		// with a child holding the PTY it never sees EOF.
 		select {
