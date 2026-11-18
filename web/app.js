@@ -391,11 +391,65 @@ function renderColumns(tasks, force) {
     col.innerHTML = '';
     // Reviewing hidden tasks shows ONLY those, so unhiding is a short list to
     // work through rather than hunting them among the visible ones.
-    const items = tasks.filter(t => t.status === s && (state.showHidden ? t.hidden : !t.hidden));
+    const items = tasks.filter(t => lane(t) === s && (state.showHidden ? t.hidden : !t.hidden));
     $('#count-' + s).textContent = items.length;
     for (const t of items) col.appendChild(card(t));
     if (!items.length) col.appendChild(emptyColumn(s, visible.length));
   }
+}
+
+// lane is the column a task is shown in: its status, except that a task whose
+// pull requests have all landed (none open, at least one merged) reads as
+// done. Only shown so: its status is not changed, and dropping it on Done is
+// still what closes it.
+function lane(t) {
+  const prs = t.prs || [];
+  if (t.status !== 'done' && prs.length && prs.every(p => p.state !== 'open') &&
+      prs.some(p => p.state === 'merged')) return 'done';
+  return t.status;
+}
+
+// prTone is how a pull request reads at a glance: what it needs, if anything.
+function prTone(p) {
+  if (p.state === 'merged') return 'merged';
+  if (p.state === 'closed') return 'closed';
+  if (p.ci === 'failed' || p.conflict) return 'bad';
+  if (p.review === 'changes_requested' || p.threads) return 'warn';
+  if (p.ci === 'pending') return 'run';
+  return 'ok';
+}
+
+// prLabel is a pull request on a card, short: "PR #12 · CI failed". The
+// repository is named only when the task has more than one.
+function prLabel(p, many) {
+  let s = (many && p.repo ? p.repo + ' ' : '') + p.name;
+  if (p.state !== 'open') return s + ' ' + p.state;
+  if (p.draft) s += ' draft';
+  if (p.conflict) s += ' · conflict';
+  if (p.ci === 'failed') s += ' · CI failed';
+  else if (p.ci === 'pending') s += ' · CI running';
+  else if (p.ci === 'passed') s += ' · CI passed';
+  if (p.review === 'changes_requested') s += ' · changes requested';
+  else if (p.threads) s += ` · ${p.threads} open comment${p.threads === 1 ? '' : 's'}`;
+  else if (p.review === 'approved') s += ' · approved';
+  return s;
+}
+
+function prRow(t) {
+  const row = el('div', 'prrow');
+  const many = (t.repos || []).length > 1;
+  for (const p of t.prs) {
+    // The URL comes from the forge; anything but a web link is shown, not followed.
+    const link = /^https?:\/\//.test(p.url || '');
+    const b = el(link ? 'a' : 'span', 'pr ' + prTone(p), prLabel(p, many));
+    b.title = (p.repo ? p.repo + ': ' : '') + p.summary;
+    if (link) {
+      b.href = p.url; b.target = '_blank'; b.rel = 'noopener';
+      b.addEventListener('click', ev => ev.stopPropagation());
+    }
+    row.appendChild(b);
+  }
+  return row;
 }
 
 function emptyColumn(status, visibleCount) {
@@ -466,6 +520,8 @@ function card(t) {
   }
   for (const r of (t.repos || [])) meta.appendChild(el('span', 'pill', r.name));
   c.appendChild(meta);
+  if ((t.prs || []).length) c.appendChild(prRow(t));
+  if (lane(t) !== t.status) c.appendChild(el('div', 'instrow', 'Every pull request merged: drop it on Done to close the task.'));
 
   if (t.stack && t.stack.up) {
     const foot = el('div', 'card-foot');
