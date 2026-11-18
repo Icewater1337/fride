@@ -21,7 +21,8 @@ import (
 
 // Replaying the eval set asks today's AI review about changes that went
 // wrong: would it have caught them? Each case's diff is checked out in a
-// scratch worktree and given to the same three turns the Review tab runs.
+// scratch worktree and given to the same AI pass the Review tab runs, with
+// the finders and agreement config.json sets (review.finders, review.agree).
 // That spends model calls, so it runs only when asked (`fride review eval`)
 // or when config.json schedules it, and at most a few cases at a time.
 
@@ -129,7 +130,9 @@ func appendRun(cfg *config.Config, r Run) error {
 	})
 }
 
-// reviewer is the AI pass; tests put a fake in its place.
+// reviewer is the AI pass; tests put a fake in its place. It gets the
+// configured finders and agreement, so the evals measure the reviewer as it
+// runs in the Review tab.
 var reviewer = review.ReplayAI
 
 // ErrEvalRunning is returned while another replay runs, in this process or
@@ -267,7 +270,9 @@ func replayCase(ctx context.Context, cfg *config.Config, bin string, c *Case) Ca
 	}
 	cctx, cancel := context.WithTimeout(ctx, caseTimeout)
 	defer cancel()
-	out, err := reviewer(cctx, bin, scratch, changes)
+	var opts review.PassOptions
+	opts.Finders, opts.Agree = cfg.Settings.ReviewFinders()
+	out, err := reviewer(cctx, bin, scratch, changes, opts)
 	if err != nil {
 		res.Detail = err.Error()
 		return res

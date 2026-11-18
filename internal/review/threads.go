@@ -63,6 +63,12 @@ func loadThreads(cfg *config.Config, slug string) []Thread {
 func AddThread(cfg *config.Config, slug string, t Thread, text string) (Thread, error) {
 	stateMu.Lock()
 	defer stateMu.Unlock()
+	return addThread(cfg, slug, t, text)
+}
+
+// addThread is AddThread with stateMu held. A thread without a repo and path
+// is about the task as a whole, as the one the review round cap opens.
+func addThread(cfg *config.Config, slug string, t Thread, text string) (Thread, error) {
 	all := loadThreads(cfg, slug)
 	now := time.Now()
 	t.ID = fmt.Sprintf("t%x", now.UnixNano())

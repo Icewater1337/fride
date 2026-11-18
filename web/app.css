@@ -1056,6 +1056,8 @@ button.xs.on { color: var(--accent-fg); background: var(--accent-soft); }
 .rv-rrepo { font-weight: 600; flex: none; }
 .rv-reverts .rv-ctext { font-family: var(--font); font-size: 12px; white-space: normal; }
 .rv-stale { display: flex; align-items: center; gap: 8px; color: var(--amber); font-size: 12px; margin-bottom: 6px; }
+.rv-cap { flex-wrap: wrap; }
+.rv-delta { font-size: 12px; margin-bottom: 6px; }
 .rv-groups { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; }
 .rv-group { padding: 5px 6px; border-radius: var(--radius-sm); font-size: 12.5px; cursor: pointer; }
 .rv-group:hover { background: var(--bg3); }

@@ -40,6 +40,26 @@ Read the merge request's title and description too, and the ticket they
 reference if you can reach it: the review checks that the change does what
 they promise.
 
+## Review rounds
+
+FrIDE counts review rounds per task. Each review of a new version of the
+change is one round, whether you do it or the Review tab's AI pass does, and
+the rounds are capped (three unless the owner configured otherwise). The
+prompt that started you says which round this is.
+
+- **Round 1** reviews the whole change.
+- **Later rounds review the delta.** The prompt lists the commit your previous
+  round reviewed in each repository. Review only what changed since then:
+  `git -C <repo> diff <that commit> origin/<branch>`, limited to the files
+  the merge request itself changes. Read the previous `REVIEW.md` first. Do
+  not report its findings again: say in one line each which were fixed and
+  which still stand.
+- **The cap is final for you.** In the last round, if problems remain, end the
+  report with what the owner has to decide, and say whether the approach
+  needs rethinking rather than one more fix. Never start another review
+  round yourself, and do not ask the author to request one: past the cap only
+  the owner decides.
+
 ## 2. Load each repository's own rules first
 
 Projects write down what their reviews look for. Before reviewing a
@@ -57,6 +77,14 @@ what they leave out.
 
 Read beyond the diff wherever a judgement depends on it: the callers of a
 changed function, the module's existing patterns, the test that covers it.
+
+Reading beyond the diff is for judging the change, not for reviewing code it
+did not touch. Every finding points at a line the change adds or removes.
+When the change breaks code it did not touch (a caller, a test), point at the
+changed line that breaks it. A problem that sits in untouched code and that
+the change did not cause is **pre-existing** and out of scope: it is not a
+finding, whatever its severity. Mention it at most in one line under
+"Pre-existing, out of scope" at the end of the report.
 
 ## 3. The general rubric
 
@@ -185,6 +213,8 @@ For every merge request (or branch), in this order:
 Verdict: tests adequate | tests need work
 
 Not in the merge request: <unpushed commits, uncommitted changes, or "nothing">
+Earlier rounds: <from round 2 on: each earlier finding, fixed or still standing>
+Pre-existing, out of scope: <optional, one line each>
 ```
 
 Order findings by severity. Say "No findings" when there are none. Finish

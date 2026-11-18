@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,25 @@ type AI struct {
 	// Unverified counts findings dropped because they cited nothing real or
 	// the second look did not confirm them.
 	Unverified int `json:"unverified,omitempty"`
+	// PreExisting counts findings dropped because they quoted only a line the
+	// change did not touch: a problem in old code is not this change's to fix,
+	// and a review that keeps raising them never converges.
+	PreExisting int `json:"preExisting,omitempty"`
+	// Round is the review round this pass was (see Round). From the second
+	// round on a pass reads only the hunks no earlier round read: Read counts
+	// those, Skipped the ones it left to the earlier rounds, whose groups and
+	// findings it carries forward.
+	Round   int `json:"round,omitempty"`
+	Read    int `json:"read,omitempty"`
+	Skipped int `json:"skipped,omitempty"`
+	// Finders are the focuses of the finders that answered and Failed of the
+	// ones that did not, Agree how many had to report a problem for it to be
+	// kept, and NoConsensus the problems fewer of them reported. All empty
+	// with a single finder.
+	Finders     []string `json:"finders,omitempty"`
+	Failed      []string `json:"failed,omitempty"`
+	Agree       int      `json:"agree,omitempty"`
+	NoConsensus int      `json:"noConsensus,omitempty"`
 	// Marks are the reviewer's dismissals and votes, by finding id. They are
 	// kept across runs, so a finding raised again stays dismissed.
 	Marks map[string]FindingMark `json:"marks,omitempty"`
@@ -63,6 +83,8 @@ type Group struct {
 	// not worth reading.
 	Why   string   `json:"why,omitempty"`
 	Check []string `json:"check,omitempty"`
+	// Round is the round that read these hunks.
+	Round int `json:"round,omitempty"`
 }
 
 // Finding is one problem the pass found and a second pass confirmed.
@@ -77,6 +99,16 @@ type Finding struct {
 	Quote  string `json:"quote"`
 	// Verdict is the second pass's reason for keeping it.
 	Verdict string `json:"verdict,omitempty"`
+	// Round is the round that first raised it. Again is the last later round
+	// that raised it again: a finding is never listed twice, the earlier one
+	// moves to where the problem is now and keeps its id, so its marks hold.
+	Round int `json:"round,omitempty"`
+	Again int `json:"again,omitempty"`
+	// Votes is how many finders reported it, of the Of that answered, and
+	// Focuses which; unset with a single finder.
+	Votes   int      `json:"votes,omitempty"`
+	Of      int      `json:"of,omitempty"`
+	Focuses []string `json:"focuses,omitempty"`
 	// Computed when served: the reviewer's mark, and whether the hunk is gone.
 	Dismissed bool   `json:"dismissed,omitempty"`
 	Vote      string `json:"vote,omitempty"`
@@ -174,9 +206,29 @@ func MarkFinding(cfg *config.Config, slug, id string, dismissed *bool, vote *str
 	return save(cfg, slug, aiFile, a)
 }
 
+// AIOptions tune one start of the pass.
+type AIOptions struct {
+	// Force starts a round past the cap (see BeginRound). Only the owner sets
+	// it: automation that is refused stops there.
+	Force bool
+}
+
 // StartAI begins a pass over the change in the background. bin is the Claude
 // Code CLI; it runs in the workspace, so a hunk's file is at <repo>/<path>.
+// The round cap applies: past it the pass is refused with ErrRoundCap.
 func StartAI(cfg *config.Config, slug, bin string, c Changes) error {
+	return StartAIWith(cfg, slug, bin, c, AIOptions{})
+}
+
+// StartAIWith is StartAI with options.
+//
+// The pass is one review round. On the version of the change the last round
+// reviewed it re-runs that round; on a new version it is the next round, and
+// it reads only the hunks no earlier round read, carrying the earlier rounds'
+// groups and findings forward. When there is no such hunk (the change only
+// lost hunks, or became noise) it refreshes the result at once: no model, and
+// no round, since nothing new was read.
+func StartAIWith(cfg *config.Config, slug, bin string, c Changes, o AIOptions) error {
 	key := "ai/" + slug
 	if !claim(key) {
 		return fmt.Errorf("an AI review of this task is already running")
@@ -186,20 +238,45 @@ func StartAI(cfg *config.Config, slug, bin string, c Changes) error {
 		release(key)
 		return fmt.Errorf("there is nothing to review: no hunk outside folded noise")
 	}
+	at := anchors(c)
 	stateMu.Lock()
 	a := loadAI(cfg, slug)
-	a.State, a.Started, a.Finished, a.Err = "running", time.Now(), time.Time{}, ""
-	err := save(cfg, slug, aiFile, a)
+	rs := loadRounds(cfg, slug)
+	n, isNew := rs.next(at)
+	plan := planPass(a, hunks, n)
+	if len(plan.read) == 0 {
+		now := time.Now()
+		a.State, a.Started, a.Finished, a.Err = "done", now, now, ""
+		a.Groups, a.Findings, a.Anchors = plan.groups, plan.findings, at
+		a.Unverified, a.PreExisting, a.Read, a.Skipped = 0, 0, 0, plan.skipped
+		a.Finders, a.Failed, a.Agree, a.NoConsensus = nil, nil, 0, 0
+		err := save(cfg, slug, aiFile, a)
+		stateMu.Unlock()
+		release(key)
+		return err
+	}
+	// Whether the AI already reviewed this round: a failed re-run must not
+	// take back a round an earlier run of it read.
+	had := !isNew && slices.Contains(rs.Rounds[len(rs.Rounds)-1].By, ByAI)
+	n, _, err := admit(cfg, slug, &rs, at, ByAI, o.Force)
+	if err == nil {
+		a.State, a.Started, a.Finished, a.Err = "running", time.Now(), time.Time{}, ""
+		if err = save(cfg, slug, aiFile, a); err == nil {
+			err = save(cfg, slug, roundsFile, rs)
+		}
+	}
 	stateMu.Unlock()
 	if err != nil {
 		release(key)
 		return err
 	}
+	opts := PassOptions{Round: n, MaxRounds: maxRounds(cfg)}
+	opts.Finders, opts.Agree = cfg.Settings.ReviewFinders()
 	go func() {
 		defer release(key)
 		ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 		defer cancel()
-		res, err := runAI(ctx, bin, cfg.WorkspaceDir(slug), hunks)
+		res, err := runPass(ctx, bin, cfg.WorkspaceDir(slug), plan, opts)
 		stateMu.Lock()
 		defer stateMu.Unlock()
 		a := loadAI(cfg, slug)
@@ -210,15 +287,169 @@ func StartAI(cfg *config.Config, slug, bin string, c Changes) error {
 			stage, _, _ := strings.Cut(err.Error(), ":")
 			log.Printf("task %s: AI review failed while %s (details in the Review tab)", slug, stage)
 			a.State, a.Err = "failed", err.Error()
+			// A pass that failed read nothing, so it does not use up a round.
+			if !had {
+				rs := loadRounds(cfg, slug)
+				rs.unrecord(n, ByAI)
+				if err := save(cfg, slug, roundsFile, rs); err != nil {
+					log.Printf("task %s: review rounds not saved: %v", slug, err)
+				}
+			}
 		} else {
-			a.Groups, a.Findings, a.Unverified = res.Groups, res.Findings, res.Unverified
-			a.Anchors = anchors(c)
+			a.Groups, a.Findings, a.Unverified, a.PreExisting = res.Groups, res.Findings, res.Unverified, res.PreExisting
+			a.Round, a.Read, a.Skipped = res.Round, res.Read, res.Skipped
+			a.Finders, a.Failed, a.Agree, a.NoConsensus = res.Finders, res.Failed, res.Agree, res.NoConsensus
+			a.Anchors = at
 		}
 		if err := save(cfg, slug, aiFile, a); err != nil {
 			log.Printf("task %s: AI review not saved: %v", slug, err)
 		}
 	}()
 	return nil
+}
+
+// PassOptions say what one pass is beyond the change it reads. The zero value
+// is a pass as it was before rounds: the whole change, nothing carried.
+type PassOptions struct {
+	// Round is the pass's review round. Groups and findings of Earlier from
+	// rounds before it are carried forward, and the hunks those groups cover
+	// are not read again. MaxRounds is the cap, told to the finder.
+	Round, MaxRounds int
+	// Earlier is the last stored pass.
+	Earlier AI
+	// Finders is how many finders read the change in parallel, each with its
+	// own focus, and Agree how many of them must report a problem for it to
+	// be kept. Zero is one finder, keeping all it found.
+	Finders, Agree int
+}
+
+// finders is Finders and Agree in range: at least one finder and at most one
+// per focus, and never more agreement asked than there are finders.
+func (o PassOptions) finders() (n, k int) {
+	n = max(1, min(o.Finders, len(focuses)))
+	return n, min(max(1, o.Agree), n)
+}
+
+// ReviewDiff runs one pass over the change c, read in dir, and returns its
+// result without storing anything: no task, no round, no cap. It is the pass
+// itself, for replaying the reviewer against a past change; StartAI is the
+// same pass with the task's state around it.
+func ReviewDiff(ctx context.Context, bin, dir string, c Changes, o PassOptions) (AI, error) {
+	res, err := runPass(ctx, bin, dir, planPass(o.Earlier, catalog(c), o.Round), o)
+	if err != nil {
+		return AI{State: "failed", Err: err.Error()}, err
+	}
+	res.Anchors, res.Finished = anchors(c), time.Now()
+	return res, nil
+}
+
+// passPlan is what a pass reads and what it carries forward.
+type passPlan struct {
+	read     []hunkRef
+	skipped  int
+	groups   []Group   // from earlier rounds, cut to the hunks still in the change
+	findings []Finding // from earlier rounds, as they were
+}
+
+// planPass splits the change into what round has to read and what earlier
+// rounds already read. The delta is by hunk id: an id is the hash of the
+// hunk's lines against the merge-base, so a hunk nobody touched since keeps
+// it across commits, while one the agent edited, or that an edit next to it
+// grew, gets a new one. Rounds below 1 are passes from before rounds were
+// counted, which are replaced as they always were.
+func planPass(prev AI, hunks []hunkRef, round int) passPlan {
+	var p passPlan
+	inChange := map[string]bool{}
+	for _, h := range hunks {
+		inChange[h.ID] = true
+	}
+	read := map[string]bool{}
+	for _, g := range prev.Groups {
+		if g.Round < 1 || g.Round >= round {
+			continue
+		}
+		var hs []string
+		for _, id := range g.Hunks {
+			if inChange[id] && !read[id] {
+				read[id] = true
+				hs = append(hs, id)
+			}
+		}
+		if len(hs) > 0 {
+			g.Hunks = hs
+			p.groups = append(p.groups, g)
+		}
+	}
+	for _, f := range prev.Findings {
+		if f.Round >= 1 && f.Round < round {
+			p.findings = append(p.findings, f)
+		}
+	}
+	for _, h := range hunks {
+		if read[h.ID] {
+			p.skipped++
+		} else {
+			p.read = append(p.read, h)
+		}
+	}
+	return p
+}
+
+// runPass reads the plan's delta and lays the result over what it carries.
+func runPass(ctx context.Context, bin, dir string, p passPlan, o PassOptions) (AI, error) {
+	out := AI{State: "done", Round: o.Round, Read: len(p.read), Skipped: p.skipped,
+		Groups: p.groups, Findings: p.findings}
+	if len(p.read) == 0 {
+		return out, nil
+	}
+	res, err := runAI(ctx, bin, dir, p.read, o, p.findings)
+	if err != nil {
+		return out, err
+	}
+	for i := range res.Groups {
+		res.Groups[i].Round = o.Round
+	}
+	out.Groups = append(slices.Clone(p.groups), res.Groups...)
+	out.Findings = foldRepeats(p.findings, res.Findings, o.Round)
+	out.Unverified, out.PreExisting = res.Unverified, res.PreExisting
+	out.Finders, out.Failed, out.NoConsensus = res.Finders, res.Failed, res.NoConsensus
+	if n, k := o.finders(); n > 1 {
+		out.Agree = k
+	}
+	return out, nil
+}
+
+// foldRepeats adds a pass's findings to the ones carried from earlier rounds.
+// A finding an earlier round raised is not listed again: the earlier one moves
+// to where the problem is now and records the round that saw it again, and
+// keeps its id, grade and text, so a dismissal or vote on it still holds. A
+// repeat is the same id, or the same file with the same title or quote.
+//
+// shortcut: a second, different problem quoted on the very line of an earlier
+// finding folds into it; titles are too freely worded to require both.
+func foldRepeats(carried, fresh []Finding, round int) []Finding {
+	out := slices.Clone(carried)
+	for _, f := range fresh {
+		i := slices.IndexFunc(out[:len(carried)], func(e Finding) bool { return repeats(e, f) })
+		if i < 0 {
+			f.Round = round
+			out = append(out, f)
+			continue
+		}
+		e := &out[i]
+		e.Hunk, e.Quote, e.Again = f.Hunk, f.Quote, round
+	}
+	return out
+}
+
+func repeats(e, f Finding) bool {
+	if e.ID == f.ID {
+		return true
+	}
+	if e.Repo != f.Repo || e.Path != f.Path {
+		return false
+	}
+	return e.Quote == f.Quote || strings.EqualFold(strings.Join(strings.Fields(e.Title), " "), strings.Join(strings.Fields(f.Title), " "))
 }
 
 // hunkRef is one hunk as the model sees it.
@@ -269,12 +500,21 @@ func render(hunks []hunkRef) string {
 }
 
 type aiResult struct {
-	Groups     []Group
-	Findings   []Finding
-	Unverified int
+	Groups      []Group
+	Findings    []Finding
+	Unverified  int
+	PreExisting int
+	NoConsensus int
+	// Finders are the focuses of the finders that answered, Failed of the
+	// ones that did not; both empty with a single finder.
+	Finders, Failed []string
 }
 
-func runAI(ctx context.Context, bin, dir string, hunks []hunkRef) (aiResult, error) {
+// runAI reads hunks: groups them, has them rated and searched for findings,
+// and keeps the findings that cite the change and survive a second look.
+// earlier are the findings of earlier rounds, shown to the finder so it
+// raises one again only where the problem is still there.
+func runAI(ctx context.Context, bin, dir string, hunks []hunkRef, o PassOptions, earlier []Finding) (aiResult, error) {
 	var res aiResult
 	byID := map[string]hunkRef{}
 	ids := make([]string, len(hunks))
@@ -291,6 +531,7 @@ func runAI(ctx context.Context, bin, dir string, hunks []hunkRef) (aiResult, err
 	res.Groups = reconcile(grouped.Groups, ids)
 
 	var in strings.Builder
+	in.WriteString(roundBrief(o, earlier))
 	for i, g := range res.Groups {
 		fmt.Fprintf(&in, "## group %d: %s\nIntent: %s\n\n", i, g.Title, g.Intent)
 		var hs []hunkRef
@@ -299,39 +540,112 @@ func runAI(ctx context.Context, bin, dir string, hunks []hunkRef) (aiResult, err
 		}
 		in.WriteString(render(hs))
 	}
-	var rated struct {
-		Groups []struct {
-			Index        int      `json:"index"`
-			Significance int      `json:"significance"`
-			Criticality  int      `json:"criticality"`
-			Why          string   `json:"why"`
-			Check        []string `json:"check"`
-		} `json:"groups"`
+	// The finders read the same input in parallel, each with its focus, so
+	// N of them take the time of one; the pass's timeout bounds them all.
+	n, k := o.finders()
+	type reply struct {
+		Groups   []rating  `json:"groups"`
 		Findings []Finding `json:"findings"`
 	}
-	if err := ask(ctx, bin, dir, rateModel, rateSystem, rateSchema, in.String(), &rated); err != nil {
-		return res, fmt.Errorf("rating: %w", err)
+	replies, errs := make([]reply, n), make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			errs[i] = ask(ctx, bin, dir, rateModel, focusSystem(i, n), rateSchema, in.String(), &replies[i])
+		})
 	}
-	for _, r := range rated.Groups {
-		if r.Index >= 0 && r.Index < len(res.Groups) {
-			g := &res.Groups[r.Index]
-			g.Significance, g.Criticality = clamp(r.Significance), clamp(r.Criticality)
-			g.Why, g.Check = r.Why, r.Check
+	wg.Wait()
+	var answered []int
+	var firstErr error
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			answered = append(answered, i)
+		case firstErr == nil:
+			firstErr = err
+		}
+		if n > 1 {
+			if err == nil {
+				res.Finders = append(res.Finders, focuses[i].name)
+			} else {
+				res.Failed = append(res.Failed, focuses[i].name)
+			}
+		}
+	}
+	switch {
+	case len(answered) == 0 && n == 1:
+		return res, fmt.Errorf("rating: %w", firstErr)
+	case len(answered) < k:
+		return res, fmt.Errorf("rating: %d of %d finders answered, and %d must agree: %w", len(answered), n, k, firstErr)
+	}
+	for gi := range res.Groups {
+		var rs []rating
+		for _, i := range answered {
+			// A finder that rated a group twice: its last word, as it always was.
+			for _, r := range slices.Backward(replies[i].Groups) {
+				if r.Index == gi {
+					rs = append(rs, r)
+					break
+				}
+			}
+		}
+		if len(rs) == 0 {
+			continue
+		}
+		r := medianRating(rs)
+		g := &res.Groups[gi]
+		g.Significance, g.Criticality = clamp(r.Significance), clamp(r.Criticality)
+		g.Why, g.Check = r.Why, r.Check
+	}
+
+	// A finding has to point at a hunk of this change and quote it exactly,
+	// and the line it quotes has to be one the change touched. With several
+	// finders, what they all got wrong is counted once.
+	var votes []vote
+	dropped := map[string]bool{}
+	drop := func(count *int, f Finding) {
+		key := f.Hunk + "\x00" + f.Quote + "\x00" + f.Title
+		if n == 1 || !dropped[key] {
+			*count++
+		}
+		dropped[key] = true
+	}
+	for _, i := range answered {
+		for _, f := range replies[i].Findings {
+			f.Quote = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(f.Quote), "+-"))
+			h, ok := byID[f.Hunk]
+			line, changed := -1, false
+			if ok {
+				line, changed = locate(h, f.Quote)
+			}
+			if line < 0 || (f.Grade != "red" && f.Grade != "yellow" && f.Grade != "gray") {
+				drop(&res.Unverified, f)
+				continue
+			}
+			if !changed {
+				drop(&res.PreExisting, f)
+				continue
+			}
+			f.Repo, f.Path = h.Repo, h.Path
+			f.ID = findingID(f)
+			votes = append(votes, vote{f: f, finder: i, line: line})
 		}
 	}
 
-	// A finding has to point at a hunk of this change and quote it exactly.
+	// Several finders vote: a problem is kept once k of them report it.
 	var cited []Finding
-	for _, f := range rated.Findings {
-		f.Quote = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(f.Quote), "+-"))
-		h, ok := byID[f.Hunk]
-		if !ok || !quotes(h, f.Quote) || (f.Grade != "red" && f.Grade != "yellow" && f.Grade != "gray") {
-			res.Unverified++
-			continue
+	if n == 1 {
+		for _, v := range votes {
+			cited = append(cited, v.f)
 		}
-		f.Repo, f.Path = h.Repo, h.Path
-		f.ID = findingID(f)
-		cited = append(cited, f)
+	} else {
+		for _, c := range gather(votes) {
+			if len(c.votes) < k {
+				res.NoConsensus++
+				continue
+			}
+			cited = append(cited, c.agreed(answered))
+		}
 	}
 	if len(cited) == 0 {
 		return res, nil
@@ -407,16 +721,51 @@ func reconcile(groups []Group, ids []string) []Group {
 	return out
 }
 
-func quotes(h hunkRef, q string) bool {
+// locate finds the quote in the hunk: the index of the first line that holds
+// it, -1 for none, preferring a line the change added or removed; changed is
+// whether it is one. A quote found only on a context line is about code the
+// change did not touch: pre-existing.
+func locate(h hunkRef, q string) (line int, changed bool) {
+	line = -1
 	if len(q) < 4 {
-		return false
+		return line, false
 	}
-	for _, l := range h.Lines {
+	for i, l := range h.Lines {
 		if len(l) > 1 && strings.Contains(l[1:], q) {
-			return true
+			if l[0] == '+' || l[0] == '-' {
+				return i, true
+			}
+			if line < 0 {
+				line = i
+			}
 		}
 	}
-	return false
+	return line, false
+}
+
+// roundBrief tells the finder which round it is in. From the second round on
+// it reads only the hunks new since the earlier rounds, and it sees what they
+// reported, so it raises a problem again only where it is still there.
+func roundBrief(o PassOptions, earlier []Finding) string {
+	if o.Round < 2 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "This is review round %d", o.Round)
+	if o.MaxRounds > 0 {
+		fmt.Fprintf(&b, " of at most %d", o.MaxRounds)
+	}
+	b.WriteString(". Earlier rounds reviewed the rest of this change; the hunks below are new or changed since, " +
+		"and they are all you review.\n")
+	if len(earlier) > 0 {
+		b.WriteString("Earlier rounds reported these. Report one again only if the code below still has the problem, " +
+			"with the same title, quoting the line where it is now:\n")
+		for _, f := range earlier {
+			fmt.Fprintf(&b, "- [%s] %s (%s/%s): %s\n", f.Grade, f.Title, f.Repo, f.Path, clipLine(f.Quote, 120))
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func findingID(f Finding) string {
@@ -503,6 +852,9 @@ Then list findings: defects you can point at, not style preferences.
   problem or a risky gap; gray for a minor point.
 - hunk: the id, copied exactly. quote: one line of that hunk, copied exactly,
   without its +/- prefix. A finding whose quote is not in its hunk is discarded.
+- Only what the change touched is in scope: quote a line it added or removed
+  (+ or -), not an unchanged context line. A problem in code the change did not
+  touch is pre-existing; leave it out, it is discarded.
 - No finding rather than a speculative one. An empty list is a good answer.`
 
 const rateSchema = `{"type":"object","additionalProperties":false,"required":["groups","findings"],"properties":{

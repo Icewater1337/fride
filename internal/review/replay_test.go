@@ -25,14 +25,14 @@ func TestReplayAIReviewsAChangeOutsideATask(t *testing.T) {
 		}},
 		verifyModel: map[string]any{"verdicts": []any{map[string]any{"index": 0, "real": true, "reason": "read it"}}},
 	})
-	out, err := ReplayAI(t.Context(), bin, t.TempDir(), c)
+	out, err := ReplayAI(t.Context(), bin, t.TempDir(), c, PassOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(out.Findings) != 1 || out.Findings[0].Path != "server.go" || out.Findings[0].Repo != "api" {
 		t.Errorf("findings: %+v", out.Findings)
 	}
-	if _, err := ReplayAI(t.Context(), bin, t.TempDir(), Changes{}); !errors.Is(err, ErrNothingToReview) {
+	if _, err := ReplayAI(t.Context(), bin, t.TempDir(), Changes{}, PassOptions{}); !errors.Is(err, ErrNothingToReview) {
 		t.Errorf("an empty change: %v", err)
 	}
 }
