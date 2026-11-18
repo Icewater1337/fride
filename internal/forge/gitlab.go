@@ -34,8 +34,24 @@ type glMR struct {
 }
 
 type glUser struct {
+	ID       int    `json:"id"`
 	Username string `json:"username"`
 }
+
+// glReviewer is one reviewer of a merge request and where their review
+// stands: requested_changes is the one that asks the author for work.
+type glReviewer struct {
+	User  glUser `json:"user"`
+	State string `json:"state"`
+}
+
+// glMember is a user's membership of a project, inherited ones included.
+type glMember struct {
+	AccessLevel int `json:"access_level"`
+}
+
+// developerAccess is GitLab's Developer role, the first that may push.
+const developerAccess = 30
 
 type glPipe struct {
 	ID     int    `json:"id"`
@@ -127,6 +143,34 @@ func (c Client) gitlab(ctx context.Context, t Target, prev *PR, reviews bool) (*
 		proj = "projects/" + strconv.Itoa(m.ProjectID)
 	}
 	var errs []string
+	trust := func(u glUser) Trust {
+		tr, err := c.gitlabTrust(ctx, t, proj, u, pr.Author)
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+		return tr
+	}
+
+	if pr.Review == ChangesRequested {
+		// GitLab's merge status says changes were requested, not by whom: the
+		// reviewers do, and who they are decides whether it is passed on.
+		var rs []glReviewer
+		if err := api(proj+"/merge_requests/"+strconv.Itoa(m.IID)+"/reviewers", &rs); err != nil {
+			errs = append(errs, err.Error())
+			if prev != nil {
+				// As it was, so that a failed read does not end the request
+				// and have it told again when it reads again.
+				pr.Changes = prev.Changes
+			}
+		} else {
+			for _, r := range rs {
+				if r.State == "requested_changes" {
+					pr.Changes = append(pr.Changes, Review{ID: "requested_changes:" + r.User.Username,
+						Author: r.User.Username, Trust: trust(r.User)})
+				}
+			}
+		}
+	}
 
 	if pr.CI == CIFailed && m.HeadPipeline != nil {
 		var jobs []glJob
@@ -188,7 +232,7 @@ func (c Client) gitlab(ctx context.Context, t Target, prev *PR, reviews bool) (*
 			}
 			break
 		}
-		pr.Threads, pr.ThreadsRead = gitlabThreads(ds, pr.URL), true
+		pr.Threads, pr.ThreadsRead = gitlabThreads(ds, pr.URL, trust), true
 	default:
 		pr.Threads, pr.ThreadsRead = prev.Threads, prev.ThreadsRead
 	}
@@ -223,10 +267,9 @@ func (m glMR) pr() *PR {
 	}
 	switch m.DetailedStatus {
 	case "requested_changes":
+		// Who requested them is read with the reviewers (gitlab), and what
+		// to change is in the threads.
 		pr.Review = ChangesRequested
-		// GitLab says changes were requested, not by whom or why: that is in
-		// the threads. One review stands for the request as a whole.
-		pr.Changes = []Review{{ID: "requested_changes"}}
 	case "not_approved":
 		pr.Review = ReviewRequired
 	}
@@ -243,9 +286,51 @@ func (m glMR) pr() *PR {
 	return pr
 }
 
+// gitlabTrust is whether u's words may be passed to the agent: u opened the
+// merge request, or may push to the project (Developer or above, inherited
+// membership included). A note carries no role, so it is looked up, once per
+// user and project for as long as the cache keeps it. A user who is not a
+// member at all is answered with a 404; any other failure is reported, and
+// not trusted either.
+func (c Client) gitlabTrust(ctx context.Context, t Target, proj string, u glUser, mrAuthor string) (Trust, error) {
+	if isAuthor(u.Username, mrAuthor) {
+		return trusted, nil
+	}
+	if u.ID == 0 {
+		return Trust{Doubt: unknownAccess}, nil
+	}
+	key := t.Host + " " + proj + " " + strconv.Itoa(u.ID)
+	if tr, ok := c.members.get(key); ok {
+		return tr, nil
+	}
+	out, err := c.Run(ctx, t.Dir, t.Env, "glab", "api", "--hostname", t.Host,
+		proj+"/members/all/"+strconv.Itoa(u.ID))
+	var m glMember
+	switch {
+	case err != nil && strings.Contains(err.Error(), "404"):
+		tr := Trust{Doubt: noWriteAccess}
+		c.members.put(key, tr, memberEvery)
+		return tr, nil
+	case err == nil:
+		err = json.Unmarshal(out, &m)
+	}
+	if err != nil {
+		tr := Trust{Doubt: unknownAccess}
+		c.members.put(key, tr, failBase)
+		return tr, fmt.Errorf("the access of %s: %v", u.Username, err)
+	}
+	tr := Trust{Doubt: noWriteAccess}
+	if m.AccessLevel >= developerAccess {
+		tr = trusted
+	}
+	c.members.put(key, tr, memberEvery)
+	return tr, nil
+}
+
 // gitlabThreads are the discussions with a note still to resolve. System
-// notes ("added 2 commits") are GitLab's own, not a reviewer's.
-func gitlabThreads(ds []glDiscussion, mrURL string) []Thread {
+// notes ("added 2 commits") are GitLab's own, not a reviewer's. trust says
+// whose notes may be passed on.
+func gitlabThreads(ds []glDiscussion, mrURL string, trust func(glUser) Trust) []Thread {
 	var out []Thread
 	for _, d := range ds {
 		open := false
@@ -271,7 +356,8 @@ func gitlabThreads(ds []glDiscussion, mrURL string) []Thread {
 					}
 				}
 			}
-			th.Comments = append(th.Comments, Comment{ID: strconv.Itoa(n.ID), Author: n.Author.Username, Body: n.Body})
+			th.Comments = append(th.Comments, Comment{ID: strconv.Itoa(n.ID), Author: n.Author.Username,
+				Body: n.Body, Trust: trust(n.Author)})
 		}
 		if len(th.Comments) > 0 {
 			out = append(out, th)

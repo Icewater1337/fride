@@ -53,6 +53,9 @@ type entry struct {
 
 // NewWatcher returns a Watcher asking through c.
 func NewWatcher(c Client) *Watcher {
+	if c.members == nil {
+		c.members = newMemberCache()
+	}
 	return &Watcher{Client: c, seen: map[string]*entry{}, missing: map[string]bool{}}
 }
 

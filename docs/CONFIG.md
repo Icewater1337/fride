@@ -494,6 +494,20 @@ also types what is wrong into the task's agent, without a model call:
   request stacked on another open one, whose conflicts its parent's merge
   settles.
 
+Reviews and review comments are passed on only from people who can push to
+the repository, and from the pull request's own author (the account the task
+pushes as). On a public repository anyone can review a pull request, and the
+agent has a shell: a stranger's review must not become an instruction. On
+GitHub that is the author's role as GitHub states it on each review and
+comment: `OWNER`, `MEMBER` or `COLLABORATOR`. On GitLab a note carries no
+role, so the author's project membership is looked up (`Developer` or
+above, inherited membership included) and kept for ten minutes. A role that
+is missing, or a lookup that fails, counts as no access. A thread is passed
+on with its trusted comments only, and not at all when it has none; the
+threads following the task are told once per author that something from
+them was not passed on. What is passed on is introduced as the reviewer's
+words about the change, not as instructions beyond it.
+
 Each is a message of its own, typed only while the agent sits at its prompt
 (not working, not on a dialog, not just told something, no instruction held
 for it), one per look; the next waits until it is back at its prompt. Each
@@ -530,7 +544,7 @@ The token the tool uses needs to read, besides the repository:
 | | |
 |---|---|
 | GitHub, fine-grained token or app | **Pull requests: read** (the pull request, reviews, review threads), **Checks: read** and **Commit statuses: read** (CI), **Actions: read** (job logs). A classic token needs `repo`. |
-| GitLab | `read_api` (or `api`), as a member who can see the project's pipelines and job logs. |
+| GitLab | `read_api` (or `api`), as a member who can see the project's pipelines, job logs and members. Without the members, no GitLab review comment is passed on. |
 
 ## requirements
 

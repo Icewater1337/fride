@@ -37,10 +37,11 @@ type ghPR struct {
 	MergeStateStatus string `json:"mergeStateStatus"`
 	ReviewDecision   string `json:"reviewDecision"`
 	LatestReviews    []struct {
-		ID     string `json:"id"`
-		Author ghUser `json:"author"`
-		Body   string `json:"body"`
-		State  string `json:"state"`
+		ID                string `json:"id"`
+		Author            ghUser `json:"author"`
+		AuthorAssociation string `json:"authorAssociation"`
+		Body              string `json:"body"`
+		State             string `json:"state"`
 	} `json:"latestReviews"`
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
 }
@@ -132,7 +133,7 @@ func (c Client) github(ctx context.Context, t Target, prev *PR, reviews bool) (*
 
 	switch {
 	case reviews || prev == nil || !prev.ThreadsRead:
-		threads, err := c.githubThreads(ctx, t, host, repo, pr.Number)
+		threads, err := c.githubThreads(ctx, t, host, repo, pr.Number, pr.Author)
 		if err != nil {
 			errs = append(errs, err.Error())
 			if prev != nil {
@@ -198,7 +199,8 @@ func (g *ghPR) pr() *PR {
 	}
 	for _, r := range g.LatestReviews {
 		if r.State == "CHANGES_REQUESTED" {
-			pr.Changes = append(pr.Changes, Review{ID: r.ID, Author: r.Author.Login, Body: r.Body})
+			pr.Changes = append(pr.Changes, Review{ID: r.ID, Author: r.Author.Login, Body: r.Body,
+				Trust: githubTrust(r.AuthorAssociation, r.Author.Login, pr.Author)})
 		}
 	}
 	pr.CI, pr.Pending, pr.Failed = githubCI(g.StatusCheckRollup)
@@ -294,7 +296,7 @@ const threadsQuery = `query($owner: String!, $repo: String!, $number: Int!) {
       reviewThreads(last: 100) {
         nodes {
           id isResolved isOutdated path line
-          comments(first: 20) { nodes { id url body author { login } } }
+          comments(first: 20) { nodes { id url body authorAssociation author { login } } }
         }
       }
     }
@@ -318,6 +320,9 @@ type ghThreads struct {
 								URL    string `json:"url"`
 								Body   string `json:"body"`
 								Author ghUser `json:"author"`
+								// AuthorAssociation is the author's role
+								// in the repository (Trust).
+								AuthorAssociation string `json:"authorAssociation"`
 							} `json:"nodes"`
 						} `json:"comments"`
 					} `json:"nodes"`
@@ -327,7 +332,7 @@ type ghThreads struct {
 	} `json:"data"`
 }
 
-func (c Client) githubThreads(ctx context.Context, t Target, host, repo string, number int) ([]Thread, error) {
+func (c Client) githubThreads(ctx context.Context, t Target, host, repo string, number int, prAuthor string) ([]Thread, error) {
 	owner, name, ok := strings.Cut(repo, "/")
 	if !ok {
 		return nil, fmt.Errorf("cannot tell the repository of the pull request")
@@ -350,9 +355,28 @@ func (c Client) githubThreads(ctx context.Context, t Target, host, repo string, 
 		th := Thread{ID: n.ID, Path: n.Path, Line: n.Line, Outdated: n.IsOutdated,
 			URL: n.Comments.Nodes[0].URL}
 		for _, c := range n.Comments.Nodes {
-			th.Comments = append(th.Comments, Comment{ID: c.ID, Author: c.Author.Login, Body: c.Body})
+			th.Comments = append(th.Comments, Comment{ID: c.ID, Author: c.Author.Login, Body: c.Body,
+				Trust: githubTrust(c.AuthorAssociation, c.Author.Login, prAuthor)})
 		}
 		threads = append(threads, th)
 	}
 	return threads, nil
+}
+
+// githubTrust reads an author's role in the repository, which GitHub states
+// on every review and comment. OWNER, MEMBER (of the owning organisation) and
+// COLLABORATOR may push; CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE and the
+// rest are anyone at all. A role that is missing is not known, and not
+// trusted.
+func githubTrust(association, login, prAuthor string) Trust {
+	if isAuthor(login, prAuthor) {
+		return trusted
+	}
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return trusted
+	case "":
+		return Trust{Doubt: unknownAccess}
+	}
+	return Trust{Doubt: noWriteAccess}
 }

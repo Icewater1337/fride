@@ -109,6 +109,36 @@ type Review struct {
 	ID     string `json:"id"`
 	Author string `json:"author,omitempty"`
 	Body   string `json:"body,omitempty"`
+	Trust
+}
+
+// Trust says whether what someone wrote on a pull request may be passed to
+// the task's agent. On a public repository anyone can review or comment, and
+// the agent has a shell: a stranger's review typed into it would be a
+// stranger giving it orders. So only the words of people who may push to the
+// repository, and of the pull request's own author, are trusted. Not knowing
+// is not trusting: a role that cannot be read, or a lookup that failed, is
+// Doubt, never Trusted.
+type Trust struct {
+	Trusted bool `json:"trusted,omitempty"`
+	// Doubt says why not, as what follows "who": "has no write access to
+	// the repository".
+	Doubt string `json:"doubt,omitempty"`
+}
+
+// Why a comment is not trusted.
+const (
+	noWriteAccess = "has no write access to the repository"
+	unknownAccess = "could not be checked for write access"
+)
+
+// trusted is the Trust of someone who may push, or who opened the pull request.
+var trusted = Trust{Trusted: true}
+
+// isAuthor is whether login opened the pull request: the account the task
+// pushes as, normally, whose words are the user's own.
+func isAuthor(login, prAuthor string) bool {
+	return login != "" && prAuthor != "" && strings.EqualFold(login, prAuthor)
 }
 
 // Thread is one unresolved review thread: a comment and its replies.
@@ -126,6 +156,7 @@ type Comment struct {
 	ID     string `json:"id"`
 	Author string `json:"author,omitempty"`
 	Body   string `json:"body"`
+	Trust
 }
 
 // Target is one repository worktree of a task, as a lookup needs it.
@@ -215,6 +246,9 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 // Client looks pull requests up.
 type Client struct {
 	Run Runner
+	// members keeps GitLab membership answers (Trust), when set: one lookup
+	// per user and project, not one per comment and look. NewWatcher sets it.
+	members *memberCache
 }
 
 // Lookup finds the pull request of t's branch: the open one, or else the

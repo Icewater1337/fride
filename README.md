@@ -328,7 +328,8 @@ stack…) that FrIDE validates, rate-limits and logs in the chat.
 Once a task's branch has a pull request, FrIDE follows it with `gh` or
 `glab`: the board shows its CI, conflicts and reviews, and for the tasks the
 orchestrator watches, a failing check (with the end of its log), each review
-comment and a merge conflict are typed into the agent, each once. See
+comment from someone who can push to the repository, and a merge conflict
+are typed into the agent, each once. See
 [pullRequests](docs/CONFIG.md#pullrequests).
 
 ## Security posture
