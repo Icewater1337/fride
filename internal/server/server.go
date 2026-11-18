@@ -1014,6 +1014,7 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			Agent  string `json:"agent"` // empty: the task's own agent
 			Model  string `json:"model"` // empty: the CLI's default
 			Effort string `json:"effort"`
+			Force  bool   `json:"force"` // the owner starts a round past the cap
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, 400, err)
@@ -1053,8 +1054,14 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			}
 			repos = append(repos, review.Repo{Name: tr.Name, Branch: b, BaseRef: tr.BaseRef})
 		}
+		// A reviewer agent is a review round like the AI pass, under the same cap.
+		round, err := review.BeginRound(s.cfg, slug, review.ByAgent, s.changes(t), req.Force)
+		if err != nil {
+			writeRoundErr(w, err)
+			return
+		}
 		sess, err := s.launchAgent(slug, kind, "review "+string(kind), agent.Options{
-			Dangerous: t.Dangerous, Model: model, Effort: req.Effort, Prompt: review.Prompt(repos)})
+			Dangerous: t.Dangerous, Model: model, Effort: req.Effort, Prompt: review.PromptRound(repos, round)})
 		if err != nil {
 			writeErr(w, 500, err)
 			return

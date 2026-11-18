@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"slices"
@@ -124,8 +125,17 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request, t *store.
 		writeJSON(w, 200, map[string]any{"repo": req.Repo, "path": req.Path, "viewed": req.Viewed})
 
 	case sub == "ai" && r.Method == http.MethodPost:
-		if err := review.StartAI(s.cfg, slug, s.cfg.ClaudeBin, s.changes(t)); err != nil {
-			writeErr(w, 409, err)
+		// {"force": true} is the owner starting a round past the cap; an empty
+		// body is a plain start.
+		var req struct {
+			Force bool `json:"force"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, 400, err)
+			return
+		}
+		if err := review.StartAIWith(s.cfg, slug, s.cfg.ClaudeBin, s.changes(t), review.AIOptions{Force: req.Force}); err != nil {
+			writeRoundErr(w, err)
 			return
 		}
 		writeJSON(w, 202, review.LoadAI(s.cfg, slug))
@@ -357,6 +367,13 @@ func (s *Server) handleReviewQueue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, out)
+}
+
+// writeRoundErr answers a review that could not start with 409. roundCap
+// tells a refusal by the round cap from the rest, so the UI can offer the
+// owner to start the round anyway.
+func writeRoundErr(w http.ResponseWriter, err error) {
+	writeJSON(w, 409, map[string]any{"error": err.Error(), "roundCap": errors.Is(err, review.ErrRoundCap)})
 }
 
 func hasRepo(t *store.Task, name string) bool {

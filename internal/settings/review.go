@@ -1,65 +1,82 @@
 package settings
 
-import (
-	"fmt"
-	"slices"
-	"strings"
-)
+import "fmt"
 
-// Review tiers, from the least human review to the most. A change's tier is
-// set by the paths it touches, not by who wrote it: an agent's change to the
-// docs needs nobody, a person's change to a migration needs two.
-const (
-	TierAuto   = "auto"   // docs, flag-guarded code: no human approval
-	TierNormal = "normal" // code: one
-	TierRisky  = "risky"  // auth, payments, migrations, CI/CD, infra: two
-)
-
-// Tiers lists them in that order.
-var Tiers = []string{TierAuto, TierNormal, TierRisky}
-
-// Review is a repository's review settings. The same shape is read from
-// repos.<name>.review in config.json and from the repo's own .fride/review.json.
+// Review tunes the Review tab's AI pass and the review rounds of a task.
 type Review struct {
-	// Tiers are rules from paths to a tier. The first rule a path matches
-	// decides its tier; a path no rule matches falls to FrIDE's defaults.
-	Tiers []TierRule `json:"tiers,omitempty"`
+	// MaxRounds caps the review→fix rounds of one task: past it, a review of a
+	// new version of the change is refused until the owner starts it by hand.
+	// Default 3; 0 turns the cap off. A pointer, because 0 is meaningful.
+	MaxRounds *int `json:"maxRounds,omitempty"`
+	// Finders is how many finders the AI pass runs in parallel, each with its
+	// own focus (correctness, security, tests, …). Default 3; 1 is the single
+	// finder covering everything that the pass started with.
+	Finders int `json:"finders,omitempty"`
+	// Agree is how many finders must report the same problem before it is
+	// shown. Default 2, and never more than Finders.
+	Agree int `json:"agree,omitempty"`
 }
 
-// TierRule puts the paths that match one of its patterns in a tier.
-type TierRule struct {
-	Tier string `json:"tier"`
-	// Paths are gitignore-style patterns from the repo root: "docs/**",
-	// "*.md", "flags/", "/Makefile". See docs/CONFIG.md.
-	Paths []string `json:"paths"`
-	// Why is shown to the reviewer next to each file the rule placed, such
-	// as "flag-guarded: ships dark behind the rollout flag".
-	Why string `json:"why,omitempty"`
-}
+// DefaultReviewMaxRounds is the round cap when config.json does not say. Three
+// rounds give an agent two chances to fix what a review found; a change that
+// still draws findings after that needs a different approach, not a fourth
+// look at it.
+const (
+	DefaultReviewMaxRounds = 3
+	maxReviewRounds        = 20
+)
 
-// Problems checks review settings; where names them in each message. The
-// review reads a repo's .fride/review.json with the same check, so a file
-// that fails it is reported, not half used.
-func (r *Review) Problems(where string) []Problem {
-	if r == nil {
-		return nil
+// The finders' defaults and bound. Each finder is a strong model reading the
+// whole change, so the bound is on cost: five is five times the single finder.
+const (
+	DefaultReviewFinders = 3
+	DefaultReviewAgree   = 2
+	MaxReviewFinders     = 5
+)
+
+// ReviewMaxRounds is review.maxRounds with its default applied; 0 means no cap.
+func (s *Settings) ReviewMaxRounds() int {
+	if s == nil || s.Review == nil || s.Review.MaxRounds == nil {
+		return DefaultReviewMaxRounds
 	}
+	return max(0, *s.Review.MaxRounds)
+}
+
+// ReviewFinders is review.finders and review.agree with their defaults
+// applied and brought into range: agree is never more than finders, so a
+// config check that was skipped cannot make a pass that keeps nothing.
+func (s *Settings) ReviewFinders() (finders, agree int) {
+	finders = DefaultReviewFinders
+	if s != nil && s.Review != nil {
+		if s.Review.Finders > 0 {
+			finders = s.Review.Finders
+		}
+		agree = s.Review.Agree
+	}
+	finders = min(finders, MaxReviewFinders)
+	if agree <= 0 {
+		agree = DefaultReviewAgree
+	}
+	return finders, min(agree, finders)
+}
+
+func (r *Review) check() []Problem {
 	var out []Problem
-	for i, t := range r.Tiers {
-		w := fmt.Sprintf("%s.tiers[%d]", where, i)
-		if !slices.Contains(Tiers, t.Tier) {
-			out = append(out, Problem{Error: true, Where: w + ".tier",
-				Msg: fmt.Sprintf("%q is not a tier: use %s", t.Tier, strings.Join(Tiers, ", "))})
-		}
-		if len(t.Paths) == 0 {
-			out = append(out, Problem{Error: true, Where: w + ".paths", Msg: "list at least one path pattern"})
-		}
-		for j, p := range t.Paths {
-			if strings.Trim(strings.TrimSpace(p), "/") == "" {
-				out = append(out, Problem{Error: true, Where: fmt.Sprintf("%s.paths[%d]", w, j),
-					Msg: "an empty pattern: name a path, such as docs/** or *.md"})
-			}
-		}
+	add := func(where, format string, a ...any) {
+		out = append(out, Problem{Error: true, Where: "review." + where, Msg: fmt.Sprintf(format, a...)})
+	}
+	if r.MaxRounds != nil && (*r.MaxRounds < 0 || *r.MaxRounds > maxReviewRounds) {
+		add("maxRounds", "between 0 (no cap) and %d", maxReviewRounds)
+	}
+	if r.Finders < 0 || r.Finders > MaxReviewFinders {
+		add("finders", "between 1 and %d", MaxReviewFinders)
+	}
+	finders := r.Finders
+	if finders == 0 {
+		finders = DefaultReviewFinders
+	}
+	if r.Agree < 0 || r.Agree > finders {
+		add("agree", "between 1 and finders (%d): a finding is shown once that many finders report it", finders)
 	}
 	return out
 }

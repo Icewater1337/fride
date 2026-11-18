@@ -69,6 +69,8 @@ type Settings struct {
 	Companion *Companion `json:"companion,omitempty"`
 	// Git is the git identities a task can be created with (GIT.md).
 	Git *Git `json:"git,omitempty"`
+	// Review tunes the AI review pass and caps review rounds (REVIEW.md).
+	Review *Review `json:"review,omitempty"`
 	// Quality schedules the outcome record and the eval replay (REVIEW.md).
 	Quality *Quality `json:"quality,omitempty"`
 
@@ -100,7 +102,7 @@ type Repo struct {
 	// Review says how much human review a change to this repo needs: its
 	// tier rules come before the repo's own .fride/review.json and FrIDE's
 	// defaults (docs/REVIEW.md).
-	Review *Review `json:"review,omitempty"`
+	Review *RepoReview `json:"review,omitempty"`
 }
 
 // Step is one setup command.

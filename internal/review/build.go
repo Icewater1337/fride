@@ -26,6 +26,8 @@ type Changes struct {
 	Revert  map[string]RevertCheck `json:"revert"`
 	Size    Size                   `json:"size"`
 	Risk    Risk                   `json:"risk"`
+	// Rounds are the task's review rounds and the cap on them.
+	Rounds Rounds `json:"rounds"`
 	// Gate is the review tier of the change and the approvals it has.
 	Gate Gate `json:"gate"`
 	// LastReview is when the reviewer last marked a file viewed.
@@ -39,6 +41,9 @@ type Kept struct {
 	AI       AI
 	Revert   map[string]RevertCheck
 	Captures []Capture
+	Rounds   roundsState
+	// MaxRounds is the round cap from config.json, 0 for none.
+	MaxRounds int
 	// Approvals and Accountable are approvals.json.
 	Approvals   []Approval
 	Accountable Accountable
@@ -55,6 +60,7 @@ func LoadKept(cfg *config.Config, slug string) Kept {
 		Revert:   loadRevert(cfg, slug),
 		Captures: loadCaptures(cfg, slug),
 	}
+	k.Rounds, k.MaxRounds = loadRounds(cfg, slug), maxRounds(cfg)
 	a := loadApprovals(cfg, slug)
 	k.Approvals = a.Approvals
 	if a.Accountable != nil {
@@ -93,7 +99,7 @@ type RepoSpec struct {
 	Dir  string
 	Base string
 	// Review is the repo's review settings from config.json, nil for none.
-	Review *settings.Review
+	Review *settings.RepoReview
 }
 
 // Build reads every repository's change, attributes its lines to the agent's
@@ -158,6 +164,7 @@ func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry)
 		}
 	}
 
+	out.Rounds = roundsView(kept.Rounds, kept.MaxRounds, out, kept.AI)
 	out.Size = sizeOf(out.Repos)
 	out.Evidence = evidence(out.Repos, tr)
 	out.Focus = focus(out.Repos, dirs, tr, out.Evidence, entries)

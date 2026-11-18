@@ -27,7 +27,8 @@ type Approval struct {
 	Via string    `json:"via"`
 	At  time.Time `json:"at"`
 	// Version is each repository's head and diff hash as the reviewer had
-	// them on screen.
+	// them on screen. The diff hashes decide (sameVersion, as for review
+	// rounds): committing the approved work moves the head, not the change.
 	Version map[string]Anchor `json:"version"`
 	// Tier is the task's tier when it was given, for the record.
 	Tier string `json:"tier"`
@@ -290,20 +291,6 @@ func gate(repos []RepoChanges, tiers []RepoTier, kept Kept) Gate {
 	return g
 }
 
-// sameVersion: every repository at the same head and diff, and no more or
-// fewer of them.
-func sameVersion(a, b map[string]Anchor) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for repo, x := range b {
-		if y, ok := a[repo]; !ok || y != x {
-			return false
-		}
-	}
-	return true
-}
-
 // Specs are a task's repositories that have a worktree, with their base and
 // the review rules config.json gives them.
 func Specs(cfg *config.Config, t *store.Task) []RepoSpec {
@@ -322,7 +309,7 @@ func Specs(cfg *config.Config, t *store.Task) []RepoSpec {
 		if base == "" {
 			base = workspace.DefaultBase(dir)
 		}
-		var rv *settings.Review
+		var rv *settings.RepoReview
 		if cfg.Settings != nil {
 			rv = cfg.Settings.Repo(tr.Name).Review
 		}

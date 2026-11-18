@@ -107,7 +107,7 @@ func TestTierRulesPerRepo(t *testing.T) {
 	gitT(t, dir, "switch", "-q", "work")
 	gitT(t, dir, "merge", "-q", "main")
 
-	spec := RepoSpec{Name: "api", Dir: dir, Base: "main", Review: &settings.Review{Tiers: []settings.TierRule{
+	spec := RepoSpec{Name: "api", Dir: dir, Base: "main", Review: &settings.RepoReview{Tiers: []settings.TierRule{
 		{Tier: "auto", Paths: []string{"flags/**"}, Why: "flag-guarded"},
 		{Tier: "risky", Paths: []string{"core/"}},
 		{Tier: "auto", Paths: []string{"experiments/a.go"}},

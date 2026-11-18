@@ -119,7 +119,7 @@ var fallback = rule{tier: settings.TierNormal, why: "code or config that no rule
 // configRules compiles the rules of a Review. A rule whose tier is unknown
 // counts as risky: `config check` reports it, and until it is fixed the
 // typo must not be what lets a change through.
-func configRules(rv *settings.Review, source string) []rule {
+func configRules(rv *settings.RepoReview, source string) []rule {
 	if rv == nil {
 		return nil
 	}
@@ -157,7 +157,7 @@ func repoRules(spec RepoSpec, mergeBase string) ([]rule, error) {
 // rules. A file that does not parse, or names an unknown field or tier, is
 // an error rather than half a rule set: a typo must not quietly drop a rule
 // that raised a tier.
-func readRepoRules(dir, mergeBase string) (*settings.Review, error) {
+func readRepoRules(dir, mergeBase string) (*settings.RepoReview, error) {
 	if mergeBase == "" {
 		return nil, nil
 	}
@@ -169,7 +169,7 @@ func readRepoRules(dir, mergeBase string) (*settings.Review, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %v", RulesFile, err)
 	}
-	var rv settings.Review
+	var rv settings.RepoReview
 	dec := json.NewDecoder(strings.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&rv); err != nil {
