@@ -162,7 +162,13 @@ POST /api/companion/tasks/<task_id>/close
 
 The same as moving the card to Done: the rationale document is written, the
 task's agents and stack stop, and its port slot is freed. The workspace and
-the branches stay. Archive the task first with an export if you want it
+the branches stay. Like Done, it is refused (`400`, the reason in `error`)
+while a blocking review comment is open or the change lacks the human
+approvals its review tier asks for; `GET /api/tasks/<task_id>/changes/gate`
+says which ([REVIEW.md](REVIEW.md#review-tiers-and-approvals)). Where no
+person approves in the Review tab, set the counts to zero in config.json:
+`"review": { "approvals": { "normal": 0, "risky": 0 } }` (or per repository,
+`repos.<name>.review.approvals`; see [CONFIG.md](CONFIG.md#review)). Archive the task first with an export if you want it
 elsewhere, then remove it with `DELETE /api/tasks/<task_id>`.
 
 ### Can this computer start a stack now?

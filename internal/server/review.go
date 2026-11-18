@@ -7,38 +7,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/fleet"
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/orchestrator"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/store"
-	"github.com/Icewater1337/fride/internal/workspace"
 )
 
 // repoSpecs are the task's repositories that have a worktree, with their base.
-func (s *Server) repoSpecs(t *store.Task) []review.RepoSpec {
-	present := map[string]bool{}
-	for _, r := range workspace.Repos(s.cfg, t.Slug) {
-		present[r.Name] = true
-	}
-	var repos []review.RepoSpec
-	for _, tr := range t.Repos {
-		// A repo the task names but whose worktree is gone has nothing to diff.
-		if !present[tr.Name] {
-			continue
-		}
-		dir := s.cfg.RepoDir(t.Slug, tr.Name)
-		base := tr.BaseRef
-		if base == "" {
-			base = workspace.DefaultBase(dir)
-		}
-		repos = append(repos, review.RepoSpec{Name: tr.Name, Dir: dir, Base: base})
-	}
-	return repos
-}
+func (s *Server) repoSpecs(t *store.Task) []review.RepoSpec { return review.Specs(s.cfg, t) }
 
 // changes assembles the Review tab: every repository of the task against its
 // base, the agent's transcripts, the decision log, and what the review kept.
@@ -50,7 +32,52 @@ func (s *Server) changes(t *store.Task) review.Changes {
 	if err != nil {
 		log.Printf("task %s: review without the decision log: %v", t.Slug, err)
 	}
-	return review.Build(s.repoSpecs(t), review.LoadKept(s.cfg, t.Slug), tr, entries)
+	c := review.Build(s.repoSpecs(t), review.KeptFor(s.cfg, t), tr, entries)
+	s.gateExtras(t, &c.Gate)
+	return c
+}
+
+// fromBrowser is set by a node's proxy on a request it forwards from a
+// person's browser. The other node cannot see that Origin any more (the proxy
+// removes it, and the fleet listener refuses it), and it decides by this
+// whether a review approval counts. It is believed only on the fleet listener.
+const fromBrowser = "X-Fride-From-Browser"
+
+// gateExtras fills in what only the server knows: who an approval from here
+// is recorded as, and the inbox thread a task's prompt came through.
+func (s *Server) gateExtras(t *store.Task, g *review.Gate) {
+	g.You, _ = review.PersonOf(s.cfg, t)
+	if s.orch == nil {
+		return
+	}
+	// Newest first: the oldest thread that names the task is the one whose
+	// message started it.
+	threads := s.orch.Threads()
+	for i := len(threads) - 1; i >= 0; i-- {
+		if th := threads[i]; slices.Contains(th.Tasks, t.Slug) {
+			g.Accountable.Via = fmt.Sprintf("inbox thread #%d, from %s", th.ID, th.Source)
+			return
+		}
+	}
+}
+
+// approver says how an approval arrived, and whether a person gave it. Only
+// a browser counts: on this computer one sends an Origin (the guard has
+// checked it is ours), through another computer of the fleet that node's
+// proxy says so. The CLI, a script and an agent's tool calls send neither,
+// so their approvals are recorded and never counted.
+func approver(r *http.Request) (via string, human bool) {
+	if id, ok := fleet.Caller(r); ok {
+		node := id.Node
+		if node == "" {
+			node = id.LoginName
+		}
+		return "fleet: " + node, r.Header.Get(fromBrowser) == "1"
+	}
+	if r.Header.Get("Origin") != "" {
+		return "browser", true
+	}
+	return "api", false
 }
 
 // proofBrief is the task's proof and pull request in a line for the
@@ -213,6 +240,68 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request, t *store.
 			return
 		}
 		writeJSON(w, 200, th)
+
+	case sub == "gate" && r.Method == http.MethodGet:
+		// The tier and the approvals alone, for whatever merges the work.
+		g := review.GateFor(s.cfg, t)
+		s.gateExtras(t, &g)
+		writeJSON(w, 200, g)
+
+	case sub == "approve" && r.Method == http.MethodPost:
+		var req struct {
+			Version map[string]review.Anchor `json:"version"`
+			By      string                   `json:"by"`
+		}
+		if !decode(&req) {
+			return
+		}
+		if len(req.Version) == 0 {
+			writeErr(w, 400, fmt.Errorf("send the version you approve: gate.version as the Review tab drew it"))
+			return
+		}
+		via, human := approver(r)
+		g, err := review.ApproveCurrent(s.cfg, t, review.Approval{By: req.By, Via: via, Human: human, Version: req.Version})
+		if errors.Is(err, review.ErrMoved) {
+			writeErr(w, 409, err)
+			return
+		}
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		s.gateExtras(t, &g)
+		code := 201
+		if !human {
+			// Kept, so the Review tab shows it, but it does not count.
+			code = 202
+		}
+		writeJSON(w, code, g)
+
+	case sub == "withdraw" && r.Method == http.MethodPost:
+		var req struct {
+			By string `json:"by"`
+		}
+		if !decode(&req) {
+			return
+		}
+		if _, human := approver(r); !human {
+			writeErr(w, 403, fmt.Errorf("an approval is withdrawn in the Review tab, by a person"))
+			return
+		}
+		by := strings.TrimSpace(req.By)
+		if by == "" {
+			by, _ = review.PersonOf(s.cfg, t)
+		}
+		if ok, err := review.Withdraw(s.cfg, slug, by); err != nil {
+			writeErr(w, 500, err)
+			return
+		} else if !ok {
+			writeErr(w, 404, fmt.Errorf("%s has no approval of this task to withdraw", by))
+			return
+		}
+		g := review.GateFor(s.cfg, t)
+		s.gateExtras(t, &g)
+		writeJSON(w, 200, g)
 
 	case sub == "revert" && r.Method == http.MethodPost:
 		var req struct {

@@ -109,6 +109,10 @@ type Repo struct {
 	// build"). `fride proof` runs it before Test. What it writes has to be
 	// git-ignored: a build that changes the tree it proves proves nothing.
 	Build string `json:"build,omitempty"`
+	// Review says how much human review a change to this repo needs: its
+	// tier rules come before the repo's own .fride/review.json and FrIDE's
+	// defaults (docs/REVIEW.md).
+	Review *RepoReview `json:"review,omitempty"`
 }
 
 // Step is one setup command.

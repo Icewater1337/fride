@@ -72,6 +72,7 @@ function reviewReset() {
   $('#rv-main').innerHTML = '';
   $('#rv-moved').classList.add('hidden');
   $('#rv-risk').classList.add('hidden');
+  $('#rv-gate').classList.add('hidden');
   rvBadge(null);
 }
 
@@ -130,6 +131,9 @@ async function loadReview(p = pin(), draw = false, force = false) {
   if (stale(p)) return;
   rv.data = d;
   rvBadge(d);
+  // The tier chip says where the change stands now, like the badge; the
+  // approval card stays with the version on the page.
+  rvGateChip(d);
   rvStartPoll(p);
   if (rvBusy(d)) rvSoon(p);
   if (!reviewOpen()) { rv.drawnSig = ''; return; }
@@ -261,6 +265,39 @@ function rvProgress(d) {
   $('#rv-bar-fill').style.width = all.length ? `${Math.round(100 * done / all.length)}%` : '0';
   rvBadge(d);
   rvRisk(d);
+  rvGateChip(d);
+}
+
+// The review tiers (settings.Tiers on the server): set by the paths a change
+// touches. How many approvals each needs is config.json's review.approvals,
+// so the counts always come from the server (gate.need, repos[].need).
+const RV_TIERS = {
+  auto: ['Auto', 'Docs or flag-guarded code'],
+  normal: ['Normal', 'Code'],
+  risky: ['Risky', 'Auth, payments, migrations, CI/CD or infrastructure'],
+};
+const rvNeeds = n => n ? `${n} human approval${n === 1 ? '' : 's'}` : 'no human approval';
+
+// rvGateChip is the header's tier chip: the tier and the approvals it has.
+function rvGateChip(d) {
+  const chip = $('#rv-gate');
+  const g = d.gate;
+  if (!g || !rvFiles(d).length) { chip.classList.add('hidden'); return; }
+  chip.className = 'rv-risk rv-gatechip tier-' + g.tier + (g.ready ? ' ready' : '');
+  chip.textContent = '';
+  chip.appendChild(icon(g.ready ? 'check' : 'shield'));
+  const t = RV_TIERS[g.tier] || [g.tier, ''];
+  chip.appendChild(el('span', null, g.need ? `${t[0]} ${g.have}/${g.need}` : t[0]));
+  chip.title = `${t[1]}: ${rvNeeds(g.need)}.\n` + (g.ready ? 'This version can be Done.' : `${g.need - g.have} more human approval${g.need - g.have === 1 ? '' : 's'} of this version before the task can be Done.`);
+  chip.onclick = () => { const c = $('#rv-main .rv-gatecard'); if (c) c.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+}
+
+// rvPersonKey: two names are the same person by their email, else their name
+// (personKey on the server).
+function rvPersonKey(p) {
+  p = p || '';
+  const i = p.lastIndexOf('<'), j = p.lastIndexOf('>');
+  return (i >= 0 && j > i + 1 ? p.slice(i + 1, j) : p.split(/\s+/).join(' ')).trim().toLowerCase();
 }
 
 // rvRisk is the header's risk chip; its title lists what the score is made of.
@@ -361,6 +398,7 @@ function rvFile(r, f) {
   if (f.untracked) head.appendChild(rvTag('untracked', 'muted', 'Not yet known to git'));
   if (f.withheld) head.appendChild(rvTag('withheld', 'amber', 'Holds credentials; not served'));
   if (f.noise) head.appendChild(rvTag(f.noise, 'muted', f.noiseWhy));
+  if (f.tier === 'risky') head.appendChild(rvTag('risky', 'red', `Review tier risky: ${f.tierWhy}.`));
   if (f.viewed === 'changed') head.appendChild(rvTag('changed since viewed', 'amber',
     'The hunks you already read are folded as "read before"'));
   head.appendChild(el('span', 'spacer'));
@@ -725,6 +763,7 @@ function rvDrawSummary(d) {
   const host = $('#rv-main .rv-summary');
   if (!host) return;
   host.innerHTML = '';
+  if (d.gate) host.appendChild(rvGate(d));
   host.appendChild(rvFocus(d));
   host.appendChild(rvEvidence(d));
   host.appendChild(rvAI(d));
@@ -739,6 +778,140 @@ function rvSection(title, iconName, aside) {
   if (aside) h.appendChild(aside);
   s.appendChild(h);
   return s;
+}
+
+// rvGate: the change's review tier, which paths set it, the human approvals
+// it has and needs, and who is accountable. An approval is of the version on
+// this page: the server refuses it once the change has moved on.
+function rvGate(d) {
+  const g = d.gate;
+  const t = RV_TIERS[g.tier] || [g.tier, ''];
+  const left = g.need - g.have;
+  const s = rvSection('Approval', g.ready ? 'check' : 'shield',
+    el('span', 'dim', g.need ? `${g.have} of ${g.need} approval${g.need === 1 ? '' : 's'}` : 'no approval needed'));
+  s.classList.add('rv-gatecard', g.ready ? 'ready' : 'waiting');
+
+  const line = el('div', 'rv-gline');
+  const tag = rvTag(t[0], g.tier === 'risky' ? 'red' : g.tier === 'auto' ? 'green' : 'amber', `${t[1]}: ${rvNeeds(g.need)}`);
+  line.appendChild(tag);
+  line.appendChild(el('span', null, g.ready
+    ? (g.need ? 'Approved: this version can be Done.'
+      : g.tier === 'auto' ? 'No human approval needed: this version can be Done.'
+        : 'No human approval needed here (review.approvals in config.json): this version can be Done.')
+    : `Needs ${left} more human approval${left === 1 ? '' : 's'} of this version before the task can be Done.`));
+  s.appendChild(line);
+  if (g.repos.length > 1) s.appendChild(el('div', 'dim rv-grepos', 'Per repository: ' +
+    g.repos.map(r => `${r.repo} ${r.tier} (${rvNeeds(r.need)})`).join(' · ')));
+  for (const r of g.repos) if (r.err) s.appendChild(el('div', 'rv-err', `${r.repo}: ${r.err}`));
+
+  if (g.why.length && g.tier !== 'auto') {
+    const ul = el('ul', 'rv-gwhy');
+    for (const w of g.why) {
+      const li = el('li');
+      const a = el('a', null, `${w.repo}/${w.path}`);
+      a.href = '#';
+      a.addEventListener('click', e => { e.preventDefault(); rvGo(w.repo + '/' + w.path, true); });
+      li.appendChild(a);
+      li.appendChild(el('span', 'dim', ` ${w.why}${w.rule && w.rule !== 'default' ? ' · rule from ' + w.rule : ''}`));
+      ul.appendChild(li);
+    }
+    if (g.more) ul.appendChild(el('li', 'dim', `and ${g.more} more file${g.more === 1 ? '' : 's'}`));
+    s.appendChild(ul);
+  }
+
+  for (const a of g.approvals) {
+    const row = el('div', 'rv-appr' + (a.counts ? '' : ' void'));
+    const st = el('span', 'rv-cst ' + (a.counts ? 'ok' : 'bad'));
+    st.appendChild(icon(a.counts ? 'check' : 'x'));
+    row.appendChild(st);
+    row.appendChild(el('b', null, a.by));
+    row.appendChild(el('span', 'dim', `${a.via} · ${rvTime(a.at)}`));
+    if (a.note) row.appendChild(el('span', 'dim rv-anote', a.note));
+    s.appendChild(row);
+  }
+
+  const acc = g.accountable || {};
+  if (acc.person) {
+    const r = el('div', 'rv-gacc');
+    r.appendChild(el('span', 'dim', 'Accountable: '));
+    r.appendChild(el('b', null, acc.person));
+    r.appendChild(el('span', 'dim', ' gave the prompt' + (acc.via ? `, through ${acc.via}` : '')));
+    r.title = `Known from ${acc.how}.` + (acc.recorded ? ` Recorded when the task was created${acc.at ? ', ' + rvTime(acc.at) : ''}.`
+      : ' Worked out now: the task was created before FrIDE recorded it.');
+    s.appendChild(r);
+  }
+
+  const bar = el('div', 'rv-gbar');
+  const mine = g.approvals.find(a => a.human && a.current && rvPersonKey(a.by) === rvPersonKey(g.you));
+  const approve = el('button', 'primary sm');
+  approve.appendChild(icon('check'));
+  approve.appendChild(el('span', null, mine ? 'You approved this version' : `Approve as ${g.you}`));
+  approve.disabled = !!mine;
+  approve.title = 'Approves the change exactly as this page shows it. Once the agent changes it again, it needs a new approval.';
+  approve.addEventListener('click', () => rvApprove(d, '', approve));
+  bar.appendChild(approve);
+  if (g.approvals.some(a => a.human && rvPersonKey(a.by) === rvPersonKey(g.you))) {
+    const wd = el('button', 'ghost sm', 'Withdraw');
+    wd.title = 'Take back your approval';
+    wd.addEventListener('click', () => rvWithdraw(g.you, wd));
+    bar.appendChild(wd);
+  }
+  const other = el('button', 'ghost sm', 'Someone else approves');
+  other.title = 'A second person at this screen approves under their own name';
+  other.addEventListener('click', () => {
+    const f = el('span', 'rv-gother');
+    const inp = el('input');
+    inp.placeholder = 'Name <email>';
+    inp.spellcheck = false;
+    const ok = el('button', 'ghost sm', 'Approve');
+    const go = () => { if (inp.value.trim()) rvApprove(d, inp.value.trim(), ok); };
+    ok.addEventListener('click', go);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); if (e.key === 'Escape') f.replaceWith(other); });
+    f.appendChild(inp);
+    f.appendChild(ok);
+    other.replaceWith(f);
+    inp.focus();
+  });
+  bar.appendChild(other);
+  const unread = rvLeft(d);
+  if (unread && !g.ready) bar.appendChild(el('span', 'dim', `${unread} file${unread === 1 ? '' : 's'} not viewed yet`));
+  s.appendChild(bar);
+  return s;
+}
+
+async function rvApprove(d, by, btn) {
+  const p = pin();
+  btn.disabled = true;
+  let g;
+  try { g = await api.post(`${p.base}/tasks/${p.slug}/changes/approve`, { version: d.gate.version, by }); }
+  catch (e) {
+    btn.disabled = false;
+    toast(e.message);
+    // 409: the change moved on; the banner offers the refresh.
+    if (!stale(p)) loadReview(p, false).catch(() => {});
+    return;
+  }
+  if (stale(p)) return;
+  rvGateChanged(g);
+  toast(g.ready ? 'Approved: the task can be Done' : 'Approved');
+}
+
+async function rvWithdraw(by, btn) {
+  const p = pin();
+  btn.disabled = true;
+  let g;
+  try { g = await api.post(`${p.base}/tasks/${p.slug}/changes/withdraw`, { by }); }
+  catch (e) { btn.disabled = false; toast(e.message); return; }
+  if (stale(p)) return;
+  rvGateChanged(g);
+}
+
+function rvGateChanged(g) {
+  if (!rv.data) return;
+  rv.data.gate = g;
+  if (rv.drawnData) rv.drawnData.gate = g;
+  rvDrawSummary(rv.data);
+  rvGateChip(rv.data);
 }
 
 function rvFocus(d) {
@@ -1398,6 +1571,8 @@ function renderQueue(items) {
     nums.appendChild(el('span', null, `${it.files - it.left}/${it.files} viewed`));
     if (it.changed) nums.appendChild(rvTag(`${it.changed} changed since`, 'amber'));
     if (it.blocking) nums.appendChild(rvTag(`${it.blocking} blocking`, 'red'));
+    if (it.need) nums.appendChild(rvTag(`${(RV_TIERS[it.tier] || [it.tier])[0]} ${it.have}/${it.need}`,
+      it.have >= it.need ? 'green' : 'amber', `Review tier ${it.tier}: ${it.have} of ${it.need} human approvals of this version`));
     const risk = el('span', 'rv-risk lvl-' + it.risk.level);
     risk.appendChild(icon('gauge'));
     risk.appendChild(el('span', null, `Risk ${it.risk.score}`));

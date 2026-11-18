@@ -127,6 +127,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   idea ls                               the ideas already in the ideas repository
   idea cat <path>                       read one of them, e.g. ideas/<slug>.md
   idea publish [task]                   push the task's idea page(s) (config: ideas)
+  review gate [task] [--json]           the change's review tier and its human approvals
+                                        (exit 1 while it lacks some); approvals are given
+                                        in the Review tab
 
   quality [ls] [--repo R] [--since 90d|2026-01-31] [--by week|month] [--no-fetch]
           [--json]                      what became of the tasks' changes after they

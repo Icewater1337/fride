@@ -112,6 +112,11 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 		workspace.Undo(cfg, slug, created)
 		return nil, nil, err
 	}
+	// Who the work is for, written down now: the review holds them
+	// accountable for the change, whoever approves it later.
+	if err := review.RecordAccountable(cfg, t); err != nil {
+		log.Printf("task %s: could not record who it is for: %v", slug, err)
+	}
 	// Remembered for the next new task, which is what makes the choice a
 	// one-off rather than something to repeat on every task.
 	cfg.Settings.SetAgent(string(req.Agent))

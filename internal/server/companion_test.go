@@ -188,6 +188,11 @@ func TestCompanionAPI(t *testing.T) {
 		t.Fatalf("the uncommitted file did not arrive: %q %v", b, err)
 	}
 
+	// Closing is Done: the change needs its approval first (review tiers).
+	if code, out := call("POST", "/api/companion/tasks/feat-one/close", ""); code != 400 || !strings.Contains(out["error"].(string), "approv") {
+		t.Fatalf("close before the change was approved = %d %v", code, out)
+	}
+	approveInBrowser(t, h, "feat-one")
 	code, out = call("POST", "/api/companion/tasks/feat-one/close", "")
 	if code != 200 || out["status"] != "done" {
 		t.Fatalf("close = %d %v", code, out)

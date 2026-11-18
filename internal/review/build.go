@@ -7,6 +7,7 @@ import (
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/settings"
 )
 
 // Changes is the whole review of one task, as the Review tab draws it.
@@ -27,6 +28,8 @@ type Changes struct {
 	Risk    Risk                   `json:"risk"`
 	// Rounds are the task's review rounds and the cap on them.
 	Rounds Rounds `json:"rounds"`
+	// Gate is the review tier of the change and the approvals it has.
+	Gate Gate `json:"gate"`
 	// LastReview is when the reviewer last marked a file viewed.
 	LastReview time.Time `json:"lastReview,omitzero"`
 	// Proof is the last `fride proof`, nil before the first.
@@ -44,6 +47,9 @@ type Kept struct {
 	// MaxRounds is the round cap from config.json, 0 for none.
 	MaxRounds int
 	Proof     Proof
+	// Approvals and Accountable are approvals.json.
+	Approvals   []Approval
+	Accountable Accountable
 }
 
 // LoadKept reads everything the review stored for a task.
@@ -59,6 +65,11 @@ func LoadKept(cfg *config.Config, slug string) Kept {
 		Proof:    loadProof(cfg, slug),
 	}
 	k.Rounds, k.MaxRounds = loadRounds(cfg, slug), maxRounds(cfg)
+	a := loadApprovals(cfg, slug)
+	k.Approvals = a.Approvals
+	if a.Accountable != nil {
+		k.Accountable = *a.Accountable
+	}
 	return k
 }
 
@@ -91,6 +102,11 @@ type RepoSpec struct {
 	Name string
 	Dir  string
 	Base string
+	// Review is the repo's review settings from config.json, nil for none.
+	Review *settings.RepoReview
+	// Approvals is how many human approvals each tier needs in this repo
+	// (settings.ApprovalsFor); nil is the defaults.
+	Approvals settings.Approvals
 }
 
 // Build reads every repository's change, attributes its lines to the agent's
@@ -100,8 +116,10 @@ func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry)
 	budget := newBudget()
 	out := Changes{Repos: []RepoChanges{}, Traced: tr.Sessions > 0}
 	dirs := map[string]string{}
+	tiers := []RepoTier{}
 	for _, r := range repos {
 		rc := Diff(r.Dir, r.Name, r.Base, budget)
+		tiers = append(tiers, placeRepo(r, &rc))
 		detectMoves(rc.Files)
 		linkHunks(r.Dir, rc.Files, tr.Edits)
 		provenance(r.Dir, rc.Files, tr.Edits, kept.Captures)
@@ -169,6 +187,7 @@ func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry)
 		out.Focus = []Focus{}
 	}
 	out.Risk = riskOf(out)
+	out.Gate = gate(out.Repos, tiers, kept)
 	return out
 }
 

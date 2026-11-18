@@ -15,6 +15,10 @@ type Review struct {
 	// Agree is how many finders must report the same problem before it is
 	// shown. Default 2, and never more than Finders.
 	Agree int `json:"agree,omitempty"`
+	// Approvals is how many human approvals each review tier needs before a
+	// task may be Done (tiers.go). Default {"auto": 0, "normal": 1, "risky":
+	// 2}; all zeros turns the gate off.
+	Approvals Approvals `json:"approvals,omitempty"`
 }
 
 // DefaultReviewMaxRounds is the round cap when config.json does not say. Three
@@ -78,5 +82,5 @@ func (r *Review) check() []Problem {
 	if r.Agree < 0 || r.Agree > finders {
 		add("agree", "between 1 and finders (%d): a finding is shown once that many finders report it", finders)
 	}
-	return out
+	return append(out, r.Approvals.problems("review.approvals")...)
 }

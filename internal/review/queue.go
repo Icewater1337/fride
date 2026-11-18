@@ -11,18 +11,23 @@ type QueueItem struct {
 	Files  int    `json:"files"`
 	// Left is the files not viewed in their current version; Changed is the
 	// part of them viewed once and changed since: the re-tour.
-	Left     int    `json:"left"`
-	Changed  int    `json:"changed"`
-	Blocking int    `json:"blocking"`
-	Risk     Risk   `json:"risk"`
-	Turn     string `json:"turn"` // you, agent, none
-	Why      string `json:"why"`
+	Left     int  `json:"left"`
+	Changed  int  `json:"changed"`
+	Blocking int  `json:"blocking"`
+	Risk     Risk `json:"risk"`
+	// Tier is the change's review tier; Need and Have its human approvals.
+	Tier string `json:"tier"`
+	Need int    `json:"need"`
+	Have int    `json:"have"`
+	Turn string `json:"turn"` // you, agent, none
+	Why  string `json:"why"`
 }
 
 // Summarize reduces a task's review to its queue entry. agentBusy is whether
 // its agent is producing output right now.
 func Summarize(slug, name, status string, c Changes, agentBusy bool) QueueItem {
-	q := QueueItem{Slug: slug, Name: name, Status: status, Risk: c.Risk}
+	q := QueueItem{Slug: slug, Name: name, Status: status, Risk: c.Risk,
+		Tier: c.Gate.Tier, Need: c.Gate.Need, Have: c.Gate.Have}
 	for _, rc := range c.Repos {
 		for _, f := range rc.Files {
 			if f.Noise != "" {
@@ -66,6 +71,9 @@ func turn(q QueueItem, answered int, agentBusy bool) (string, string) {
 		return "you", fmt.Sprintf("%d blocking thread%s not sent to the agent", q.Blocking, plural(q.Blocking))
 	case agentBusy:
 		return "agent", "its agent is working"
+	case q.Have < q.Need:
+		n := q.Need - q.Have
+		return "you", fmt.Sprintf("%s tier: %d more approval%s of this version", q.Tier, n, plural(n))
 	}
 	return "none", "nothing left to review"
 }

@@ -92,8 +92,10 @@ func UpdateThread(cfg *config.Config, slug, id string, fn func(*Thread)) (Thread
 	return Thread{}, fmt.Errorf("no review thread %s", id)
 }
 
-// CheckDone refuses to close a task while a blocking thread is open. Every
-// path to Done asks: the button, the board, the CLI and the orchestrator.
+// CheckDone refuses to close a task while a blocking thread is open, or while
+// its change lacks the human approvals its review tier asks for (approve.go).
+// Every path to Done asks: the button, the board, the CLI, the orchestrator
+// and the companion.
 func CheckDone(cfg *config.Config, slug string) error {
 	n := 0
 	for _, t := range LoadThreads(cfg, slug) {
@@ -102,7 +104,7 @@ func CheckDone(cfg *config.Config, slug string) error {
 		}
 	}
 	if n == 0 {
-		return nil
+		return checkApprovals(cfg, slug)
 	}
 	if n == 1 {
 		return fmt.Errorf("a blocking review thread is still open: mark it Satisfied in the Review tab first")
