@@ -116,26 +116,11 @@ func pagesIn(dir, sub string) ([]IdeaPage, error) {
 	return out, nil
 }
 
-type ideasConf struct {
-	remote, branch, sub string
-	options, env        []string
-}
-
-func ideasOf(cfg *config.Config) (*ideasConf, error) {
+func ideasOf(cfg *config.Config) (*repoConf, error) {
 	if !IdeasEnabled(cfg) {
 		return nil, ErrNoIdeas
 	}
-	i := cfg.Settings.Ideas
-	c := &ideasConf{remote: i.Remote, branch: i.Branch, sub: ideasSub(cfg), options: i.PushOptions}
-	if c.branch == "" {
-		c.branch = "main"
-	}
-	env, err := authorEnv(i.Author, "ideas.author")
-	if err != nil {
-		return nil, err
-	}
-	c.env = env
-	return c, nil
+	return repoOf(cfg.Settings.Ideas.PublishRepo, "ideas", "ideas repository", ideasSub(cfg))
 }
 
 func ideasClone(cfg *config.Config) string { return filepath.Join(cfg.StateDir, "ideas") }
@@ -153,7 +138,7 @@ func ExistingIdeas(cfg *config.Config) ([]IdeaPage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pagesIn(filepath.Join(dir, filepath.FromSlash(c.sub)), c.sub)
+	return pagesIn(filepath.Join(dir, filepath.FromSlash(c.dir)), c.dir)
 }
 
 // ReadIdea returns one page of the repository's main branch, e.g.
@@ -204,7 +189,7 @@ func PublishIdeas(cfg *config.Config, slug string) (*IdeasPublished, error) {
 	}
 	if len(pages) == 0 {
 		return nil, fmt.Errorf("no idea page in %s — the agent writes one there when the task is exploring an idea",
-			filepath.Join(IdeaDir(cfg, slug), c.sub))
+			filepath.Join(IdeaDir(cfg, slug), c.dir))
 	}
 	ideaMu.Lock()
 	defer ideaMu.Unlock()
@@ -252,7 +237,7 @@ func PublishIdeas(cfg *config.Config, slug string) (*IdeasPublished, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := updateIdeaIndex(dir, c.sub, pages); err != nil {
+	if err := updateIdeaIndex(dir, c.dir, pages); err != nil {
 		return nil, err
 	}
 	if _, err := run(dir, nil, "add", "-A"); err != nil {
@@ -269,24 +254,12 @@ func PublishIdeas(cfg *config.Config, slug string) (*IdeasPublished, error) {
 		titles = append(titles, pg.Title)
 	}
 	title := strings.Join(titles, ", ")
-	if _, err := run(dir, c.env, "commit", "--quiet", "-m", fmt.Sprintf("idea: %s (from task %s)", title, slug)); err != nil {
-		if strings.Contains(err.Error(), "identity unknown") {
-			return nil, fmt.Errorf("git does not know who is committing to the ideas repository — set ideas.author in config.json (\"Name <email>\")")
-		}
+	if err := c.commit(dir, fmt.Sprintf("idea: %s (from task %s)", title, slug)); err != nil {
 		return nil, err
 	}
 	p.Branch = branch
-	args := []string{"push", "-u", "origin", "HEAD:" + branch}
-	fill := strings.NewReplacer("{{task}}", slug, "{{title}}", title, "{{branch}}", branch, "{{target}}", c.branch)
-	for _, o := range c.options {
-		args = append(args, "-o", fill.Replace(o))
-	}
-	out, err := run(dir, nil, args...)
-	if err != nil {
+	if p.Link, err = c.pushTopic(dir, branch, slug, title); err != nil {
 		return nil, err
-	}
-	if m := linkRe.FindString(out); m != "" {
-		p.Link = m
 	}
 	return p, nil
 }

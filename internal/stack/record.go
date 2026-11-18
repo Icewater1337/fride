@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/infra"
 )
@@ -45,6 +46,11 @@ type recordedService struct {
 	// what holds the port Down's to kill; a refused service's port belongs to
 	// somebody else.
 	Started bool `json:"started,omitempty"`
+	// Stop is the service's stop command as it was expanded at start, and
+	// Dir where it runs: Down runs what the started stack needs, whatever
+	// the profile says by then.
+	Stop string `json:"stop,omitempty"`
+	Dir  string `json:"dir,omitempty"`
 }
 
 func recordPath(cfg *config.Config, slug string) string {
@@ -66,19 +72,7 @@ func readRecord(cfg *config.Config, slug string) *record {
 }
 
 func writeRecord(cfg *config.Config, slug string, r *record) error {
-	path := recordPath(cfg, slug)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.WriteJSON(recordPath(cfg, slug), r, 0o644)
 }
 
 // recordOf describes what starting the plan starts. The compose project is
@@ -86,7 +80,15 @@ func writeRecord(cfg *config.Config, slug string, r *record) error {
 func recordOf(p *Plan) *record {
 	r := &record{K: p.K, Profile: p.ProfileName, Scopes: p.Opts.Scopes, Marked: true}
 	for _, s := range p.Ordered() {
-		r.Services = append(r.Services, recordedService{Name: s.Name, Mode: s.Mode, Port: s.Port})
+		rs := recordedService{Name: s.Name, Mode: s.Mode, Port: s.Port}
+		if s.Mode == ModeSource && s.Spec.Stop != "" {
+			// An unexpandable stop is caught by `config check`; one that still
+			// fails here is left out rather than run half-filled.
+			if stop, err := p.Expand(s.Name, s.Spec.Stop); err == nil {
+				rs.Stop, rs.Dir = stop, s.Dir
+			}
+		}
+		r.Services = append(r.Services, rs)
 	}
 	return r
 }
@@ -182,17 +184,13 @@ func (r *record) addProject(project string) {
 	}
 }
 
-// taskProjects are the compose projects holding the task's own containers. A
-// task without a record but with a compose override was started by an older
-// FrIDE, under that version's project name.
-func taskProjects(cfg *config.Config, slug string, r *record) []string {
-	if r != nil {
-		return r.Projects
+// projects are the compose projects holding the task's own containers; none
+// without a record. Up records a project before it starts anything in it.
+func (r *record) projects() []string {
+	if r == nil {
+		return nil
 	}
-	if _, err := os.Stat(overridePath(cfg, slug)); err == nil {
-		return []string{infra.LegacyTaskProject(slug)}
-	}
-	return nil
+	return r.Projects
 }
 
 func overridePath(cfg *config.Config, slug string) string {

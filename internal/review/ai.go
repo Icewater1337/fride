@@ -4,11 +4,9 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -459,54 +457,21 @@ func fresh(a map[string]Anchor, c Changes) bool {
 }
 
 // ask runs one headless Claude Code turn whose reply the CLI validates against
-// schema, the way the orchestrator thinks (orchestrator/brain.go): read-only
-// tools confined to the workspace, the prompt on stdin. No session is saved,
-// so a pass never shows up among the conversations to resume.
+// schema, the way the orchestrator thinks: read-only tools confined to the
+// workspace, the prompt on stdin. No session is saved, so a pass never shows
+// up among the conversations to resume.
 func ask(ctx context.Context, bin, dir, model, system, schema, input string, out any) error {
-	cmd := exec.CommandContext(ctx, bin, "-p", "--output-format", "json", "--json-schema", schema,
-		"--tools", "Read,Grep,Glob", "--system-prompt", system, "--model", model,
-		"--permission-mode", "dontAsk", "--no-session-persistence")
-	cmd.Dir = dir
-	cmd.Stdin = strings.NewReader(input)
-	cmd.Env = agent.CleanEnv()
-	b, err := cmd.Output()
-	var res struct {
-		IsError    bool            `json:"is_error"`
-		Result     string          `json:"result"`
-		Structured json.RawMessage `json:"structured_output"`
-	}
-	perr := json.Unmarshal(b, &res)
+	_, err := agent.Headless{Bin: bin, Dir: dir, Model: model, System: system, Schema: schema,
+		Tools: "Read,Grep,Glob"}.Run(ctx, input, out)
 	switch {
-	case perr == nil && res.IsError:
-		return fmt.Errorf("%s: %s", model, firstLine(res.Result))
-	case err != nil:
-		if ctx.Err() != nil {
-			return fmt.Errorf("%s timed out", model)
-		}
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return fmt.Errorf("%s: %s", model, firstLine(string(ee.Stderr)))
-		}
-		return fmt.Errorf("%s: %w", model, err)
-	case perr != nil:
+	case err == nil:
+		return nil
+	case ctx.Err() != nil && errors.Is(err, ctx.Err()):
+		return fmt.Errorf("%s timed out", model)
+	case errors.Is(err, agent.ErrUnreadable):
 		return fmt.Errorf("%s answered with something unreadable", model)
 	}
-	raw := res.Structured
-	if len(raw) == 0 {
-		raw = json.RawMessage(res.Result)
-	}
-	if json.Unmarshal(raw, out) != nil {
-		return fmt.Errorf("%s answered with something unreadable", model)
-	}
-	return nil
-}
-
-func firstLine(s string) string {
-	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	if s == "" {
-		return "no detail given"
-	}
-	return clipLine(s, 300)
+	return fmt.Errorf("%s: %w", model, err)
 }
 
 const groupSystem = `You sort the hunks of a code change into groups by intent, so a reviewer can

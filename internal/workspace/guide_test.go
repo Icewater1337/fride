@@ -14,7 +14,7 @@ func TestWriteGuideTellsTheAgentHowToRunTheStack(t *testing.T) {
 	if err := os.MkdirAll(cfg.WorkspaceDir("t1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeGuide(cfg, "t1", []RepoSpec{{Name: "backend"}}, "claude", "feat/x"); err != nil {
+	if err := WriteGuide(cfg, "t1", []string{"backend"}, "claude", "feat/x"); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.WorkspaceDir("t1"), "CLAUDE.md"))

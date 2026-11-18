@@ -330,8 +330,10 @@ type taskView struct {
 	Workspace string     `json:"workspace"`
 	// Attention: an agent session of this task has stopped and is waiting for
 	// input. Cheap (in-memory), so it is included in the list view too — that is
-	// what lets the top bar flag a task you are not currently looking at.
+	// what lets the task rail flag a task you are not currently looking at.
+	// Waiting is how many of its sessions wait: the rail's unread count.
 	Attention bool `json:"attention"`
+	Waiting   int  `json:"waiting,omitempty"`
 	// Setup is each repo's setup state ("running: npm ci", "done", "failed:
 	// …"). Reported independently of Stack, because at creation time no port
 	// slot exists yet.
@@ -343,9 +345,10 @@ type taskView struct {
 }
 
 func (s *Server) view(t *store.Task, detail bool) *taskView {
+	n := s.terms.Waiting(t.Slug)
 	v := &taskView{Task: t, Agent: agent.Normalize(t.Agent),
 		Workspace: s.cfg.WorkspaceDir(t.Slug),
-		Attention: s.terms.Attention(t.Slug), Stack: stack.Get(s.cfg, t.Slug)}
+		Attention: n > 0, Waiting: n, Stack: stack.Get(s.cfg, t.Slug)}
 	for _, r := range t.Repos {
 		if st := stack.SetupState(s.cfg, t.Slug, r.Name); st != "" {
 			if v.Setup == nil {
@@ -693,43 +696,17 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		force := r.URL.Query().Get("force") == "1"
 		purge := r.URL.Query().Get("purge") == "1"
 		s.terms.CloseTask(slug)
-		if _, err := stack.Down(s.cfg, slug); err != nil {
-			log.Printf("task %s: stack down during delete: %v", slug, err)
-		}
-		var res []workspace.RemoveResult
-		var err error
-		if purge {
-			res, err = workspace.Purge(s.cfg, slug)
-		} else {
-			res, err = workspace.Remove(s.cfg, slug, force)
-		}
-		if err != nil {
+		res, err := task.Remove(s.cfg, s.st, slug, force, purge)
+		switch {
+		case errors.Is(err, task.ErrKept):
+			// force keeps what it must not discard (commits on a detached
+			// HEAD), so a kept repo stops the delete with or without it.
+			writeJSON(w, 409, map[string]any{"error": err.Error(), "results": res})
+		case err != nil:
 			writeErr(w, 500, err)
-			return
+		default:
+			writeJSON(w, 200, map[string]any{"deleted": slug, "results": res})
 		}
-		kept := []string{}
-		for _, rr := range res {
-			if !rr.Removed {
-				kept = append(kept, rr.Repo+" ("+rr.Detail+")")
-			}
-		}
-		// force keeps what it must not discard (commits on a detached HEAD), so
-		// a kept repo stops the delete with or without it: forgetting the task
-		// would leave its folder behind, unowned.
-		if len(kept) > 0 {
-			writeJSON(w, 409, map[string]any{
-				"error":   "workspace kept: " + strings.Join(kept, "; "),
-				"results": res,
-			})
-			return
-		}
-		_ = stack.FreeK(s.cfg, slug)
-		review.RemoveState(s.cfg, slug)
-		if err := s.st.Delete(slug); err != nil {
-			writeErr(w, 500, err)
-			return
-		}
-		writeJSON(w, 200, map[string]any{"deleted": slug, "results": res})
 
 	case action == "profile" && r.Method == http.MethodPut:
 		// Applies at the next stack up, never to a running one: the profile

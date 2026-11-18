@@ -102,15 +102,7 @@ func (s *Settings) Check() []Problem {
 	out = append(out, s.checkPorts()...)
 
 	if i := s.Ideas; i != nil {
-		if strings.TrimSpace(i.Remote) == "" {
-			add(true, "ideas.remote", "name the ideas repository's git URL")
-		}
-		if i.Dir != "" && !filepath.IsLocal(i.Dir) {
-			add(true, "ideas.dir", "a folder inside the repository, such as ideas")
-		}
-		if i.Author != "" && !authorRe.MatchString(i.Author) {
-			add(true, "ideas.author", "write it as \"Name <email>\"")
-		}
+		out = append(out, i.check("ideas", "ideas")...)
 	}
 
 	if m := s.Memory; m != nil {
@@ -142,9 +134,7 @@ func (s *Settings) Check() []Problem {
 	}
 
 	if l := s.Ledger; l != nil {
-		if strings.TrimSpace(l.Remote) == "" {
-			add(true, "ledger.remote", "name the ledger repository's git URL")
-		}
+		out = append(out, l.check("ledger", "rationale")...)
 		switch l.Push {
 		case "", "branch", "direct":
 		default:
@@ -152,9 +142,6 @@ func (s *Settings) Check() []Problem {
 		}
 		if l.Push == "direct" && len(l.PushOptions) > 0 {
 			add(false, "ledger.pushOptions", "push options are usually for merge requests, but push is direct")
-		}
-		if l.Author != "" && !authorRe.MatchString(l.Author) {
-			add(true, "ledger.author", "write it as \"Name <email>\"")
 		}
 		if l.WaitForMerge < 0 || l.WaitForMerge > 600 {
 			add(true, "ledger.waitForMerge", "seconds, between 0 and 600")
@@ -265,7 +252,7 @@ func (s *Settings) checkProfile(pn string, p *Profile, repos map[string]bool) []
 		}
 		tw := "profiles." + pn + w
 		for _, t := range []struct{ field, v string }{
-			{"run", sv.Run}, {"pre", sv.Pre}, {"dir", sv.Dir}, {"url", sv.URL}, {"health", sv.Health},
+			{"run", sv.Run}, {"pre", sv.Pre}, {"stop", sv.Stop}, {"dir", sv.Dir}, {"url", sv.URL}, {"health", sv.Health},
 		} {
 			out = append(out, checkTemplate(tw+"."+t.field, t.v, p, repos, t.field == "dir")...)
 		}
@@ -429,6 +416,26 @@ func (s *Settings) checkPorts() []Problem {
 					Msg: fmt.Sprintf("shared container port %d falls inside the per-task range of base %d (%s)", port, b, bases[b][0])})
 			}
 		}
+	}
+	return out
+}
+
+// check validates a publish repository, the ledger or the ideas repository,
+// configured under key; dir is the default folder, named as an example.
+func (r *PublishRepo) check(key, dir string) []Problem {
+	var out []Problem
+	add := func(field, msg string) {
+		out = append(out, Problem{Error: true, Where: key + "." + field, Msg: msg})
+	}
+	if strings.TrimSpace(r.Remote) == "" {
+		add("remote", "name the "+key+" repository's git URL")
+	}
+	// The folder is joined to the clone's path: "../x" would write outside it.
+	if r.Dir != "" && !filepath.IsLocal(r.Dir) {
+		add("dir", "a folder inside the repository, such as "+dir)
+	}
+	if r.Author != "" && !authorRe.MatchString(r.Author) {
+		add("author", "write it as \"Name <email>\"")
 	}
 	return out
 }

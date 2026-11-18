@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,7 +57,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	// is delivered from the observation without consulting anyone.
 	look := append([]string{}, shown...)
 	for slug := range o.st.Held {
-		if !contains(look, slug) {
+		if !slices.Contains(look, slug) {
 			look = append(look, slug)
 		}
 	}
@@ -87,7 +88,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	o.heartbeat(all, shown)
 	obs := all[:0:0]
 	for _, ob := range all {
-		if contains(shown, ob.Task.Slug) {
+		if slices.Contains(shown, ob.Task.Slug) {
 			obs = append(obs, ob)
 		}
 	}
@@ -132,7 +133,7 @@ func (o *Orchestrator) supervised() []string {
 		out = append(out, o.st.Watching...)
 	}
 	for _, s := range o.followed() {
-		if !contains(out, s) {
+		if !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
@@ -152,7 +153,7 @@ func (o *Orchestrator) dropWatch(slug string, err error) {
 	}
 	o.finish(slug, err)
 	delete(o.st.Asked, slug)
-	if contains(o.st.Watching, slug) {
+	if slices.Contains(o.st.Watching, slug) {
 		out := []string{}
 		for _, s := range o.st.Watching {
 			if s != slug {

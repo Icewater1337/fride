@@ -55,6 +55,7 @@
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
   <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-panel-left" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></symbol>
 </svg>
 
@@ -73,13 +74,23 @@
     <button id="nav-instances" class="navbtn" title="Port slots"><svg class="i"><use href="#i-server"/></svg><span class="lbl">Slots</span></button>
     <button id="nav-settings" class="navbtn" title="Settings"><svg class="i"><use href="#i-sliders"/></svg><span class="lbl">Settings</span></button>
   </nav>
-  <div id="switcher" class="switcher" aria-label="Open tasks"></div>
   <div class="spacer"></div>
   <button id="theme-toggle" class="iconbtn" title="Switch between light and dark" aria-label="Switch theme"></button>
   <button id="btn-new" class="primary"><svg class="i"><use href="#i-plus"/></svg>New task</button>
 </header>
 
 <main>
+  <!-- The open tasks, beside every view: noticing a task that waits for you
+       while you look at another is the point. Folded, it keeps the unread total. -->
+  <aside id="rail" class="rail" aria-label="Open tasks">
+    <div class="rail-h">
+      <span class="rail-title">Tasks</span>
+      <button id="rail-toggle" class="iconbtn xs"><svg class="i"><use href="#i-panel-left"/></svg></button>
+      <span id="rail-unread" class="rail-n hidden"></span>
+    </div>
+    <div id="switcher" class="switcher"></div>
+  </aside>
+
   <!-- ---------------------------------------------------------- setup -->
   <section id="setup" class="view">
     <div class="setup-card">
@@ -314,6 +325,7 @@
   <section id="task" class="view">
     <div class="task-head">
       <button id="back" class="iconbtn" title="Back to the board" aria-label="Back to the board"><svg class="i"><use href="#i-arrow-left"/></svg></button>
+      <button id="side-toggle" class="iconbtn"><svg class="i"><use href="#i-panel-left"/></svg></button>
       <div class="task-titles">
         <h2 id="task-title"></h2>
         <div class="task-badges">

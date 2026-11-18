@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/Icewater1337/fride/internal/atomicfile"
 )
 
 // Version is the config.json schema version this build reads.
@@ -147,11 +149,21 @@ type Service struct {
 	Repo string `json:"repo,omitempty"`
 	// Dir is the working directory, templated. Default {{repo.<Repo>}}.
 	Dir string `json:"dir,omitempty"`
-	// Run is the shell command that starts the service in the foreground.
+	// Run is the shell command that starts the service in the foreground. A
+	// Run that hands the service to a launcher of the project's own, which
+	// starts it detached and returns once it is ready, works too: a process
+	// that exited counts as failed only while nothing listens on its port.
+	// Such a service needs Stop.
 	Run string `json:"run,omitempty"`
 	// Pre runs before Run, every time (clean up a stale sidecar, generate a
 	// file). Its failure is reported but does not stop the start.
 	Pre string `json:"pre,omitempty"`
+	// Stop runs on `stack down`, in Dir, before FrIDE signals the service's
+	// processes and reaps its port: the command that tells a launcher Run
+	// handed the service to to stop what it started (its detached processes,
+	// containers, a claim it holds). Its failure is reported; the reaping
+	// still happens.
+	Stop string `json:"stop,omitempty"`
 	// Port is the base port. A task in slot k gets Port+k; slot 0 (Port itself)
 	// is left to the main checkout, so a task never collides with it.
 	Port int `json:"port,omitempty"`
@@ -224,37 +236,45 @@ type Fleet struct {
 	Ephemeral bool `json:"ephemeral,omitempty"`
 }
 
-// Ledger is a git repository collecting the rationale documents of all tasks,
-// so the reasoning behind past work can be found in one place. Each document is
-// also kept in its task, under docs/rationale/ — the ledger is a copy.
-type Ledger struct {
-	// Remote is the ledger repository's git URL. Pushing uses git's own
-	// credentials; nothing else is needed.
+// PublishRepo is a git repository FrIDE publishes Markdown pages to: the
+// ledger and the ideas repository. Embedded, so its keys stay at the top level
+// of "ledger" and "ideas" in config.json.
+type PublishRepo struct {
+	// Remote is the repository's git URL. Pushing uses git's own credentials;
+	// nothing else is needed.
 	Remote string `json:"remote"`
-	// Branch is the ledger's main branch. Default "main".
+	// Branch is its main branch. Default "main".
 	Branch string `json:"branch,omitempty"`
-	// Dir is the folder documents go into, by year: <dir>/<year>/<task>.md.
-	// Default "rationale".
+	// Dir is the folder inside the repository the pages go into. The ledger's
+	// default is "rationale", by year: <dir>/<year>/<task>.md; the ideas
+	// repository's is "ideas", one page per idea.
 	Dir string `json:"dir,omitempty"`
-	// Push is "branch" (the default): each document goes to its own branch,
-	// rationale/<task>, for a merge or pull request; or "direct": straight
-	// onto Branch.
-	Push string `json:"push,omitempty"`
 	// PushOptions are passed to `git push -o` — how a GitLab server is asked
 	// to open a merge request and merge it by itself, with no API token:
 	// merge_request.create, merge_request.target={{target}},
 	// merge_request.merge_when_pipeline_succeeds, … {{task}}, {{title}},
 	// {{branch}} and {{target}} are filled in.
 	PushOptions []string `json:"pushOptions,omitempty"`
+	// Author is "Name <email>" for the commits. Default: git's own
+	// configuration — which, for a repository outside your usual folders,
+	// may not be the identity that server expects.
+	Author string `json:"author,omitempty"`
+}
+
+// Ledger is a git repository collecting the rationale documents of all tasks,
+// so the reasoning behind past work can be found in one place. Each document is
+// also kept in its task, under docs/rationale/ — the ledger is a copy.
+type Ledger struct {
+	PublishRepo
+	// Push is "branch" (the default): each document goes to its own branch,
+	// rationale/<task>, for a merge or pull request; or "direct": straight
+	// onto Branch.
+	Push string `json:"push,omitempty"`
 	// WaitForMerge is how many seconds a publish waits for its branch to be
 	// merged before the next one may start. Set it when the server merges by
 	// itself (GitLab auto-merge): publishes based on a main without the
 	// previous one conflict on the shared index and never merge.
 	WaitForMerge int `json:"waitForMerge,omitempty"`
-	// Author is "Name <email>" for the ledger's commits. Default: git's own
-	// configuration — which, for a ledger outside your usual folders, may not
-	// be the identity that server expects.
-	Author string `json:"author,omitempty"`
 	// OnDone publishes automatically when a task moves to Done. Default true.
 	OnDone *bool `json:"onDone,omitempty"`
 }
@@ -265,19 +285,7 @@ type Ledger struct {
 // the page into this repository. The skill also reads it, so an idea that
 // exists already is extended instead of duplicated.
 type Ideas struct {
-	// Remote is the repository's git URL. Pushing uses git's own credentials.
-	Remote string `json:"remote"`
-	// Branch is its main branch. Default "main".
-	Branch string `json:"branch,omitempty"`
-	// Dir is the folder holding one page per idea. Default "ideas".
-	Dir string `json:"dir,omitempty"`
-	// PushOptions are passed to `git push -o`, as for the ledger: how a
-	// GitLab server is asked to open a merge request and merge it by itself.
-	// {{task}}, {{title}}, {{branch}} and {{target}} are filled in.
-	PushOptions []string `json:"pushOptions,omitempty"`
-	// Author is "Name <email>" for the commits. Default: git's own
-	// configuration.
-	Author string `json:"author,omitempty"`
+	PublishRepo
 }
 
 // Memory is what one more stack of this project needs, in GB. Before a stack
@@ -490,22 +498,7 @@ func (s *Settings) Configured() bool { return len(s.Profiles) > 0 }
 func (s *Settings) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return writeJSON(s.path, s)
-}
-
-func writeJSON(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.WriteJSON(s.path, s, 0o644)
 }
 
 func (s *Settings) Agent() string {
@@ -519,7 +512,7 @@ func (s *Settings) SetAgent(kind string) {
 	s.prefs.LastAgent = kind
 	p := s.prefs
 	s.mu.Unlock()
-	_ = writeJSON(s.prefsPath, p)
+	_ = atomicfile.WriteJSON(s.prefsPath, p, 0o644)
 }
 
 // Profile looks a profile up by name; "" means the default profile.

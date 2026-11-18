@@ -43,7 +43,7 @@ func Export(w io.Writer, cfg *config.Config, t *store.Task, from string) (*Manif
 // without it a task whose id exists here is refused. Nothing is left behind
 // when it fails.
 func Import(cfg *config.Config, st *store.Store, r io.Reader, as string, land Landing) (*Manifest, []string, error) {
-	m, err := PrepareAs(cfg, st, r, as)
+	m, err := Prepare(cfg, st, r, as)
 	if err != nil {
 		if as == "" && strings.Contains(err.Error(), "already exists here") {
 			err = fmt.Errorf("%w — import it under another id with --as <new-id>", err)

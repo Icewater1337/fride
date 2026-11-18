@@ -324,38 +324,40 @@ function agentInfo(kind) {
 
 /* ------------------------------------------------------------------ board */
 
+// unread is how many of a task's sessions have spoken and wait for your answer.
+// A computer still on an older FrIDE sends only the flag, which counts as one.
+function unread(t) { return t.waiting || (t.attention ? 1 : 0); }
+const waitingFor = n => `${n} session${n === 1 ? '' : 's'} waiting for your answer`;
+
 function renderSwitcher() {
   const host = $('#switcher');
   // Done tasks are finished work — keeping them here would defeat the purpose
   const live = state.tasks.filter(t => t.status !== 'done' && !t.hidden);
   const key = JSON.stringify([state.current, state.currentNode, live.map(t =>
-    [t.slug, t.node, t.name, t.status, !!t.attention, !!(t.stack && t.stack.up)])]);
+    [t.slug, t.node, t.name, t.status, unread(t), !!(t.stack && t.stack.up)])]);
   if (key === state.switcherKey) return;
   state.switcherKey = key;
   host.innerHTML = '';
-  if (!live.length) { host.appendChild(el('span', 'empty', 'no open tasks')); fadeSwitcher(); return; }
+  const total = live.reduce((n, t) => n + unread(t), 0);
+  const sum = $('#rail-unread');
+  sum.textContent = total;
+  sum.title = waitingFor(total);
+  sum.classList.toggle('hidden', !total);
+  if (!live.length) { host.appendChild(el('span', 'empty', 'no open tasks')); return; }
   for (const t of live) {
     const here = t.slug === state.current && (isLocal(t.node) ? isLocal(state.currentNode) : t.node === state.currentNode);
-    const chip = el('button', 'chip' + (here ? ' active' : '') +
-                             (t.attention ? ' attn' : ''));
-    if (t.attention) chip.appendChild(el('span', 'dot attn'));
-    else if (t.stack && t.stack.up) chip.appendChild(el('span', 'dot stack'));
-    chip.appendChild(el('span', null, t.name));
-    chip.title = t.attention ? `${t.agent || 'the agent'} is waiting for input`
-               : (t.stack && t.stack.up ? 'stack running' : t.status.replace('_', ' '));
-    chip.addEventListener('click', () => openTask(t.slug, t.node));
-    host.appendChild(chip);
+    const up = !!(t.stack && t.stack.up);
+    const n = unread(t);
+    const item = el('button', 'rail-item' + (here ? ' active' : ''));
+    if (here) item.setAttribute('aria-current', 'page');
+    item.appendChild(el('span', 'dot ' + (up ? 'stack' : 'off')));
+    item.appendChild(el('span', 'rail-name', t.name));
+    if (n) item.appendChild(el('span', 'rail-n', String(n)));
+    item.title = t.name + ' — ' + (n ? waitingFor(n) : up ? 'stack running' : t.status.replace('_', ' '));
+    item.addEventListener('click', () => openTask(t.slug, t.node));
+    host.appendChild(item);
   }
-  fadeSwitcher();
 }
-
-// The switcher fades out at its right edge only when there is more to scroll
-// to; on a short list the fade would just eat the last chip's end.
-function fadeSwitcher() {
-  const host = $('#switcher');
-  host.classList.toggle('overflowing', host.scrollWidth > host.clientWidth + 1);
-}
-window.addEventListener('resize', fadeSwitcher);
 
 async function refreshTasks() {
   await loadFleet();
@@ -1622,6 +1624,26 @@ for (const panel of document.querySelectorAll('.panel[data-panel]')) {
     try { localStorage.setItem(FOLD_KEY, JSON.stringify([...set])); } catch { /* private mode */ }
   });
 }
+
+// The task rail and the task view's whole sidebar fold away too, for the same
+// reason and remembered the same way. The terminal refits on its own: its
+// ResizeObserver sees the room it gained.
+function foldable(btn, target, key, what) {
+  const draw = on => {
+    target.classList.toggle('folded', on);
+    btn.setAttribute('aria-expanded', String(!on));
+    btn.title = (on ? 'Show ' : 'Hide ') + what;
+    btn.setAttribute('aria-label', btn.title);
+  };
+  try { draw(localStorage.getItem(key) === '1'); } catch { draw(false); }
+  btn.addEventListener('click', () => {
+    const on = !target.classList.contains('folded');
+    draw(on);
+    try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* private mode */ }
+  });
+}
+foldable($('#rail-toggle'), $('#rail'), 'fride-rail-folded', 'the task list');
+foldable($('#side-toggle'), $('#task'), 'fride-side-folded', 'the side panels');
 
 /* ------------------------------------------------------------------ task actions */
 

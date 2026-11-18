@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/settings"
 )
 
@@ -94,31 +95,12 @@ func normalizeCode(c string) string {
 	}, c)
 }
 
+// writePrivate writes v 0600, in a folder made 0700 if it is missing.
 func writePrivate(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.WriteJSON(path, v, 0o600)
 }
 
 // NewCode makes a pairing code, replacing one that is pending. 16 characters

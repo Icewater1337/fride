@@ -74,24 +74,53 @@ func branchExists(t *testing.T, repo, b string) bool {
 
 // 1.2: a branch named like a folder of the checkout made `rev-list` fail with
 // "ambiguous argument", the failure read as "no unique commits", and the
-// branch was deleted with its commit.
+// branch was deleted with its commit. The count is the branch's one commit,
+// with a remote and without (#163).
 func TestRemoveKeepsAnAmbiguousBranchWithCommits(t *testing.T) {
+	for origin, want := range map[bool]string{
+		true:  "KEPT branch docs (1 unpushed commit(s))",
+		false: "KEPT branch docs (1 commit(s) on no other branch)",
+	} {
+		cfg, api := setup(t, origin)
+		if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "docs", nil); err != nil {
+			t.Fatal(err)
+		}
+		wt := cfg.RepoDir("t1", "api")
+		write(t, filepath.Join(wt, "docs", "new.md"), "work\n")
+		run(t, wt, "add", "-A")
+		run(t, wt, "commit", "-qm", "the only copy of this work")
+		res, err := Remove(cfg, "t1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !branchExists(t, api, "docs") {
+			t.Fatalf("origin=%v: branch docs and its commit were deleted: %+v", origin, res)
+		}
+		if len(res) != 1 || !res[0].Removed || !strings.Contains(res[0].Detail, want) {
+			t.Errorf("origin=%v: results = %+v, want %q", origin, res, want)
+		}
+	}
+}
+
+// #163: in a repository without a remote, `--not --remotes` excluded nothing,
+// so every commit of main counted as unpushed and a task branch with no
+// commits of its own was never deleted — the next task of that name continued
+// it instead of starting from its base.
+func TestRemoveDeletesAnUntouchedBranchWithoutARemote(t *testing.T) {
 	cfg, api := setup(t, false)
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "docs"); err != nil {
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "two")
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "three")
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api"}}, "claude", "feat/x", nil); err != nil {
 		t.Fatal(err)
 	}
-	wt := cfg.RepoDir("t1", "api")
-	write(t, filepath.Join(wt, "docs", "new.md"), "work\n")
-	run(t, wt, "add", "-A")
-	run(t, wt, "commit", "-qm", "the only copy of this work")
 	res, err := Remove(cfg, "t1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !branchExists(t, api, "docs") {
-		t.Fatalf("branch docs and its commit were deleted: %+v", res)
+	if branchExists(t, api, "feat/x") {
+		t.Errorf("a branch with no commits of its own was kept: %+v", res)
 	}
-	if len(res) != 1 || !res[0].Removed || !strings.Contains(res[0].Detail, "KEPT branch docs") {
+	if len(res) != 1 || !res[0].Removed || !strings.Contains(res[0].Detail, "deleted") {
 		t.Errorf("results = %+v", res)
 	}
 }
@@ -100,7 +129,7 @@ func TestRemoveKeepsAnAmbiguousBranchWithCommits(t *testing.T) {
 // commits are all on the remote is deleted.
 func TestRemoveDeletesAnAmbiguousBranchWithNothingUnpushed(t *testing.T) {
 	cfg, api := setup(t, true)
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api"}}, "claude", "docs"); err != nil {
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api"}}, "claude", "docs", nil); err != nil {
 		t.Fatal(err)
 	}
 	res, err := Remove(cfg, "t1", false)
@@ -116,7 +145,7 @@ func TestRemoveDeletesAnAmbiguousBranchWithNothingUnpushed(t *testing.T) {
 // alone. Removing the worktree — with force or without — must not drop them.
 func TestRemoveKeepsCommitsOnADetachedHead(t *testing.T) {
 	cfg, api := setup(t, false)
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/x"); err != nil {
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/x", nil); err != nil {
 		t.Fatal(err)
 	}
 	wt := cfg.RepoDir("t1", "api")
@@ -158,12 +187,12 @@ func TestRemoveKeepsCommitsOnADetachedHead(t *testing.T) {
 // existing task's worktree, its uncommitted work and its branch.
 func TestCreateRefusesATakenSlugAndTouchesNothing(t *testing.T) {
 	cfg, api := setup(t, false)
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/one"); err != nil {
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/one", nil); err != nil {
 		t.Fatal(err)
 	}
 	work := filepath.Join(cfg.RepoDir("t1", "api"), "uncommitted.txt")
 	write(t, work, "keep me\n")
-	_, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/two")
+	_, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/two", nil)
 	if !errors.Is(err, ErrExists) {
 		t.Fatalf("err = %v, want ErrExists", err)
 	}
@@ -180,7 +209,7 @@ func TestCreateRefusesATakenSlugAndTouchesNothing(t *testing.T) {
 func TestCreateCleansUpOnlyWhatItMade(t *testing.T) {
 	cfg, api := setup(t, false)
 	run(t, api, "branch", "mine")
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}, {Name: "nope"}}, "claude", "mine"); err == nil {
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}, {Name: "nope"}}, "claude", "mine", nil); err == nil {
 		t.Fatal("Create with an unknown repo succeeded")
 	}
 	if !branchExists(t, api, "mine") {
@@ -193,7 +222,7 @@ func TestCreateCleansUpOnlyWhatItMade(t *testing.T) {
 		t.Errorf("worktree registration left:\n%s", wl)
 	}
 
-	if _, err := Create(cfg, "t2", []RepoSpec{{Name: "api", BaseRef: "main"}, {Name: "nope"}}, "claude", "feat/new"); err == nil {
+	if _, err := Create(cfg, "t2", []RepoSpec{{Name: "api", BaseRef: "main"}, {Name: "nope"}}, "claude", "feat/new", nil); err == nil {
 		t.Fatal("Create with an unknown repo succeeded")
 	}
 	if branchExists(t, api, "feat/new") {
@@ -201,11 +230,62 @@ func TestCreateCleansUpOnlyWhatItMade(t *testing.T) {
 	}
 }
 
+// #162: in a repository, git expands "@{-1}" to the branch checked out before.
+// The name passed ValidateBranch, the add failed ("a branch named 'feature-x'
+// already exists"), and the cleanup's `branch -D @{-1}` force-deleted
+// feature-x with its unpushed commit.
+func TestCreateRefusesAtBraceNamesAndKeepsThePreviousBranch(t *testing.T) {
+	cfg, api := setup(t, false)
+	run(t, api, "checkout", "-q", "-b", "feature-x")
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "unpushed")
+	run(t, api, "checkout", "-q", "main")
+	// Where fride runs decides what git expands "@{-1}" to: the CLI usually
+	// runs inside a checkout.
+	t.Chdir(api)
+	for _, b := range []string{"@{-1}", "@{1}", "main@{upstream}", "@", "HEAD"} {
+		if err := ValidateBranch(b); err == nil {
+			t.Errorf("ValidateBranch(%q) = nil, want an error", b)
+		}
+	}
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "@{-1}", nil); err == nil {
+		t.Error("Create accepted the branch name @{-1}")
+	}
+	if !branchExists(t, api, "feature-x") {
+		t.Fatal("the previously checked-out branch and its commit were deleted")
+	}
+}
+
+// The cleanup deletes a branch only where Create made it. One that stands
+// elsewhere — it existed after all, or got commits since — is not Create's,
+// one that is checked out is kept as `branch -D` would keep it, and one whose
+// start could not be read is kept too.
+func TestUndoKeepsABranchItDidNotMake(t *testing.T) {
+	cfg, api := setup(t, false)
+	base := run(t, api, "rev-parse", "main")
+	run(t, api, "branch", "moved")
+	run(t, api, "checkout", "-q", "moved")
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "work")
+	run(t, api, "checkout", "-q", "main")
+	run(t, api, "branch", "elsewhere")
+	run(t, api, "worktree", "add", "-q", filepath.Join(t.TempDir(), "wt"), "elsewhere")
+	run(t, api, "branch", "unread")
+	Undo(cfg, "t1", []Created{
+		{Repo: "api", Branch: "moved", NewBranch: true, branchAt: base},
+		{Repo: "api", Branch: "elsewhere", NewBranch: true, branchAt: base},
+		{Repo: "api", Branch: "unread", NewBranch: true},
+	})
+	for _, b := range []string{"moved", "elsewhere", "unread"} {
+		if !branchExists(t, api, b) {
+			t.Errorf("Undo deleted branch %s, which it did not make", b)
+		}
+	}
+}
+
 // #47: a worktree whose repository is no longer discovered was skipped
 // silently, and Purge deleted its uncommitted work with the folder.
 func TestPurgeKeepsAWorktreeOfAnUndiscoveredRepo(t *testing.T) {
 	cfg, _ := setup(t, false)
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/x"); err != nil {
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "feat/x", nil); err != nil {
 		t.Fatal(err)
 	}
 	wt := cfg.RepoDir("t1", "api")

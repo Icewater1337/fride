@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,7 +90,7 @@ func (t *Thread) following() bool {
 func (t *Thread) open() []string {
 	var out []string
 	for _, s := range t.Tasks {
-		if !contains(t.Finished, s) {
+		if !slices.Contains(t.Finished, s) {
 			out = append(out, s)
 		}
 	}
@@ -502,7 +503,7 @@ func (o *Orchestrator) viewLocked(id int) ThreadView {
 		}
 	}
 	for _, m := range o.st.Messages {
-		if containsInt(m.Threads, id) {
+		if slices.Contains(m.Threads, id) {
 			v.Messages = append(v.Messages, m)
 		}
 	}
@@ -515,7 +516,7 @@ func (o *Orchestrator) trailLocked(id, n int) []Message {
 	var out []Message
 	first := true
 	for _, m := range o.st.Messages {
-		if !containsInt(m.Threads, id) {
+		if !slices.Contains(m.Threads, id) {
 			continue
 		}
 		if first && m.Role == RoleUser {
@@ -537,7 +538,7 @@ func (o *Orchestrator) link(id int, slug string) {
 	if t == nil || slug == "" {
 		return
 	}
-	if !contains(t.Tasks, slug) {
+	if !slices.Contains(t.Tasks, slug) {
 		t.Tasks = append(t.Tasks, slug)
 	}
 	// Handed to a task again after it was closed: it is followed again.
@@ -559,7 +560,7 @@ func (o *Orchestrator) threadsFor(slug string) []int {
 	var out []int
 	for i := range o.st.Threads {
 		t := &o.st.Threads[i]
-		if t.following() && contains(t.open(), slug) {
+		if t.following() && slices.Contains(t.open(), slug) {
 			out = append(out, t.ID)
 		}
 	}
@@ -638,7 +639,7 @@ func (o *Orchestrator) followed() []string {
 			continue
 		}
 		for _, s := range t.open() {
-			if !contains(out, s) {
+			if !slices.Contains(out, s) {
 				out = append(out, s)
 			}
 		}
@@ -651,7 +652,7 @@ func (o *Orchestrator) followed() []string {
 func (o *Orchestrator) finish(slug string, why error) {
 	for i := range o.st.Threads {
 		t := &o.st.Threads[i]
-		if !t.following() || !contains(t.open(), slug) {
+		if !t.following() || !slices.Contains(t.open(), slug) {
 			continue
 		}
 		t.Finished = append(t.Finished, slug)
@@ -664,6 +665,9 @@ func (o *Orchestrator) finish(slug string, why error) {
 	}
 }
 
+// heldThen joins an instruction to the one already held for the same task.
+const heldThen = " Then: "
+
 // hold keeps an instruction until the task's agent can take it.
 func (o *Orchestrator) hold(slug, text string, threads []int) {
 	if o.st.Held == nil {
@@ -673,12 +677,12 @@ func (o *Orchestrator) hold(slug, text string, threads []int) {
 	if ok {
 		// Two in one reply — the task's instruction and a send after it. One
 		// line is what an agent's prompt takes, so they go together.
-		h.Text += " Then: " + text
+		h.Text += heldThen + text
 	} else {
 		h = held{Text: text, Since: time.Now()}
 	}
 	for _, id := range threads {
-		if !containsInt(h.Threads, id) {
+		if !slices.Contains(h.Threads, id) {
 			h.Threads = append(h.Threads, id)
 		}
 	}
@@ -699,22 +703,22 @@ func (o *Orchestrator) deliverHeld(obs []Observation) map[string]bool {
 	typed := map[string]bool{}
 	for _, ob := range obs {
 		slug := ob.Task.Slug
+		ready := ob.Running && ob.Waiting && ob.Blocked == ""
 		o.mu.Lock()
 		h, ok := o.st.Held[slug]
-		o.mu.Unlock()
-		if !ok {
-			continue
-		}
-		ready := ob.Running && ob.Waiting && ob.Blocked == ""
-		if !ready {
-			o.mu.Lock()
+		if ok && !ready {
+			// Under the same lock as the read: waitHeld writes h back, and a
+			// copy read before the lock was let go may have missed an
+			// instruction joined to it since.
 			o.waitHeld(slug, h, ob, now)
-			o.mu.Unlock()
+		}
+		o.mu.Unlock()
+		if !ok || !ready {
 			continue
 		}
 		err := o.host.Send(slug, h.Text)
 		o.mu.Lock()
-		delete(o.st.Held, slug)
+		o.typedHeld(slug, h, now)
 		if err == nil || errors.Is(err, ErrNotSeen) {
 			o.mem.tasks[slug] = o.mem.tasks[slug].sentOne(now)
 			typed[slug] = true
@@ -728,6 +732,31 @@ func (o *Orchestrator) deliverHeld(obs []Observation) map[string]bool {
 		o.mu.Unlock()
 	}
 	return typed
+}
+
+// typedHeld lets go of the held instruction h once it has been typed, and of
+// nothing else. Send runs without the lock and can take a while, and a turn
+// running meanwhile may have joined another instruction to it (hold): that
+// one was not typed, so it stays held, on its own, for the agent's next
+// prompt. Deleting the entry outright dropped it without a word, after the
+// chat had said it would be delivered (#157). Called with the lock held.
+func (o *Orchestrator) typedHeld(slug string, h held, now time.Time) {
+	cur, ok := o.st.Held[slug]
+	switch {
+	case !ok:
+	case cur.Text == h.Text:
+		delete(o.st.Held, slug)
+	default:
+		// Joined to h: the rest is what came after it. Anything else was held
+		// after h had already gone, and is kept whole.
+		if rest, joined := strings.CutPrefix(cur.Text, h.Text+heldThen); joined {
+			cur.Text = rest
+		}
+		// Its own clock: it is new to wait, and the agent was just at its
+		// prompt.
+		cur.Since, cur.Ran, cur.Gone = now, false, time.Time{}
+		o.st.Held[slug] = cur
+	}
 }
 
 // waitHeld is one look at an instruction whose agent is not ready yet. Only an
@@ -780,15 +809,6 @@ func (o *Orchestrator) trimThreads() {
 	o.st.Threads = out
 }
 
-func containsInt(xs []int, x int) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
-}
-
 // ------------------------------------------------------------------ telling the sender
 
 // noteNews hands the host a note for every inbox thread that has news since its
@@ -811,7 +831,7 @@ func (o *Orchestrator) noteNews() {
 		top := last
 		var news []Message
 		for _, m := range o.st.Messages {
-			if m.ID <= last || !containsInt(m.Threads, t.ID) {
+			if m.ID <= last || !slices.Contains(m.Threads, t.ID) {
 				continue
 			}
 			top = max(top, m.ID)

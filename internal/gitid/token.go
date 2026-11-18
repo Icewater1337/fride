@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/settings"
 )
 
@@ -62,20 +63,7 @@ func SetToken(stateDir, id, token string) error {
 			return err
 		}
 	}
-	f, err := os.CreateTemp(TokenDir(stateDir), "."+id+".token-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if _, err := f.WriteString(token + "\n"); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
+	return atomicfile.Write(p, []byte(token+"\n"), 0o600)
 }
 
 // Token reads an identity's token. A token that was never set is

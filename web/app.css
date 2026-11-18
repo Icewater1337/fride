@@ -346,25 +346,35 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 15
 .navbtn.active { background: var(--bg4); color: var(--fg); }
 .navbtn.active .i { color: var(--accent-fg); opacity: 1; }
 
-/* top task switcher + attention indicator */
-.switcher {
-  display: flex; gap: 6px; align-items: center; min-width: 0;
-  overflow-x: auto; scrollbar-width: none;
-  padding-left: 14px; border-left: 1px solid var(--line); height: 28px;
+/* the task rail: open tasks down the left edge, with their unread counts */
+.rail {
+  flex: none; width: 240px; display: flex; flex-direction: column; min-height: 0;
+  background: var(--bg2); border-right: 1px solid var(--line);
 }
-.switcher.overflowing { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
-.switcher::-webkit-scrollbar { display: none; }
-.switcher .chip {
-  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex: none;
-  background: transparent; border: 1px solid var(--line-strong); color: var(--dim);
-  height: 26px; padding: 0 10px; border-radius: 13px; cursor: pointer; font-size: 12px; font-weight: 500;
-  max-width: 220px;
+.rail-h { display: flex; align-items: center; gap: 6px; flex: none; height: 44px; padding: 0 8px 0 16px; }
+.rail-title {
+  flex: 1; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
 }
-.switcher .chip span:last-child { overflow: hidden; text-overflow: ellipsis; }
-.switcher .chip:hover { color: var(--fg); background: var(--bg3); }
-.switcher .chip.active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-fg); }
-.switcher .chip.attn { border-color: var(--amber-line); color: var(--amber); background: var(--amber-soft); }
-.switcher .empty { color: var(--faint); font-size: 12px; white-space: nowrap; }
+.switcher { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 0 6px 8px; }
+.rail-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 0 8px 0 10px; flex: none;
+  background: none; border: none; border-radius: var(--radius-sm); color: var(--dim);
+  font-size: 13px; text-align: left; cursor: pointer;
+}
+.rail-item:hover { background: var(--bg3); color: var(--fg); }
+.rail-item.active { background: var(--accent-soft); color: var(--accent-fg); font-weight: 550; }
+.rail-item .dot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.rail-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-n {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--amber); color: var(--bg2); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.switcher .empty { color: var(--faint); font-size: 12px; padding: 6px 10px; }
+/* Folded, the rail is a strip: the button to unfold it, and the unread total. */
+.rail.folded { width: 44px; }
+.rail.folded .rail-h { flex-direction: column; height: auto; padding: 10px 0; gap: 8px; }
+.rail.folded .rail-title, .rail.folded .switcher, .rail:not(.folded) #rail-unread { display: none; }
 
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); flex: none; vertical-align: middle; }
 .dot.stack, .dot.good { background: var(--ok); }
@@ -554,6 +564,8 @@ button.chip:hover { color: var(--fg); background: var(--bg3); }
 
 .task-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 14px; }
 .sidebar { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow: auto; padding: 0 2px 2px 0; margin-right: -2px; }
+#task.folded .sidebar { display: none; }
+#task.folded .task-body { grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
 
 .panel {
   flex: none;
@@ -1419,7 +1431,7 @@ pre.docbody {
 .setup-check { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--dim); margin: 5px 0; }
 .setup-check .dot { width: 8px; height: 8px; position: relative; top: -1px; }
 .setup-check b { color: var(--fg); font-weight: 600; }
-body.unconfigured #btn-new, body.unconfigured .nav, body.unconfigured #switcher { display: none; }
+body.unconfigured #btn-new, body.unconfigured .nav, body.unconfigured #rail { display: none; }
 
 /* ---------------------------------------------------------------- fleet */
 

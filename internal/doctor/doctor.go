@@ -141,25 +141,12 @@ func Run(cfg *config.Config) *Report {
 	}
 
 	if cfg.Configured() && cfg.Settings.Ledger != nil && cfg.Settings.Ledger.Remote != "" {
-		c := Check{ID: "ledger", Label: "rationale ledger", Needed: "publishing rationale documents",
-			Fix: "check ledger.remote in config.json, and that git can push there (credentials)"}
-		if err := journal.CheckRemote(cfg.Settings.Ledger.Remote); err != nil {
-			c.Detail = err.Error()
-		} else {
-			c.OK, c.Detail = true, "reachable"
-		}
-		add(c)
+		add(publishRepo("ledger", "rationale ledger", "publishing rationale documents", cfg.Settings.Ledger.Remote))
 	}
 
 	if journal.IdeasEnabled(cfg) {
-		c := Check{ID: "ideas", Label: "ideas repository", Needed: "publishing idea pages, and finding the ideas that exist",
-			Fix: "check ideas.remote in config.json, and that git can push there (credentials)"}
-		if err := journal.CheckRemote(cfg.Settings.Ideas.Remote); err != nil {
-			c.Detail = err.Error()
-		} else {
-			c.OK, c.Detail = true, "reachable"
-		}
-		add(c)
+		add(publishRepo("ideas", "ideas repository", "publishing idea pages, and finding the ideas that exist",
+			cfg.Settings.Ideas.Remote))
 	}
 
 	if cfg.Settings != nil {
@@ -298,4 +285,17 @@ func (r *Report) Sorted() []Check {
 	out := append([]Check(nil), r.Checks...)
 	sort.SliceStable(out, func(i, j int) bool { return !out[i].OK && out[j].OK })
 	return out
+}
+
+// publishRepo checks that git reaches a publish repository, the ledger or
+// the ideas repository, configured under key.
+func publishRepo(key, label, needed, remote string) Check {
+	c := Check{ID: key, Label: label, Needed: needed,
+		Fix: "check " + key + ".remote in config.json, and that git can push there (credentials)"}
+	if err := journal.CheckRemote(remote); err != nil {
+		c.Detail = err.Error()
+	} else {
+		c.OK, c.Detail = true, "reachable"
+	}
+	return c
 }

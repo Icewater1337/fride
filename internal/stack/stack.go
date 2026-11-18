@@ -30,6 +30,7 @@
 package stack
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -455,6 +456,30 @@ func openInIDE(cfg *config.Config, p *Plan, r *Resolved) ([]string, error) {
 	return notes, nil
 }
 
+// stopTimeout bounds a service's stop command: a launcher that stops
+// containers and build daemons takes a while, one that hangs must not keep
+// the slot forever.
+const stopTimeout = 3 * time.Minute
+
+// runStop runs a recorded service's stop command in its directory, with its
+// output appended to the service's log.
+func runStop(cfg *config.Config, slug string, s recordedService) error {
+	log, err := os.OpenFile(LogPath(cfg, slug, s.Name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	fmt.Fprintf(log, "[fride] stop: %s\n", s.Stop)
+	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, Shell(), "-c", s.Stop)
+	cmd.Dir, cmd.Stdout, cmd.Stderr = s.Dir, log, log
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%v (its output is in `fride stack logs %s %s`)", err, slug, s.Name)
+	}
+	return nil
+}
+
 // launcherGrace is how long a launcher's process group gets to exit after
 // SIGTERM before it is killed. Reaping the ports usually took that long
 // already.
@@ -482,6 +507,18 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 		warnings = append(warnings, "could not resolve the profile, so only recorded processes were stopped: "+err.Error())
 	}
 
+	// First the services' own stop commands: a launcher that started things
+	// detached knows what it started, and signalling first would leave it
+	// nothing to ask. Only for what this task started, as with the ports: a
+	// refused launch stops nothing of somebody else's.
+	for _, s := range services {
+		if s.Mode == ModeSource && s.Started && s.Stop != "" {
+			if err := runStop(cfg, slug, s); err != nil {
+				warnings = append(warnings, s.Name+": stop: "+err.Error())
+			}
+		}
+	}
+
 	launchers := runningLaunchers(cfg, slug)
 	for _, l := range launchers {
 		l.signal(syscall.SIGTERM)
@@ -505,7 +542,7 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 	// Only this task's own containers. The shared ones are left on purpose:
 	// another task is very likely using them.
 	var left []string
-	for _, project := range taskProjects(cfg, slug, rec) {
+	for _, project := range rec.projects() {
 		if _, err := composeDown(project); err != nil {
 			warnings = append(warnings, err.Error())
 			left = append(left, project)
@@ -960,7 +997,7 @@ func InfraDown(cfg *config.Config, slug string) error {
 	rec := readRecord(cfg, slug)
 	var errs []error
 	var left []string
-	for _, project := range taskProjects(cfg, slug, rec) {
+	for _, project := range rec.projects() {
 		if _, err := composeDown(project); err != nil {
 			errs = append(errs, err)
 			left = append(left, project)

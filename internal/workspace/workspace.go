@@ -39,6 +39,10 @@ type Created struct {
 	// NewBranch: this call created the branch, rather than checking out one
 	// that already existed. Only such a branch may be deleted by Undo.
 	NewBranch bool
+	// branchAt is the commit a new branch starts at, "" when it could not be
+	// read. Undo deletes the branch only while it is still there: one that
+	// stands elsewhere is not what Create made.
+	branchAt string
 }
 
 // ErrExists is returned by Create when the task's folder is already there. It
@@ -177,6 +181,12 @@ func dashify(s string) string {
 // ValidateBranch defers to git itself rather than reimplementing its rules,
 // which are more intricate than they look (no "..", no trailing ".lock", no
 // leading dot in any path component, and so on).
+//
+// It checks the full ref, not `check-ref-format --branch`: that one expands
+// "@{-1}" to the branch checked out before in whatever repository fride runs
+// in, so the name passed, and every later git command read it as that other
+// branch — the failed create's cleanup force-deleted it. Git reads a lone "@"
+// as HEAD, so that is refused too, as is "HEAD", which --branch refused.
 func ValidateBranch(b string) error {
 	if b == "" {
 		return fmt.Errorf("branch name is empty")
@@ -184,7 +194,10 @@ func ValidateBranch(b string) error {
 	if strings.HasPrefix(b, "-") {
 		return fmt.Errorf("branch %q may not start with a dash", b)
 	}
-	if _, err := git("", "check-ref-format", "--branch", b); err != nil {
+	if b == "@" || b == "HEAD" || strings.Contains(b, "@{") {
+		return fmt.Errorf("%q is not a valid git branch name: git reads it as another ref", b)
+	}
+	if _, err := git("", "check-ref-format", "refs/heads/"+b); err != nil {
 		return fmt.Errorf("%q is not a valid git branch name", b)
 	}
 	return nil
@@ -215,14 +228,11 @@ func PruneStale(cfg *config.Config) {
 // or branch that was there before. A caller must not clean up after it. An
 // earlier version left that to the caller, which ran a forced Remove and so
 // wiped the existing task whenever the slug was already taken.
-func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) ([]Created, error) {
-	return CreateWith(cfg, slug, specs, agentKind, branch, nil)
-}
-
-// CreateWith is Create with the task's git identity environment (gitid.Env)
-// for its fetches, so a private remote is reached with the task's own
-// credentials rather than whatever git finds for the user.
-func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string, env []string) (out []Created, err error) {
+//
+// env is the task's git identity environment (gitid.Env) for its fetches, so
+// a private remote is reached with the task's own credentials rather than
+// whatever git finds for the user; nil for none.
+func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string, env []string) (out []Created, err error) {
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("name at least one repo")
 	}
@@ -259,7 +269,7 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 			if pending != nil {
 				made = append(made, *pending)
 			}
-			undo(cfg, slug, made)
+			Undo(cfg, slug, made)
 			out = nil
 		}
 	}()
@@ -296,6 +306,7 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 		// force it back to base and throw away whatever was on it. Only the
 		// first case creates anything.
 		var addArgs []string
+		start := base
 		_, localErr := git(repo.Main, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 		_, remoteErr := git(repo.Main, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
 		switch {
@@ -308,12 +319,16 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 			addArgs = []string{"worktree", "add", "--track", "-b", branch, dest, "origin/" + branch}
 			c.Notes = append(c.Notes, "branch "+branch+" existed on origin — checked out and tracking it")
 			c.BaseRef = "origin/" + branch
+			start = "refs/remotes/origin/" + branch
 		default:
 			addArgs = []string{"worktree", "add", "--no-track", "-b", branch, dest, base}
 		}
 		c.NewBranch = localErr != nil
+		if c.NewBranch {
+			c.branchAt, _ = git(repo.Main, "rev-parse", "--verify", "--quiet", "--end-of-options", start+"^{commit}")
+		}
 		// Set before the add: a failed `worktree add -b` can leave the branch
-		// behind, and undo has to know it was this call's.
+		// behind, and Undo has to know it was this call's.
 		pending = &c
 		if _, err := git(repo.Main, addArgs...); err != nil {
 			return out, fmt.Errorf("%s: %w (is branch %q checked out elsewhere?)", repo.Name, err, branch)
@@ -324,7 +339,11 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 		out = append(out, c)
 	}
 	pending = nil
-	if err := writeGuide(cfg, slug, specs, agentKind, branch); err != nil {
+	names := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		names = append(names, sp.Name)
+	}
+	if err := WriteGuide(cfg, slug, names, agentKind, branch); err != nil {
 		return out, fmt.Errorf("the workspace's guide file could not be written: %w", err)
 	}
 	// Best effort: a missing hook costs some rationale, not the workspace, and
@@ -336,14 +355,10 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 	return out, nil
 }
 
-// Undo takes back a workspace Create returned, for a caller whose next step
-// failed (the task could not be registered). Like Create's own cleanup, it
-// removes only what Create made.
-func Undo(cfg *config.Config, slug string, created []Created) {
-	undo(cfg, slug, created)
-}
-
-func undo(cfg *config.Config, slug string, made []Created) {
+// Undo takes back what Create made: Create's own cleanup, and for a caller
+// whose next step failed (the task could not be registered), the workspace
+// Create returned. It removes only what Create made.
+func Undo(cfg *config.Config, slug string, made []Created) {
 	for i := len(made) - 1; i >= 0; i-- {
 		c := made[i]
 		repo, ok := cfg.Repo(c.Repo)
@@ -352,10 +367,12 @@ func undo(cfg *config.Config, slug string, made []Created) {
 		}
 		_, _ = git(repo.Main, "worktree", "remove", "--force", cfg.RepoDir(slug, c.Repo))
 		_, _ = git(repo.Main, "worktree", "prune")
-		if c.NewBranch {
-			// Fresh from its base, so nothing is on it. branch -D refuses a
-			// branch that is checked out anywhere, which keeps it safe even so.
-			_, _ = git(repo.Main, "branch", "-D", c.Branch)
+		if c.NewBranch && c.branchAt != "" && !checkedOut(repo.Main, c.Branch) {
+			// Fresh from its base, so nothing is on it. By its full ref and
+			// only at the commit Create made it at: git expands a short name
+			// (`branch -D @{-1}` deleted the branch checked out before), and a
+			// branch that stands elsewhere was never this call's to delete.
+			_, _ = git(repo.Main, "update-ref", "-d", "refs/heads/"+c.Branch, c.branchAt)
 		}
 	}
 	// Create made this folder with Mkdir, so everything left in it — guide,
@@ -363,19 +380,33 @@ func undo(cfg *config.Config, slug string, made []Created) {
 	_ = os.RemoveAll(cfg.WorkspaceDir(slug))
 }
 
-// writeGuide drops the agent's own instructions file at the workspace root,
+// checkedOut reports whether a worktree of repo has branch checked out, as
+// `branch -D` refuses to delete such a branch and update-ref does not. A list
+// that cannot be read counts as checked out: the branch is then kept.
+func checkedOut(repo, branch string) bool {
+	out, err := git(repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		return true
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if l == "branch refs/heads/"+branch {
+			return true
+		}
+	}
+	return false
+}
+
+// WriteGuide drops the agent's own instructions file at the workspace root,
 // which is where the agent is started. The name matters: Claude Code reads
 // CLAUDE.md, while Codex and Antigravity read AGENTS.md, so writing the wrong
 // one means the agent silently never sees any of this.
 //
 // It is how the agent learns that FrIDE owns this workspace's stack and that
 // the journal exists — the same way it picks up any other project convention.
-// It sits outside every repo, so it never appears in a diff.
-func writeGuide(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) error {
-	names := make([]string, 0, len(specs))
-	for _, s := range specs {
-		names = append(names, s.Name)
-	}
+// It sits outside every repo, so it never appears in a diff. A workspace that
+// arrived from another computer gets it rewritten, as that one named the other
+// computer's paths.
+func WriteGuide(cfg *config.Config, slug string, names []string, agentKind, branch string) error {
 	body := `# Workspace ` + slug + `
 
 This folder is a FrIDE task workspace. Each subdirectory is a git worktree of
@@ -666,13 +697,15 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		}
 		detail := "removed"
 		if branch := strings.TrimPrefix(ref, "refs/heads/"); branch != ref {
-			n, err := countCommits(repo.Main, ref, "--remotes")
+			n, local, err := ownCommits(repo.Main, branch)
 			switch {
 			case err != nil:
 				detail = fmt.Sprintf("removed — KEPT branch %s (its unpushed commits could not be counted: %v)", branch, err)
 			case n == 0:
 				_, _ = git(repo.Main, "branch", "-D", branch)
 				detail = "removed (branch had no unique commits — deleted)"
+			case local:
+				detail = fmt.Sprintf("removed — KEPT branch %s (%d commit(s) on no other branch)", branch, n)
 			default:
 				detail = fmt.Sprintf("removed — KEPT branch %s (%d unpushed commit(s))", branch, n)
 			}
@@ -719,6 +752,27 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		_ = os.Remove(ws) // only succeeds when empty, which is what we want
 	}
 	return res, nil
+}
+
+// ownCommits counts the commits of a branch that deleting it would lose: those
+// on no remote-tracking ref. A repository without remote-tracking refs (one
+// with no remote, which DefaultBase supports, or never fetched) has nothing to
+// compare with there, and every commit of the history counted, so a branch
+// was never deleted. There it counts the commits on no other local branch,
+// and local says so.
+func ownCommits(repo, branch string) (n int, local bool, err error) {
+	remotes, err := git(repo, "for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes")
+	if err != nil {
+		return 0, false, err
+	}
+	if remotes != "" {
+		n, err = countCommits(repo, "refs/heads/"+branch, "--remotes")
+		return n, false, err
+	}
+	// --exclude matches what --branches lists, the name without refs/heads/;
+	// a branch name holds no glob characters, which git refuses in a ref.
+	n, err = countCommits(repo, "refs/heads/"+branch, "--exclude="+branch, "--branches")
+	return n, true, err
 }
 
 // countCommits counts the commits reachable from rev and from none of the refs
@@ -954,17 +1008,6 @@ func countLines(path string) int {
 		n++
 	}
 	return n
-}
-
-// WriteGuide (re)writes the agent's guide file at the workspace root — for a
-// workspace that arrived from another computer, whose guide named that
-// computer's paths.
-func WriteGuide(cfg *config.Config, slug string, repos []string, agentKind, branch string) error {
-	specs := make([]RepoSpec, 0, len(repos))
-	for _, r := range repos {
-		specs = append(specs, RepoSpec{Name: r})
-	}
-	return writeGuide(cfg, slug, specs, agentKind, branch)
 }
 
 // CopyLocalConfig copies a repository's git-ignored local config from its main

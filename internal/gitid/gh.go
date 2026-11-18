@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/settings"
 )
 
@@ -75,27 +76,10 @@ func writeGH(stateDir string, g settings.GitIdentity, token string) error {
 			return err
 		}
 	}
-	if err := replaceFile(dir, "config.yml", "version: \"1\"\n"); err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, "config.yml"), []byte("version: \"1\"\n"), 0o600); err != nil {
 		return err
 	}
-	return replaceFile(dir, "hosts.yml", ghHosts(settings.HostKey(g.Host), token))
-}
-
-func replaceFile(dir, name, content string) error {
-	f, err := os.CreateTemp(dir, "."+name+"-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp)
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(dir, name))
+	return atomicfile.Write(filepath.Join(dir, "hosts.yml"), []byte(ghHosts(settings.HostKey(g.Host), token)), 0o600)
 }
 
 // ghLogin is g's gh config folder when its login holds token for g's host,

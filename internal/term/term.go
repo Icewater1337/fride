@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -216,6 +217,14 @@ func (s *Session) Subscribe() (<-chan []byte, func()) {
 	if len(s.buf) > 0 {
 		ch <- append([]byte(nil), s.buf...)
 	}
+	// An exited session will never publish or close again: a channel left
+	// open here kept the reopened tab's socket open, and the tab pulsing busy,
+	// forever (#150). The cancel func tolerates the unregistered channel.
+	if s.closed {
+		close(ch)
+		s.mu.Unlock()
+		return ch, func() {}
+	}
 	if s.subs == nil {
 		s.subs = map[chan []byte]struct{}{}
 	}
@@ -279,6 +288,9 @@ func (s *Session) close(msg string) {
 	}
 	s.closed = true
 	s.exitMsg = msg
+	// The exit message was published just before, which set Busy; nothing
+	// will clear it again, so an exited tab would pulse busy forever.
+	s.Busy = false
 	for ch := range s.subs {
 		delete(s.subs, ch)
 		close(ch)
@@ -372,21 +384,20 @@ func (m *Manager) watchIdle() {
 }
 
 // Attention reports whether any agent session of a task is waiting for input.
-func (m *Manager) Attention(task string) bool {
+func (m *Manager) Attention(task string) bool { return m.Waiting(task) > 0 }
+
+// Waiting counts a task's sessions waiting for input: each one has said
+// something the user has not answered yet, which is what the UI shows as unread.
+func (m *Manager) Waiting(task string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	n := 0
 	for _, s := range m.sessions {
-		if s.Task != task {
-			continue
-		}
-		s.mu.Lock()
-		a := s.Attention && !s.closed
-		s.mu.Unlock()
-		if a {
-			return true
+		if s.Task == task && s.Waiting() {
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // Start launches a command under a PTY in dir.
@@ -402,9 +413,21 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 	cmd.Env = append(cleanEnv(),
 		append([]string{"TERM=xterm-256color", "COLORTERM=truecolor"}, env...)...)
 
-	const startRows, startCols = 30, 100
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: startRows, Cols: startCols})
+	// The terminal is opened, and read, before the process starts. macOS throws
+	// away what a program printed if nothing reads the other end when the
+	// terminal's last copy is closed: it waits 0.6 s for a reader, then
+	// flushes. pty.StartWithSize closes the parent's copy before it returns, so
+	// a reader started after it came too late for a program already done by
+	// then — a quick echo, or an agent CLI that fails at once — and the tab
+	// showed nothing but "[process exited]".
+	ptmx, tty, err := pty.Open()
 	if err != nil {
+		return nil, fmt.Errorf("start %s: %w", argv[0], err)
+	}
+	const startRows, startCols = 30, 100
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: startRows, Cols: startCols}); err != nil {
+		_ = tty.Close()
+		_ = ptmx.Close()
 		return nil, fmt.Errorf("start %s: %w", argv[0], err)
 	}
 
@@ -414,13 +437,12 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 	// "<task>-1" would be trivially guessable by anything that got past the
 	// origin checks.
 	id := fmt.Sprintf("%s-%d-%s", task, m.seq, randSuffix())
+	m.mu.Unlock()
 	s := &Session{
 		ID: id, Task: task, Title: title, Kind: kind, Dir: dir,
 		Created: time.Now(), ptmx: ptmx, cmd: cmd, subs: map[chan []byte]struct{}{},
 		rows: startRows, cols: startCols,
 	}
-	m.sessions[id] = s
-	m.mu.Unlock()
 
 	readDone := make(chan struct{})
 	go func() {
@@ -436,10 +458,35 @@ func (m *Manager) Start(task, kind, title, dir string, argv []string, env []stri
 			}
 		}
 	}()
+
+	// As pty.StartWithSize does it: the terminal is the process's stdin,
+	// stdout and stderr, and the controlling terminal of a session it leads.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	if err := cmd.Start(); err != nil {
+		// With no copy of the terminal left, the reader's read returns and it ends.
+		_ = tty.Close()
+		_ = ptmx.Close()
+		return nil, fmt.Errorf("start %s: %w", argv[0], err)
+	}
+	m.mu.Lock()
+	m.sessions[id] = s
+	m.mu.Unlock()
+
 	// The tab ends when the process does, not when the PTY reaches EOF: a
 	// background child that inherited the terminal keeps it open indefinitely.
 	go func() {
 		err := cmd.Wait()
+		// Our copy of the terminal is let go only now, so that the process's
+		// exit is never the terminal's last close. On macOS that exit then
+		// waits for the reader to take what is queued, however long the reader
+		// needs to get a turn, and hangs the terminal up after. Closed straight
+		// after cmd.Start, ours was the last close whenever the process was
+		// done first: a close that waits at most 0.6 s, and less when a signal
+		// interrupts it (the Go runtime preempts goroutines with one), before
+		// it throws the output away. Kept open longer, it would hide the EOF
+		// that ends the reader on Linux.
+		_ = tty.Close()
 		// Let the reader deliver what is still queued, but only for a moment;
 		// with a child holding the PTY it never sees EOF.
 		select {
@@ -588,7 +635,7 @@ func randSuffix() string {
 func (s *Session) Claim(id string) {
 	s.mu.Lock()
 	s.ResumedFrom = id
-	if id != "" && !contains(s.claims, id) {
+	if id != "" && !slices.Contains(s.claims, id) {
 		s.claims = append(s.claims, id)
 	}
 	s.mu.Unlock()
@@ -599,15 +646,6 @@ func (s *Session) claimHistory() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.claims...)
-}
-
-func contains(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Session) Claimed() string {

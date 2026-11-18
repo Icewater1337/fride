@@ -163,8 +163,9 @@ A service waits for its repo's setup to finish before it starts. A setup that fa
 |---|---|
 | `repo` | The repository this service runs from. |
 | `dir` | The working directory, templated. Default: the repo's worktree. A service with `dir` and no `repo` always runs, for example a mock started from a main checkout. |
-| `run` | The command that starts the service **in the foreground**. It runs through your shell (`$SHELL -c`) with FrIDE's environment. |
+| `run` | The command that starts the service **in the foreground**. It runs through your shell (`$SHELL -c`) with FrIDE's environment. A project's own launcher that starts the service detached and returns once it is ready works too: a `run` that exited counts as failed only while nothing listens on the port. Give such a service a `stop`. |
 | `pre` | A command run before every start, for example to remove a stale sidecar container. If it fails, the failure is logged and the service still starts. |
+| `stop` | A command run on `stack down`, in the service's directory, before FrIDE signals its processes and reaps its port, templated like `run`: how the launcher `run` handed the service to stops what it started (detached processes, containers). Its output goes to the service's log; a failure is reported and the stack is stopped anyway. It runs as the stack was started, also after a profile switch. |
 | `port` | The **base** port. A task in slot *k* uses `port + k`. See [Ports](#ports). |
 | `external` | `true` for a listener that something else starts, such as a proxy a dev server spawns. FrIDE starts nothing for it. It only watches `port + k`, so `--wait` and the entry link work. |
 | `env` | Extra environment variables for `run`, templated. Each replaces a variable of the same name that FrIDE inherited, so a `PORT` or `API_URL` exported in your shell never wins over the task's own. |
@@ -204,8 +205,6 @@ Containers that are already published on their port are adopted, not duplicated.
 `fride stack down` stops only the task's own containers. Shared ones keep running for other tasks; `fride infra down --shared` stops them.
 
 A running stack keeps the profile and scopes it was started with. `fride task profile` and `fride task service` apply at the next start, and `fride stack down` stops what was started, not what the task's profile says by then.
-
-Containers started by a FrIDE from before these project names live in the projects `fride-shared` and `fride-<task>`. `fride stack down` still stops a task's own. Stop the old shared ones with `docker compose -p fride-shared down`.
 
 ## Templates
 

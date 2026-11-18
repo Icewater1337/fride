@@ -233,3 +233,44 @@ func TestSessionJSONSaysWhenExited(t *testing.T) {
 		t.Fatal("an exited session is not listed as exited")
 	}
 }
+
+// Reopening the tab of an exited session subscribed a channel nothing would
+// ever close again: the socket stayed open, so the tab was never marked ended,
+// and the exit message had left it busy for good (#150).
+func TestSubscribeAfterExitClosesAndIsNotBusy(t *testing.T) {
+	m := NewManager()
+	s, err := m.Start("t1", KindAgent, "claude", ".", []string{"echo", "hi"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close(s.ID)
+	for deadline := time.Now().Add(5 * time.Second); s.Alive(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the process never exited")
+		}
+	}
+	b, _ := json.Marshal(s)
+	if strings.Contains(string(b), `"busy":true`) {
+		t.Errorf("an exited session is listed as busy: %s", b)
+	}
+
+	out, cancel := s.Subscribe()
+	defer cancel()
+	var got strings.Builder
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case chunk, ok := <-out:
+			if ok {
+				got.Write(chunk)
+				continue
+			}
+			if !strings.Contains(got.String(), "hi") || !strings.Contains(got.String(), "process exited") {
+				t.Fatalf("closed without the scrollback: %q", got.String())
+			}
+			return
+		case <-timeout:
+			t.Fatal("subscribing to an exited session never closed the channel")
+		}
+	}
+}
