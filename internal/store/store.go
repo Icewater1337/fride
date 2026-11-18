@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"golang.org/x/sys/unix"
 )
 
@@ -273,15 +274,7 @@ func (s *Store) readUnlocked() (*file, error) {
 
 func (s *Store) writeUnlocked(f *file) error {
 	sort.Slice(f.Tasks, func(i, j int) bool { return f.Tasks[i].Created.Before(f.Tasks[j].Created) })
-	b, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.WriteJSON(s.path, f, 0o644)
 }
 
 func (s *Store) List() ([]*Task, error) {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/config"
 	"golang.org/x/sys/unix"
 )
@@ -72,11 +73,7 @@ func writeRegistry(path string, entries []Entry) error {
 	for _, e := range entries {
 		fmt.Fprintf(&sb, "%d\t%s\n", e.K, e.Name)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, []byte(sb.String()), 0o644)
 }
 
 // AllocK returns a stable slot for the task, allocating one if needed. busy

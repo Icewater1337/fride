@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/config"
 )
 
@@ -33,19 +34,7 @@ func load(cfg *config.Config, slug, name string, v any) {
 // save writes one state file whole and renames it into place, so a crash
 // cannot leave half a file that then reads as empty. The caller holds stateMu.
 func save(cfg *config.Config, slug, name string, v any) error {
-	p := filepath.Join(Dir(cfg, slug), name)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, p)
+	return atomicfile.WriteJSON(filepath.Join(Dir(cfg, slug), name), v, 0o644)
 }
 
 // RemoveState forgets a deleted task's review.
