@@ -12,6 +12,7 @@ package scan
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -341,12 +342,19 @@ func composeServices(repo, rel string) Compose {
 		return c
 	}
 	defer f.Close()
+	c.Services = composeServicesByLine(f)
+	return c
+}
+
+// composeServicesByLine reads the top-level services of a compose file line by
+// line, for when docker compose is not there to parse it.
+func composeServicesByLine(r io.Reader) []ComposeService {
+	var services []ComposeService
 	in := false
 	var cur *ComposeService
 	svcRe := regexp.MustCompile(`^  ([A-Za-z0-9][A-Za-z0-9_.-]*):\s*$`)
-	portRe := regexp.MustCompile(`^\s+-\s*"?(\d+(:\d+)?)"?`)
 	inPorts := false
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		l := sc.Text()
 		if strings.HasPrefix(l, "services:") {
@@ -360,8 +368,8 @@ func composeServices(repo, rel string) Compose {
 			continue
 		}
 		if m := svcRe.FindStringSubmatch(l); m != nil {
-			c.Services = append(c.Services, ComposeService{Name: m[1]})
-			cur = &c.Services[len(c.Services)-1]
+			services = append(services, ComposeService{Name: m[1]})
+			cur = &services[len(services)-1]
 			inPorts = false
 			continue
 		}
@@ -377,14 +385,57 @@ func composeServices(repo, rel string) Compose {
 		case t == "ports:":
 			inPorts = true
 		case inPorts && strings.HasPrefix(t, "-"):
-			if m := portRe.FindStringSubmatch(l); m != nil {
-				cur.Ports = append(cur.Ports, m[1])
+			if p, ok := composePort(t); ok {
+				cur.Ports = append(cur.Ports, p)
 			}
 		case strings.HasSuffix(t, ":"):
 			inPorts = false
 		}
 	}
-	return c
+	return services
+}
+
+// portSpecRe is a ports entry once its host IP and protocol are cut off:
+// HOST:CONTAINER, :CONTAINER (any free host port) or CONTAINER, each port
+// possibly a range.
+var portSpecRe = regexp.MustCompile(`^(\d+(-\d+)?)?(:\d+(-\d+)?)?$`)
+
+// composePort reads one item of a service's ports list in the short syntax,
+// [IP:][HOST:]CONTAINER[/PROTOCOL], as HOST:CONTAINER, the form the docker
+// compose path above reports. An item built from a variable is kept as
+// written, since its value is only known once compose interpolates it. Items
+// of the long syntax (`- target: 80`) are not read.
+func composePort(item string) (string, bool) {
+	v := strings.TrimSpace(strings.TrimPrefix(item, "-"))
+	if v == "" {
+		return "", false
+	}
+	if q := v[0]; q == '"' || q == '\'' {
+		end := strings.IndexByte(v[1:], q)
+		if end < 0 {
+			return "", false
+		}
+		v = v[1 : 1+end]
+	} else if i := strings.IndexAny(v, " \t#"); i >= 0 {
+		v = v[:i]
+	}
+	if strings.Contains(v, "$") {
+		return v, true
+	}
+	v, _, _ = strings.Cut(v, "/")
+	if strings.HasPrefix(v, "[") { // an IPv6 host IP: [::1]:8080:80
+		_, after, ok := strings.Cut(v, "]:")
+		if !ok {
+			return "", false
+		}
+		v = after
+	} else if strings.Count(v, ":") == 2 { // 127.0.0.1:8080:80, 127.0.0.1::80
+		v = v[strings.Index(v, ":")+1:]
+	}
+	if v == "" || !portSpecRe.MatchString(v) {
+		return "", false
+	}
+	return v, true
 }
 
 func toStr(v any) string {
@@ -404,10 +455,18 @@ func toStr(v any) string {
 // configuration — the files a fresh worktree will NOT have, and which a task
 // therefore needs copied in (repos.<name>.copy).
 func localConfig(repo string) []string {
-	out := git(repo, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory")
+	// -z gives each name as it is on disk, NUL-terminated. Without it git
+	// C-quotes a name with non-ASCII bytes, `"` or `\` (core.quotePath), and
+	// that quoted text names no file. Nothing is trimmed either, unlike in
+	// git(): a space at either end of a name is part of it.
+	cmd := exec.Command("git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--no-empty-directory")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
 	var res []string
-	for _, l := range strings.Split(out, "\n") {
-		l = strings.TrimSpace(l)
+	for _, l := range strings.Split(string(out), "\x00") {
 		if l == "" || strings.HasSuffix(l, "/") {
 			continue
 		}
