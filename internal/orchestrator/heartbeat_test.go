@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestAQuietThreadGetsAProgressNote(t *testing.T) {
 	o.heartbeat([]Observation{working}, nil)
 	got := heartbeats(o)
 	if len(got) != 1 || !strings.Contains(got[0].Text, "still working") ||
-		!strings.Contains(got[0].Text, "Running the tests now.") || !containsInt(got[0].Threads, 1) {
+		!strings.Contains(got[0].Text, "Running the tests now.") || !slices.Contains(got[0].Threads, 1) {
 		t.Fatalf("notes = %+v", got)
 	}
 	o.heartbeat([]Observation{working}, nil)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -299,7 +300,7 @@ func (o *Orchestrator) addTo(role, task, text string, threads ...int) {
 	}
 	var ids []int
 	for _, id := range append(threads, o.threadsFor(task)...) {
-		if !containsInt(ids, id) {
+		if !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
@@ -365,7 +366,7 @@ func (o *Orchestrator) SetMode(mode, autonomy string, watching []string) error {
 		if !known[s] {
 			return fmt.Errorf("no task %q to supervise", s)
 		}
-		if !contains(clean, s) {
+		if !slices.Contains(clean, s) {
 			clean = append(clean, s)
 		}
 	}
@@ -377,7 +378,7 @@ func (o *Orchestrator) SetMode(mode, autonomy string, watching []string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, s := range clean {
-		if contains(o.st.Watching, s) {
+		if slices.Contains(o.st.Watching, s) {
 			continue
 		}
 		// Taking a task on is a fresh start: read from where its agent is now,
@@ -569,7 +570,7 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 		// does not stop the loop from minding every other task. The thread
 		// being read was still routing when asked was marked, so it is settled
 		// here; noteNews skips a routing thread, so it can't ship early (#81).
-		o.settleInbox(tr, reply.NeedsUser || containsInt(asked, tr.thread))
+		o.settleInbox(tr, reply.NeedsUser || slices.Contains(asked, tr.thread))
 	case (reply.NeedsUser && !unreached || len(asked) > 0) && gen == o.gen:
 		o.mem.awaiting = true
 	}
@@ -763,7 +764,7 @@ func (o *Orchestrator) create(a Action, tr turn) (string, error) {
 	}
 	// A task the orchestrator created is one it is expected to follow.
 	o.mu.Lock()
-	if o.st.Mode == ModeOrchestrate && !contains(o.st.Watching, t.Slug) {
+	if o.st.Mode == ModeOrchestrate && !slices.Contains(o.st.Watching, t.Slug) {
 		o.st.Watching = append(o.st.Watching, t.Slug)
 	}
 	o.mu.Unlock()
@@ -859,7 +860,7 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 		}
 		o.mu.Lock()
 		defer o.mu.Unlock()
-		if !contains(o.st.Watching, a.Task) {
+		if !slices.Contains(o.st.Watching, a.Task) {
 			// A fresh start, exactly as when the user picks it: see SetMode.
 			o.st.Watching = append(o.st.Watching, a.Task)
 			delete(o.mem.tasks, a.Task)
@@ -887,13 +888,4 @@ func short(id string) string {
 		return id[:8]
 	}
 	return id
-}
-
-func contains(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
 }

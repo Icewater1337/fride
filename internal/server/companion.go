@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,7 +90,7 @@ func (s *Server) companionNote(n orchestrator.Note) {
 	// The task the news is about: the latest message that names one of the
 	// thread's tasks, else the thread's latest task.
 	for i := len(n.Messages) - 1; i >= 0 && e.TaskID == ""; i-- {
-		if m := n.Messages[i]; m.Task != "" && containsStr(n.Thread.Tasks, m.Task) {
+		if m := n.Messages[i]; m.Task != "" && slices.Contains(n.Thread.Tasks, m.Task) {
 			e.TaskID = m.Task
 		}
 	}
@@ -105,15 +106,6 @@ func (s *Server) companionNote(n orchestrator.Note) {
 		}
 	}
 	c.sender.Send(e)
-}
-
-func containsStr(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
 }
 
 func firstBranch(t *store.Task) string {

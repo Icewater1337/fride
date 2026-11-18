@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,7 +90,7 @@ func (t *Thread) following() bool {
 func (t *Thread) open() []string {
 	var out []string
 	for _, s := range t.Tasks {
-		if !contains(t.Finished, s) {
+		if !slices.Contains(t.Finished, s) {
 			out = append(out, s)
 		}
 	}
@@ -502,7 +503,7 @@ func (o *Orchestrator) viewLocked(id int) ThreadView {
 		}
 	}
 	for _, m := range o.st.Messages {
-		if containsInt(m.Threads, id) {
+		if slices.Contains(m.Threads, id) {
 			v.Messages = append(v.Messages, m)
 		}
 	}
@@ -515,7 +516,7 @@ func (o *Orchestrator) trailLocked(id, n int) []Message {
 	var out []Message
 	first := true
 	for _, m := range o.st.Messages {
-		if !containsInt(m.Threads, id) {
+		if !slices.Contains(m.Threads, id) {
 			continue
 		}
 		if first && m.Role == RoleUser {
@@ -537,7 +538,7 @@ func (o *Orchestrator) link(id int, slug string) {
 	if t == nil || slug == "" {
 		return
 	}
-	if !contains(t.Tasks, slug) {
+	if !slices.Contains(t.Tasks, slug) {
 		t.Tasks = append(t.Tasks, slug)
 	}
 	// Handed to a task again after it was closed: it is followed again.
@@ -559,7 +560,7 @@ func (o *Orchestrator) threadsFor(slug string) []int {
 	var out []int
 	for i := range o.st.Threads {
 		t := &o.st.Threads[i]
-		if t.following() && contains(t.open(), slug) {
+		if t.following() && slices.Contains(t.open(), slug) {
 			out = append(out, t.ID)
 		}
 	}
@@ -638,7 +639,7 @@ func (o *Orchestrator) followed() []string {
 			continue
 		}
 		for _, s := range t.open() {
-			if !contains(out, s) {
+			if !slices.Contains(out, s) {
 				out = append(out, s)
 			}
 		}
@@ -651,7 +652,7 @@ func (o *Orchestrator) followed() []string {
 func (o *Orchestrator) finish(slug string, why error) {
 	for i := range o.st.Threads {
 		t := &o.st.Threads[i]
-		if !t.following() || !contains(t.open(), slug) {
+		if !t.following() || !slices.Contains(t.open(), slug) {
 			continue
 		}
 		t.Finished = append(t.Finished, slug)
@@ -681,7 +682,7 @@ func (o *Orchestrator) hold(slug, text string, threads []int) {
 		h = held{Text: text, Since: time.Now()}
 	}
 	for _, id := range threads {
-		if !containsInt(h.Threads, id) {
+		if !slices.Contains(h.Threads, id) {
 			h.Threads = append(h.Threads, id)
 		}
 	}
@@ -808,15 +809,6 @@ func (o *Orchestrator) trimThreads() {
 	o.st.Threads = out
 }
 
-func containsInt(xs []int, x int) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
-}
-
 // ------------------------------------------------------------------ telling the sender
 
 // noteNews hands the host a note for every inbox thread that has news since its
@@ -839,7 +831,7 @@ func (o *Orchestrator) noteNews() {
 		top := last
 		var news []Message
 		for _, m := range o.st.Messages {
-			if m.ID <= last || !containsInt(m.Threads, t.ID) {
+			if m.ID <= last || !slices.Contains(m.Threads, t.ID) {
 				continue
 			}
 			top = max(top, m.ID)

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -599,7 +600,7 @@ func randSuffix() string {
 func (s *Session) Claim(id string) {
 	s.mu.Lock()
 	s.ResumedFrom = id
-	if id != "" && !contains(s.claims, id) {
+	if id != "" && !slices.Contains(s.claims, id) {
 		s.claims = append(s.claims, id)
 	}
 	s.mu.Unlock()
@@ -610,15 +611,6 @@ func (s *Session) claimHistory() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.claims...)
-}
-
-func contains(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Session) Claimed() string {
