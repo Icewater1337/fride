@@ -17,23 +17,18 @@ import (
 // owns the queue and the orchestrator that reads it.
 
 type inThread struct {
-	ID       int       `json:"id"`
-	Source   string    `json:"source"`
-	Ref      string    `json:"ref"`
-	Text     string    `json:"text"`
-	Status   string    `json:"status"`
-	Tasks    []string  `json:"tasks"`
-	Finished []string  `json:"finished"`
-	Error    string    `json:"error"`
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
-	Position int       `json:"position"`
-	Messages []struct {
-		Role string    `json:"role"`
-		Text string    `json:"text"`
-		Task string    `json:"task"`
-		Time time.Time `json:"time"`
-	} `json:"messages"`
+	ID       int           `json:"id"`
+	Source   string        `json:"source"`
+	Ref      string        `json:"ref"`
+	Text     string        `json:"text"`
+	Status   string        `json:"status"`
+	Tasks    []string      `json:"tasks"`
+	Finished []string      `json:"finished"`
+	Error    string        `json:"error"`
+	Created  time.Time     `json:"created"`
+	Updated  time.Time     `json:"updated"`
+	Position int           `json:"position"`
+	Messages []chatMessage `json:"messages"`
 }
 
 func inCall(method, path string, body any) (*inThread, error) {
@@ -49,8 +44,8 @@ func inCall(method, path string, body any) (*inThread, error) {
 // own — and saying "404" would send you looking for a typo you did not make.
 func inboxCall(method, path string, body, out any) error {
 	err := serverCall(method, "/api/inbox"+path, body, out, 30*time.Second)
-	if err != nil && err.Error() == "404 Not Found" {
-		return fmt.Errorf("the fride serving on :%d has no inbox — restart it with this build", orchPort())
+	if status, bare := replyStatus(err); status == http.StatusNotFound && bare {
+		return fmt.Errorf("the fride serving on :%d has no inbox — restart it with this build", servePort())
 	}
 	return err
 }
@@ -201,20 +196,7 @@ func printThread(v *inThread, asJSON bool, tail int) {
 		line += " · tasks: " + strings.Join(v.Tasks, ", ")
 	}
 	fmt.Println(line)
-	if v.Error != "" {
-		fmt.Fprintln(os.Stderr, "last error: "+v.Error)
-	}
-	msgs := v.Messages
-	if tail > 0 && len(msgs) > tail {
-		msgs = msgs[len(msgs)-tail:]
-	}
-	for _, m := range msgs {
-		who := m.Role
-		if m.Task != "" {
-			who += " " + m.Task
-		}
-		fmt.Printf("\n%s %s\n%s\n", m.Time.Format("15:04"), who, m.Text)
-	}
+	printMessages(v.Error, v.Messages, tail)
 }
 
 func printJSON(v any) {

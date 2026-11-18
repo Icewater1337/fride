@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,46 +12,6 @@ import (
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
 )
-
-// serverCall talks to the `fride serve` running on this computer. The fleet
-// lives in that process — it holds the network connection and the terminals —
-// so fleet commands are a client of it, like `fride orch`.
-func serverCall(method, path string, in, out any, timeout time.Duration) error {
-	var body *bytes.Reader
-	if in != nil {
-		b, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(b)
-	} else {
-		body = bytes.NewReader(nil)
-	}
-	req, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", orchPort(), path), body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := (&http.Client{Timeout: timeout}).Do(req)
-	if err != nil {
-		return fmt.Errorf("no fride is serving on :%d — start one with `fride serve --fleet`", orchPort())
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 400 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(res.Body).Decode(&e)
-		if e.Error == "" {
-			e.Error = res.Status
-		}
-		return fmt.Errorf("%s", e.Error)
-	}
-	if out != nil {
-		return json.NewDecoder(res.Body).Decode(out)
-	}
-	return nil
-}
 
 // joinFleet connects a serving FrIDE to the user's fleet. The network is the
 // tailnet, unless FRIDE_FLEET_LOOPBACK names a directory, which makes a fleet

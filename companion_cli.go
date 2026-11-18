@@ -61,7 +61,7 @@ func cmdPairCompanion(cfg *config.Config, args []string) {
 	fmt.Printf("pairing code: %s\n", code)
 	fmt.Printf("valid once, until %s (%s from now)\n\n", expires.Format("15:04:05"), companion.CodeTTL)
 	fmt.Println("Give it to the companion. It trades the code for its API token with")
-	fmt.Printf("  POST http://127.0.0.1:%d/api/companion/pair  {\"code\": \"%s\"}\n", orchPort(), code)
+	fmt.Printf("  POST http://127.0.0.1:%d/api/companion/pair  {\"code\": \"%s\"}\n", servePort(), code)
 	fmt.Println("on a `fride serve --under-fridolin` of this FrIDE home. Pairing again replaces the token.")
 }
 

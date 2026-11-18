@@ -355,7 +355,7 @@ func flagBool(args []string, name string) (bool, []string) {
 
 func cmdServe(cfg *config.Config, st *store.Store, args []string) {
 	// FRIDE_PORT is also what `fride orch` talks to, so one variable moves both.
-	port := orchPort()
+	port := servePort()
 	if v, _ := flagValue(args, "--port"); v != "" {
 		p, err := strconv.Atoi(v)
 		check(err)
