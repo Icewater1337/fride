@@ -92,7 +92,11 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
                                         uncommitted work, decision log, conversation
   task import <file> [--as <id>]        land an exported task here in a fresh workspace;
                                         --as imports it under another id
-  task rm <task> [--force]              remove the workspace
+  task rm <task> [--force] [--no-trash] remove the workspace; a copy (uncommitted work,
+                                        decision log, conversation) stays restorable for
+                                        30 days, unless --no-trash
+  task trash [rm <id>]                  recently deleted tasks; rm drops one for good
+  task restore <id> [--as <new-id>]     bring a deleted task back; --as under another id
 
   stack up [task] [--wait] [--timeout 10m] [--ide <svc,...>] [--force]
                                         start the stack; --wait blocks until ready
@@ -855,17 +859,27 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 			fmt.Printf("%s is back on the board\n", t.Slug)
 		}
 
+	case "restore":
+		cmdTaskRestore(cfg, st, args[1:])
+
+	case "trash":
+		cmdTaskTrash(cfg, args[1:])
+
 	case "rm":
-		if len(args) < 2 {
-			check(fmt.Errorf("usage: fride task rm <task> [--force]"))
+		force, rest := flagBool(args[1:], "--force")
+		noTrash, rest := flagBool(rest, "--no-trash")
+		if len(rest) < 1 {
+			check(fmt.Errorf("usage: fride task rm <task> [--force] [--no-trash]"))
 		}
-		t, err := st.Resolve(args[1])
+		t, err := st.Resolve(rest[0])
 		check(err)
-		force := len(args) > 2 && args[2] == "--force"
 		if stack.LookupK(cfg, t.Slug) > 0 {
 			fmt.Println("stopping the stack first...")
 		}
-		res, err := task.Remove(cfg, st, t.Slug, force, false)
+		res, trashID, err := task.Remove(cfg, st, t.Slug, task.RemoveOptions{Force: force, NoTrash: noTrash})
+		if errors.Is(err, task.ErrNoCopy) {
+			check(fmt.Errorf("%v\n  delete it anyway, without a copy (uncommitted work is then gone for good): fride task rm %s --force --no-trash", err, t.Slug))
+		}
 		kept := 0
 		for _, r := range res {
 			fmt.Printf("  %s: %s\n", r.Repo, r.Detail)
@@ -873,16 +887,22 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 				kept++
 			}
 		}
+		if err != nil && trashID != "" {
+			fmt.Printf("  the uncommitted work of what was removed is in the trash: fride task restore %s --as <new-id>\n", trashID)
+		}
 		// Even --force keeps what it must not discard (commits on a detached
 		// HEAD); forgetting the task then would leave its folder orphaned.
 		if errors.Is(err, task.ErrKept) && !force {
-			check(fmt.Errorf("workspace kept — %d repo(s) still have work (use --force to discard uncommitted work)", kept))
+			check(fmt.Errorf("workspace kept — %d repo(s) still have work (--force removes it anyway; the trash keeps a copy for %d days)", kept, trashDays))
 		}
 		if errors.Is(err, task.ErrKept) {
 			check(fmt.Errorf("workspace kept — %d repo(s) hold what --force does not discard (see above)", kept))
 		}
 		check(err)
 		fmt.Printf("task %s removed\n", t.Slug)
+		if trashID != "" {
+			fmt.Printf("  restorable for %d days: fride task restore %s\n", trashDays, trashID)
+		}
 
 	default:
 		check(fmt.Errorf("unknown task command %q", args[0]))

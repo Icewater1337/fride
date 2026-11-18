@@ -41,6 +41,8 @@ internal/mem             the memory check before a stack starts
 internal/fleet           fleet mode: tailnet (tsnet) / loopback network, identity, tunnels
 internal/move            continue a task on another computer: snapshot, bundles, restore;
                          the same archive as a file (task export / import)
+internal/trash           deleted tasks, restorable for 30 days: save, restore, expiry
+internal/wip             uncommitted work as a commit without touching the worktree, and back
 internal/companion       companion mode: pairing code and token, the signed webhook
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites

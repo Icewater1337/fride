@@ -158,6 +158,8 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/mem", s.handleMem)
 	mux.HandleFunc("/api/review/queue", s.handleReviewQueue)
 	mux.HandleFunc("/api/git/identities", s.handleGitIdentities) // no tokens, only has_token
+	mux.HandleFunc("/api/trash", s.handleTrash)                  // GET recently deleted tasks
+	mux.HandleFunc("/api/trash/", s.handleTrash)                 // POST /api/trash/<id>/restore
 	mux.HandleFunc("/ws/term", s.handleTermWS)                   // terminal stream
 }
 
@@ -699,19 +701,23 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, s.view(t, true))
 
 	case action == "" && r.Method == http.MethodDelete:
-		force := r.URL.Query().Get("force") == "1"
-		purge := r.URL.Query().Get("purge") == "1"
+		q := r.URL.Query()
+		o := task.RemoveOptions{Force: q.Get("force") == "1", Purge: q.Get("purge") == "1", NoTrash: q.Get("notrash") == "1"}
 		s.terms.CloseTask(slug)
-		res, err := task.Remove(s.cfg, s.st, slug, force, purge)
+		res, trashID, err := task.Remove(s.cfg, s.st, slug, o)
 		switch {
+		case errors.Is(err, task.ErrNoCopy):
+			// Nothing was deleted. noCopy lets the UI ask whether to delete
+			// for good (notrash=1) rather than only show the reason.
+			writeJSON(w, 409, map[string]any{"error": err.Error(), "noCopy": true})
 		case errors.Is(err, task.ErrKept):
 			// force keeps what it must not discard (commits on a detached
 			// HEAD), so a kept repo stops the delete with or without it.
-			writeJSON(w, 409, map[string]any{"error": err.Error(), "results": res})
+			writeJSON(w, 409, map[string]any{"error": err.Error(), "results": res, "trash": trashID})
 		case err != nil:
-			writeErr(w, 500, err)
+			writeJSON(w, 500, map[string]any{"error": err.Error(), "results": res, "trash": trashID})
 		default:
-			writeJSON(w, 200, map[string]any{"deleted": slug, "results": res})
+			writeJSON(w, 200, map[string]any{"deleted": slug, "results": res, "trash": trashID})
 		}
 
 	case action == "profile" && r.Method == http.MethodPut:
@@ -1604,6 +1610,7 @@ func (s *Server) Listen(port int) error {
 	}
 	// Folders may have been deleted while this was not running.
 	workspace.PruneStale(s.cfg)
+	go s.expireTrash()
 	go doctor.Refresh(s.cfg)
 	log.Printf("fride listening on http://%s", addr)
 	return srv.ListenAndServe()

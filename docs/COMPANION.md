@@ -78,7 +78,10 @@ a thread by its number (`thread_id`).
 The rest of FrIDE's API (`/api/tasks`, `/api/inbox`, …) is unchanged and needs
 no token: it is what the UI uses. The companion may call it too, for anything
 the routes below do not cover, such as `DELETE /api/tasks/<task>` to remove a
-workspace.
+workspace. A delete keeps a copy for 30 days (see the README, "Deleting a
+task"); the answer names it as `trash`, and `POST /api/trash/<id>/restore`
+brings the task back. When no copy can be made the delete answers 409 with
+`"noCopy": true` and deletes nothing; `notrash=1` deletes without one.
 
 ### Hand over a message
 

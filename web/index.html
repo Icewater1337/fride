@@ -140,6 +140,7 @@
     <div class="boardfoot">
       <button id="toggle-hidden" class="ghost sm"><svg class="i"><use href="#i-eye"/></svg><span>Show hidden</span></button>
       <span id="hidden-count" class="hint"></span>
+      <button id="btn-trash" class="ghost sm" title="Deleted tasks stay restorable for 30 days"><svg class="i"><use href="#i-history"/></svg><span>Recently deleted</span></button>
       <span class="spacer"></span>
       <span class="hint">Drag a card between columns to change its status. Moving a task to
         <strong>Done</strong> stops its stack; hiding one only takes it off the board.</span>
@@ -511,6 +512,16 @@
       <button id="move-cancel" class="ghost" data-close>Cancel</button>
       <button id="move-go" class="primary">Move it</button>
     </div>
+  </div>
+</div>
+
+<div id="trashpop" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trashpop-title" data-light>
+  <div class="modal-card">
+    <div class="modal-h"><h2 id="trashpop-title">Recently deleted</h2>
+      <div class="hint">A deleted task stays here for 30 days with its uncommitted work, decision log and
+        conversation. Restore puts it back on its branch. Ignored files (build output, .env) are not kept.</div></div>
+    <div class="modal-b"><div id="trash-list" class="trash-list"></div></div>
+    <div class="modal-actions"><button id="trashpop-close" class="primary" data-close>Close</button></div>
   </div>
 </div>
 
