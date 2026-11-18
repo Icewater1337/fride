@@ -130,6 +130,7 @@ backend's compose file.
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
+| `review` | `{ "maxRounds": 3, "finders": 3, "agree": 2 }`: the cap on a task's review rounds, and how many finders the AI pass runs and must agree. See [review](#review). |
 | `quality` | How often `fride serve` updates the quality record and replays the AI review's eval set. See [quality](#quality). |
 | `pullRequests` | `{ "watch": true, "feedback": true }`: follow the pull requests of task branches, and tell agents what is wrong with theirs. On unless turned off. See [pullRequests](#pullrequests). |
 
@@ -423,6 +424,23 @@ with the same id wins. `fride config check` checks each identity, that ids
 are unique, and that `default` names one of them. Edits apply from the next
 reload of config.json, to tasks created and sessions started after it.
 
+## review
+
+The Review tab's AI pass and the review rounds of a task; see
+[REVIEW.md](REVIEW.md#review-rounds).
+
+```json
+"review": { "maxRounds": 3, "finders": 3, "agree": 2 }
+```
+
+| field | meaning |
+|---|---|
+| `maxRounds` | The most review→fix rounds of one task. A round is one review of a new version of the change, by the AI pass or the agent reviewer. Past the cap a review of a new version is refused, the owner gets a blocking thread suggesting to rethink the approach, and only they can start another round (*Run anyway*). Default 3; `0` turns the cap off; at most 20. |
+| `finders` | How many finders the AI pass runs in parallel, each with its own focus: correctness, security, tests, resilience, performance, in that order. Default 3, at most 5. Each is a strong model reading the whole change, so the pass costs about one model call per finder more. `1` is a single finder covering everything, with no vote. |
+| `agree` | How many finders must report a problem before it is shown, each finding saying who agreed. Default 2; between 1 and `finders`. `1` shows what any finder found, with the agreement still marked. |
+
+Edits apply from the next reload of config.json.
+
 ## quality
 
 What became of the tasks' changes after they merged (reverted, followed by
@@ -438,7 +456,7 @@ section lets `fride serve` run them by itself.
 | field | meaning |
 |---|---|
 | `refreshHours` | How often the server fetches each task's base branch and looks for merges, reverts and follow-ups. Default 0: only when asked. A refresh is a `git fetch` per repository and a few `git log`s. |
-| `evalHours` | How often the server replays the eval set. Default 0: only when asked. Each case is three model turns of the AI review, so this spends model calls. |
+| `evalHours` | How often the server replays the eval set. Default 0: only when asked. Each case is one AI review pass, as `review.finders` and `review.agree` set it (two model turns plus one per finder), so this spends model calls. |
 | `evalMax` | The most cases one replay takes, the ones replayed longest ago first. Default 5; `fride config check` warns past 50. |
 | `followUpDays` | How soon after a merge a fix commit that rewrites the change's lines counts as a follow-up. Default 14. |
 

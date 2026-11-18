@@ -1006,7 +1006,14 @@ $('#review-go').addEventListener('click', async e => {
   const body = { agent: review.kind, model: $('#review-model').value.trim(), effort: $('#review-effort').value };
   b.disabled = true;
   try {
-    const s = await api.post(`${p.base}/tasks/${p.slug}/review`, body);
+    let s;
+    try { s = await api.post(`${p.base}/tasks/${p.slug}/review`, body); }
+    catch (err) {
+      // Past the review round cap only the owner starts another round.
+      if (!(err.data && err.data.roundCap) || !await ask({ title: 'Start another review round?', body: err.message,
+        ok: 'Start it anyway' })) throw err;
+      s = await api.post(`${p.base}/tasks/${p.slug}/review`, { ...body, force: true });
+    }
     const pr = reviewPrefs();
     pr.last = body.agent;
     pr.byAgent = Object.assign(pr.byAgent || {}, { [body.agent]: { model: body.model, effort: body.effort } });

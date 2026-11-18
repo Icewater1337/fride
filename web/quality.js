@@ -110,7 +110,7 @@ function renderQuality(d) {
     run.appendChild(icon('sparkle'));
     run.appendChild(el('span', null, d.evaluating ? 'Replaying…' : `Replay ${Math.min(n, d.schedule.evalMax)} case(s)`));
     run.disabled = d.evaluating;
-    run.title = 'Runs the AI review on the cases replayed longest ago: three model turns per case';
+    run.title = 'Runs the AI review on the cases replayed longest ago: one AI review pass (2 model turns plus one per finder) per case';
     run.addEventListener('click', async () => {
       try {
         await api.post('/api/quality/evals', {});

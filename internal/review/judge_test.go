@@ -166,7 +166,7 @@ func TestAIPassKeepsOnlyCitedAndConfirmedFindings(t *testing.T) {
 			map[string]any{"index": 1, "real": false, "reason": "a test fixture"},
 		}},
 	})
-	res, err := runAI(t.Context(), bin, t.TempDir(), hunks)
+	res, err := runAI(t.Context(), bin, t.TempDir(), hunks, PassOptions{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

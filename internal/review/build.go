@@ -25,6 +25,8 @@ type Changes struct {
 	Revert  map[string]RevertCheck `json:"revert"`
 	Size    Size                   `json:"size"`
 	Risk    Risk                   `json:"risk"`
+	// Rounds are the task's review rounds and the cap on them.
+	Rounds Rounds `json:"rounds"`
 	// LastReview is when the reviewer last marked a file viewed.
 	LastReview time.Time `json:"lastReview,omitzero"`
 }
@@ -36,19 +38,24 @@ type Kept struct {
 	AI       AI
 	Revert   map[string]RevertCheck
 	Captures []Capture
+	Rounds   roundsState
+	// MaxRounds is the round cap from config.json, 0 for none.
+	MaxRounds int
 }
 
 // LoadKept reads everything the review stored for a task.
 func LoadKept(cfg *config.Config, slug string) Kept {
 	stateMu.Lock()
 	defer stateMu.Unlock()
-	return Kept{
+	k := Kept{
 		Viewed:   loadViewed(cfg, slug),
 		Threads:  loadThreads(cfg, slug),
 		AI:       loadAI(cfg, slug),
 		Revert:   loadRevert(cfg, slug),
 		Captures: loadCaptures(cfg, slug),
 	}
+	k.Rounds, k.MaxRounds = loadRounds(cfg, slug), maxRounds(cfg)
+	return k
 }
 
 // Evidence is what proves the change works: the checks the agent ran, and the
@@ -142,6 +149,7 @@ func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry)
 		}
 	}
 
+	out.Rounds = roundsView(kept.Rounds, kept.MaxRounds, out, kept.AI)
 	out.Size = sizeOf(out.Repos)
 	out.Evidence = evidence(out.Repos, tr)
 	out.Focus = focus(out.Repos, dirs, tr, out.Evidence, entries)
