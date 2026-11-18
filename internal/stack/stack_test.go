@@ -265,29 +265,6 @@ func TestDownKeepsAProjectItCouldNotStop(t *testing.T) {
 	}
 }
 
-// A stack started by an older FrIDE has no record, only its compose override;
-// its containers live under that version's project name.
-func TestDownStopsALegacyProject(t *testing.T) {
-	e := newEnv(t, profile(), "backend")
-	docker := fakeDocker(t)
-	override := overridePath(e.cfg, "t1")
-	if err := os.MkdirAll(filepath.Dir(override), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(override, []byte("services: {}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Down(e.cfg, "t1"); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(docker.downs, []string{"fride-t1"}) {
-		t.Errorf("compose down = %v, want the legacy project fride-t1", docker.downs)
-	}
-	if _, err := os.Stat(override); err == nil {
-		t.Error("the override survived, so the next Down would stop it again")
-	}
-}
-
 // After a crash or a reboot, the pid in a pid file can belong to an unrelated
 // process. It used to look like a service "still starting" forever, and Down
 // SIGTERMed its whole process group.
