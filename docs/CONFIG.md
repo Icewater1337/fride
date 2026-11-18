@@ -455,7 +455,7 @@ section lets `fride serve` run them by itself.
 | field | meaning |
 |---|---|
 | `refreshHours` | How often the server fetches each task's base branch and looks for merges, reverts and follow-ups. Default 0: only when asked. A refresh is a `git fetch` per repository and a few `git log`s. |
-| `evalHours` | How often the server replays the eval set. Default 0: only when asked. Each case is three model turns of the AI review, so this spends model calls. |
+| `evalHours` | How often the server replays the eval set. Default 0: only when asked. Each case is one AI review pass, as `review.finders` and `review.agree` set it (two model turns plus one per finder), so this spends model calls. |
 | `evalMax` | The most cases one replay takes, the ones replayed longest ago first. Default 5; `fride config check` warns past 50. |
 | `followUpDays` | How soon after a merge a fix commit that rewrites the change's lines counts as a follow-up. Default 14. |
 

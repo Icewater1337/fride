@@ -19,13 +19,16 @@ type Replayed struct {
 // would have caught a change that later went wrong. dir holds the change's
 // repositories, each at <dir>/<repo>, as a task workspace does; c is what
 // Build read from them. Nothing is stored here: the task's own ai.json is
-// never involved, and the caller keeps the result. It is ReviewDiff as a
-// first round with one finder.
-func ReplayAI(ctx context.Context, bin, dir string, c Changes) (Replayed, error) {
+// never involved, and the caller keeps the result.
+//
+// It is ReviewDiff as a first round: the whole change, nothing carried, with
+// o's finders and agreement. The caller passes the configured ones, so a
+// replay measures the reviewer as it runs in the Review tab.
+func ReplayAI(ctx context.Context, bin, dir string, c Changes, o PassOptions) (Replayed, error) {
 	if len(catalog(c)) == 0 {
 		return Replayed{}, ErrNothingToReview
 	}
-	res, err := ReviewDiff(ctx, bin, dir, c, PassOptions{})
+	res, err := ReviewDiff(ctx, bin, dir, c, PassOptions{Finders: o.Finders, Agree: o.Agree})
 	if err != nil {
 		return Replayed{}, err
 	}

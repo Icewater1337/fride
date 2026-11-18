@@ -595,8 +595,10 @@ Case   { id, kind (reverted | followup | incident | votes), change, slug, name, 
 `fride review eval [--max N]` replays the cases replayed longest ago (never
 first), up to the cap: the case's head is checked out in a scratch worktree
 (removed afterwards whatever happens), laid out as a workspace, read like the
-Review tab reads a task (`review.Build`) and given to the AI pass's three turns
-through `review.ReplayAI`. Nothing is stored in any task's review.
+Review tab reads a task (`review.Build`) and given to the AI pass through
+`review.ReplayAI`: a first round over the whole change, with the finders and
+agreement of `review.finders` and `review.agree`, so the replay measures the
+reviewer as it runs. Nothing is stored in any task's review.
 
 - A *reverted*, *followup* or *incident* case is **caught** when a red or
   yellow finding sits on a hunk holding one of its target lines, or anywhere
@@ -618,7 +620,7 @@ CaseResult { case, kind, slug, repo, state (caught | missed | scored | error),
 ```
 
 `fride review eval runs` and the Reviews view show the trend: caught share and
-precision per run. A replay spends three model turns per case, so it runs only
+precision per run. A replay spends one AI pass (two model turns plus one per finder) per case, so it runs only
 when asked (`fride review eval`, **Replay** in the Reviews view) or on the
 schedule `quality.evalHours` sets (see CONFIG.md), at most `quality.evalMax`
 (5) cases per run, and one at a time across processes. Ctrl-C stops the case

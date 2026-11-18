@@ -158,8 +158,8 @@ func TestTheEvalSetGathersWhatWentWrongAndTheVotes(t *testing.T) {
 
 // fakeReviewer answers with findings on lines chosen by path and quote,
 // as the AI pass would: on the hunk that holds the line.
-func fakeReviewer(found map[string][]review.Finding) func(context.Context, string, string, review.Changes) (review.Replayed, error) {
-	return func(_ context.Context, _, _ string, c review.Changes) (review.Replayed, error) {
+func fakeReviewer(found map[string][]review.Finding) func(context.Context, string, string, review.Changes, review.PassOptions) (review.Replayed, error) {
+	return func(_ context.Context, _, _ string, c review.Changes, _ review.PassOptions) (review.Replayed, error) {
 		var out []review.Finding
 		for _, rc := range c.Repos {
 			for _, file := range rc.Files {
@@ -224,7 +224,7 @@ func TestReplayTellsCaughtFromMissedAndScoresTheVotes(t *testing.T) {
 	if len(run2.Cases) != 1 || run2.Left != 2 || run2.Cases[0].State == "caught" {
 		t.Errorf("capped run: %+v", run2)
 	}
-	reviewer = func(context.Context, string, string, review.Changes) (review.Replayed, error) {
+	reviewer = func(context.Context, string, string, review.Changes, review.PassOptions) (review.Replayed, error) {
 		return review.Replayed{}, errors.New("model unavailable")
 	}
 	run3, err := RunEvals(t.Context(), f.cfg, f.st, EvalOptions{Bin: "unused", Max: 3})
@@ -256,7 +256,7 @@ func TestOnlyOneReplayRunsAtATime(t *testing.T) {
 	f.refresh()
 
 	started, release := make(chan struct{}), make(chan struct{})
-	reviewer = func(context.Context, string, string, review.Changes) (review.Replayed, error) {
+	reviewer = func(context.Context, string, string, review.Changes, review.PassOptions) (review.Replayed, error) {
 		close(started)
 		<-release
 		return review.Replayed{}, nil
