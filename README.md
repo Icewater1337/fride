@@ -325,6 +325,13 @@ write tools. It reads the workspaces (Read, Grep, Glob) and acts only through
 a closed set of actions (create a task, send one line to an agent, start a
 stack…) that FrIDE validates, rate-limits and logs in the chat.
 
+Once a task's branch has a pull request, FrIDE follows it with `gh` or
+`glab`: the board shows its CI, conflicts and reviews, and for the tasks the
+orchestrator watches, a failing check (with the end of its log), each review
+comment from someone who can push to the repository, and a merge conflict
+are typed into the agent, each once. See
+[pullRequests](docs/CONFIG.md#pullrequests).
+
 ## Security posture
 
 The server binds to `127.0.0.1` only, and checks the `Host` header (DNS

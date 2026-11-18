@@ -82,6 +82,10 @@ type taskState struct {
 	stallShown time.Time
 	failedSeen string
 	recoverAt  time.Time
+
+	// prRetry is when news of its pull requests may be typed again after
+	// typing it failed (prfeedback.go).
+	prRetry time.Time
 	// A usage limit with a known reset (recover.go): the failure the pause
 	// was last read from, and when it ends, which is when the agent is told
 	// to continue. Zero when it is not paused. Not counted in recoveries.

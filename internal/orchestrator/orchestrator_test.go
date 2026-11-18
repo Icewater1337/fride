@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/forge"
 )
 
 // fakeHost records what the orchestrator asked for instead of doing it.
@@ -37,6 +38,8 @@ type fakeHost struct {
 	// onSend, when set, runs inside Send, before the lock: a turn landing
 	// while an instruction is being typed.
 	onSend func()
+	// prs are the pull requests PullRequests reports (prfeedback_test.go).
+	prs map[string][]forge.PR
 }
 
 func newFakeHost() *fakeHost {
