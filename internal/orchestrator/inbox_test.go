@@ -378,6 +378,39 @@ func TestSendWhileAnInstructionIsHeldJoinsIt(t *testing.T) {
 	}
 }
 
+// An instruction joined to a held one while that one is being typed is not
+// dropped with it: Send runs without the lock, a turn can join another
+// instruction meanwhile, and that one is typed at the agent's next prompt
+// (#157).
+func TestAnInstructionJoinedWhileTheHeldOneIsTypedIsKept(t *testing.T) {
+	h := newFakeHost()
+	o := newTestOrch(t, h)
+	o.mu.Lock()
+	o.st.Held = map[string]held{"t1": {Text: "write the design", Since: time.Now()}}
+	o.mu.Unlock()
+	h.onSend = func() {
+		h.onSend = nil
+		o.apply(Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "then build it"}}},
+			turn{origin: fromInbox})
+	}
+	ready := Observation{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true}
+	o.deliverHeld([]Observation{ready})
+	o.mu.Lock()
+	got, still := o.st.Held["t1"]
+	o.mu.Unlock()
+	if !still || got.Text != "then build it" {
+		t.Fatalf("held after typing = %+v (kept: %v), want the joined instruction alone", got, still)
+	}
+
+	o.deliverHeld([]Observation{ready})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	want := []string{"t1: write the design", "t1: then build it"}
+	if strings.Join(h.sent, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("sent %q, want %q", h.sent, want)
+	}
+}
+
 // A message from the inbox that joins a held instruction follows the task like
 // any other send: its sender hears the delivery, and the task's news after it.
 func TestAMessageJoiningAHeldInstructionFollowsTheTask(t *testing.T) {
