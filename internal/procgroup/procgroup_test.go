@@ -5,7 +5,6 @@ package procgroup
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -33,10 +32,16 @@ func TestContainKillsChildren(t *testing.T) {
 	if err != nil || pid <= 1 {
 		t.Fatalf("no child pid in %q", out.String())
 	}
-	// Killed, it may still be a zombie for a moment until whoever inherited
-	// it reaps it; a zombie answers signal 0 like a live process.
+	// Killed, it stays a zombie until whoever inherited it reaps it, and a
+	// zombie answers signal 0 like a live process; on a CI runner the one that
+	// inherits it may be slow to reap, or never do it. ps tells the two apart:
+	// no line for a pid that is gone, state Z for a dead one not yet reaped.
+	gone := func() bool {
+		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+		return err != nil || strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
+	}
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		if gone() {
 			return
 		}
 		if time.Now().After(deadline) {
