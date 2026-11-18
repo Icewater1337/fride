@@ -837,7 +837,7 @@ function rvEvidence(d) {
 // on which version, and what fride pr did with it. Unlike the agent's own runs
 // above, this is what a pull request carries.
 function rvProof(p) {
-  const wrap = el('div', 'rv-reverts');
+  const wrap = el('div', 'rv-proof');
   const h = el('div', 'rv-subh', 'Proof');
   h.title = 'Each changed repository\'s build and test commands (repos.<name>.build and .test in config.json), run by ' +
     'fride proof or fride pr in the task\'s worktree. A pull request carries it. It goes stale once the change moves.';
@@ -846,7 +846,7 @@ function rvProof(p) {
   const dot = el('span', 'rv-cst ' + (p.ok ? 'ok' : 'bad'));
   dot.appendChild(icon(p.ok ? 'check' : 'x'));
   top.appendChild(dot);
-  top.appendChild(el('span', 'rv-ctext', p.ok ? 'Build and tests passed' : 'The proof failed' + (p.err ? ': ' + p.err : '')));
+  top.appendChild(el('span', 'rv-ctext rv-psum', p.ok ? 'Build and tests passed' : 'The proof failed' + (p.err ? ': ' + p.err : '')));
   top.appendChild(el('span', 'dim', rvTime(p.taken)));
   top.appendChild(p.stale
     ? rvTag('stale', 'amber', 'The change moved since: this proves an earlier version')
@@ -854,37 +854,33 @@ function rvProof(p) {
   wrap.appendChild(top);
   for (const r of p.repos || []) {
     if (r.unchanged) continue;
-    const version = (r.head || '').slice(0, 10) + (r.dirty ? ' + uncommitted' : '');
-    const rows = (r.checks || []).map(c => ({ c }));
-    if (r.err) rows.push({ err: r.err });
-    for (const x of rows) {
+    // Which version, per repository: the commit, and whether uncommitted
+    // work was part of it.
+    const ver = el('div', 'rv-pline dim', `${r.repo} at ${(r.head || '?').slice(0, 10)}${r.dirty ? ' + uncommitted' : ''}` +
+      (r.stale ? ' · changed since' : ''));
+    ver.title = 'The commit checked out when the proof ran';
+    wrap.appendChild(ver);
+    for (const c of r.checks || []) {
       const row = el('div', 'rv-cmd');
       const head = el('div', 'rv-chead');
-      const ok = x.c ? x.c.ok : false;
-      const st = el('span', 'rv-cst ' + (ok ? 'ok' : 'bad'));
-      st.appendChild(icon(ok ? 'check' : 'x'));
+      const st = el('span', 'rv-cst ' + (c.ok ? 'ok' : 'bad'));
+      st.appendChild(icon(c.ok ? 'check' : 'x'));
       head.appendChild(st);
-      head.appendChild(el('b', 'rv-rrepo', r.repo));
-      if (x.c) {
-        head.appendChild(rvTag(x.c.kind, 'muted'));
-        const cmd = el('code', 'rv-ctext', x.c.command);
-        cmd.title = x.c.command;
-        head.appendChild(cmd);
-        head.appendChild(el('span', 'dim', x.c.err ? x.c.err : `exit ${x.c.exitCode} · ${x.c.seconds}s`));
-      } else {
-        head.appendChild(el('span', 'rv-ctext', x.err));
-      }
-      const v = el('span', 'dim', version);
-      v.title = 'The commit checked out when the proof ran' + (r.stale ? '; this repository changed since' : '');
-      head.appendChild(v);
+      head.appendChild(rvTag(c.kind, 'muted'));
+      const cmd = el('code', 'rv-ctext', c.command);
+      cmd.title = c.command;
+      head.appendChild(cmd);
+      head.appendChild(el('span', 'dim', c.err ? 'failed' : c.ok ? `${c.seconds}s` : `exit ${c.exitCode}`));
+      head.title = c.err ? c.err : `exit ${c.exitCode} after ${c.seconds}s`;
       row.appendChild(head);
-      if (x.c && x.c.output) {
-        row.appendChild(el('pre', 'rv-cout', x.c.output));
+      if (c.output) {
+        row.appendChild(el('pre', 'rv-cout', c.output));
         head.classList.add('link');
         head.addEventListener('click', () => row.classList.toggle('open'));
       }
       wrap.appendChild(row);
     }
+    if (r.err) wrap.appendChild(el('div', 'rv-pline', r.err));
   }
   const pr = p.pr;
   if (pr && (pr.links || []).length) {
@@ -893,13 +889,13 @@ function rvProof(p) {
       findings: `a draft: the review left ${pr.red} red finding${pr.red === 1 ? '' : 's'}`,
       failed: 'a draft: the review could not run' + (pr.err ? ` (${pr.err})` : '') }[pr.review] || pr.review;
     for (const l of pr.links) {
-      const row = el('div', 'rv-chead');
-      row.appendChild(el('b', 'rv-rrepo', l.repo));
+      const line = el('div', 'rv-pline');
+      line.appendChild(el('b', null, l.repo + ' '));
       const a = el('a', null, l.url);
       if (/^https?:\/\//.test(l.url)) { a.href = l.url; a.target = '_blank'; a.rel = 'noopener'; }
-      row.appendChild(a);
-      row.appendChild(el('span', 'dim', said));
-      wrap.appendChild(row);
+      line.appendChild(a);
+      line.appendChild(el('span', 'dim', ' · ' + said));
+      wrap.appendChild(line);
     }
   }
   return wrap;
