@@ -201,6 +201,57 @@ func TestCreateCleansUpOnlyWhatItMade(t *testing.T) {
 	}
 }
 
+// #162: in a repository, git expands "@{-1}" to the branch checked out before.
+// The name passed ValidateBranch, the add failed ("a branch named 'feature-x'
+// already exists"), and the cleanup's `branch -D @{-1}` force-deleted
+// feature-x with its unpushed commit.
+func TestCreateRefusesAtBraceNamesAndKeepsThePreviousBranch(t *testing.T) {
+	cfg, api := setup(t, false)
+	run(t, api, "checkout", "-q", "-b", "feature-x")
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "unpushed")
+	run(t, api, "checkout", "-q", "main")
+	// Where fride runs decides what git expands "@{-1}" to: the CLI usually
+	// runs inside a checkout.
+	t.Chdir(api)
+	for _, b := range []string{"@{-1}", "@{1}", "main@{upstream}", "@", "HEAD"} {
+		if err := ValidateBranch(b); err == nil {
+			t.Errorf("ValidateBranch(%q) = nil, want an error", b)
+		}
+	}
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "@{-1}"); err == nil {
+		t.Error("Create accepted the branch name @{-1}")
+	}
+	if !branchExists(t, api, "feature-x") {
+		t.Fatal("the previously checked-out branch and its commit were deleted")
+	}
+}
+
+// The cleanup deletes a branch only where Create made it. One that stands
+// elsewhere — it existed after all, or got commits since — is not Create's,
+// one that is checked out is kept as `branch -D` would keep it, and one whose
+// start could not be read is kept too.
+func TestUndoKeepsABranchItDidNotMake(t *testing.T) {
+	cfg, api := setup(t, false)
+	base := run(t, api, "rev-parse", "main")
+	run(t, api, "branch", "moved")
+	run(t, api, "checkout", "-q", "moved")
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "work")
+	run(t, api, "checkout", "-q", "main")
+	run(t, api, "branch", "elsewhere")
+	run(t, api, "worktree", "add", "-q", filepath.Join(t.TempDir(), "wt"), "elsewhere")
+	run(t, api, "branch", "unread")
+	undo(cfg, "t1", []Created{
+		{Repo: "api", Branch: "moved", NewBranch: true, branchAt: base},
+		{Repo: "api", Branch: "elsewhere", NewBranch: true, branchAt: base},
+		{Repo: "api", Branch: "unread", NewBranch: true},
+	})
+	for _, b := range []string{"moved", "elsewhere", "unread"} {
+		if !branchExists(t, api, b) {
+			t.Errorf("undo deleted branch %s, which it did not make", b)
+		}
+	}
+}
+
 // #47: a worktree whose repository is no longer discovered was skipped
 // silently, and Purge deleted its uncommitted work with the folder.
 func TestPurgeKeepsAWorktreeOfAnUndiscoveredRepo(t *testing.T) {
