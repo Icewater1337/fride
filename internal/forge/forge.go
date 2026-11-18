@@ -138,7 +138,14 @@ var trusted = Trust{Trusted: true}
 // isAuthor is whether login opened the pull request: the account the task
 // pushes as, normally, whose words are the user's own.
 func isAuthor(login, prAuthor string) bool {
+	login, prAuthor = account(login), account(prAuthor)
 	return login != "" && prAuthor != "" && strings.EqualFold(login, prAuthor)
+}
+
+// account is a login without the decoration gh gives a GitHub App: the pull
+// request's author is "app/name", the same app's comments are "name[bot]".
+func account(login string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(login), "app/"), "[bot]")
 }
 
 // Thread is one unresolved review thread: a comment and its replies.

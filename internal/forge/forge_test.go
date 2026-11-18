@@ -216,6 +216,16 @@ func TestGitHubMerged(t *testing.T) {
 	}
 }
 
+// An app that opened the pull request is its author in its comments too.
+func TestGitHubTrustOfTheAuthor(t *testing.T) {
+	if tr := githubTrust("NONE", "fride-app[bot]", "app/fride-app"); !tr.Trusted {
+		t.Fatalf("the app's own reply: %+v", tr)
+	}
+	if tr := githubTrust("NONE", "someone-else[bot]", "app/fride-app"); tr.Trusted {
+		t.Fatalf("another app: %+v", tr)
+	}
+}
+
 func TestGitHubPending(t *testing.T) {
 	state, pending, failed := githubCI([]ghCheck{
 		{Name: "a", Status: "IN_PROGRESS"},
