@@ -116,9 +116,11 @@ against. See [docs/REVIEW.md](docs/REVIEW.md).
 build and tests (`repos.<name>.build` and `.test`) on exactly what was
 committed, refuses while one fails, and opens the pull request with their
 output attached, as a draft. The AI review pass, which never saw the agent's
-conversation, then reads the change, and the pull request is marked ready only
-when no red finding is left; findings go back to the agent. `pr.review` turns
-the review off. The Review tab shows the proof and the version it was taken
+conversation, then reads the change, and the pull request is marked ready for
+review only when no red finding is left; findings go back to the agent, and
+past the review round cap the owner decides. Ready for review is not approved:
+a review tier that wants people still waits for them. `pr.review` turns the
+review off. The Review tab shows the proof and the version it was taken
 on, and the orchestrator sends back an agent whose pull request has none.
 
 **Agent review.** *Agent review* in a task's header starts a reviewer in a tab of its

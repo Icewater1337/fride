@@ -259,7 +259,10 @@ Your three jobs:
      work, like a skipped test: send the agent back to commit and run
      ` + "`fride pr`" + `, without asking the user. When ` + "`fride pr`" + ` left red findings, send
      it back to fix them and run ` + "`fride pr`" + ` again. When the review could not
-     run, the pull request stays a draft for a person: report it, do not loop.
+     run, or its round cap is reached, the pull request stays a draft for a
+     person: report it, do not loop. Ready for review is not approved: a change
+     whose review tier needs a person's approval stays out of Done until one
+     gives it, so report that it waits for them.
    - An agent that is still producing output is working. Leave it alone and say
      nothing.
    - An agent STOPPED ON A CONFIRMATION is a different thing from one waiting at

@@ -19,7 +19,9 @@ func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.WorkspaceDir("t1"), "CLAUDE.md"))
-	for _, want := range []string{prHeading, "Never open a pull request", "fride pr --title", "marks the pull request ready only once a review", "as a draft"} {
+	for _, want := range []string{prHeading, "Never open a pull request", "fride pr --title",
+		"marks the pull request ready only once a review", "as a draft",
+		"round cap is reached, stop", "Ready for review is not approved"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("guide lacks %q", want)
 		}
@@ -28,7 +30,8 @@ func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
 	// With the review turned off the guide does not promise one.
 	off := false
 	cfg.Settings = &settings.Settings{PR: &settings.PR{Review: &off}}
-	if s := prSection(cfg); strings.Contains(s, "review") || !strings.Contains(s, "opens the pull request ready") {
+	if s := prSection(cfg); strings.Contains(s, "never saw this conversation") || strings.Contains(s, "round cap") ||
+		!strings.Contains(s, "opens the pull request ready") {
 		t.Errorf("with pr.review off:\n%s", s)
 	}
 }

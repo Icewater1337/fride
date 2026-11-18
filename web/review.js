@@ -1057,10 +1057,11 @@ function rvProof(p) {
   }
   const pr = p.pr;
   if (pr && (pr.links || []).length) {
-    const said = { off: 'opened ready (the automatic review is off)', running: 'a draft while the review runs',
-      clean: 'marked ready after a clean fresh-context review',
+    const said = { off: 'opened ready for review (the automatic review is off)', running: 'a draft while the review runs',
+      clean: 'ready for review after a clean fresh-context review',
       findings: `a draft: the review left ${pr.red} red finding${pr.red === 1 ? '' : 's'}`,
-      failed: 'a draft: the review could not run' + (pr.err ? ` (${pr.err})` : '') }[pr.review] || pr.review;
+      failed: 'a draft: the review could not run' + (pr.err ? ` (${pr.err})` : ''),
+      capped: 'a draft: the review round cap is reached, the owner decides' }[pr.review] || pr.review;
     for (const l of pr.links) {
       const line = el('div', 'rv-pline');
       line.appendChild(el('b', null, l.repo + ' '));
@@ -1070,6 +1071,9 @@ function rvProof(p) {
       line.appendChild(el('span', 'dim', ' · ' + said));
       wrap.appendChild(line);
     }
+    // Ready for review is not approved: the proof and the AI pass are no
+    // person's approval, and the tier's gate below still counts its own.
+    if (pr.needs) wrap.appendChild(el('div', 'rv-pline dim', 'Not approved: ' + pr.needs + '.'));
   }
   return wrap;
 }

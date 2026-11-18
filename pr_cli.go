@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -18,7 +19,6 @@ import (
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/settings"
 	"github.com/Icewater1337/fride/internal/store"
-	"github.com/Icewater1337/fride/internal/workspace"
 )
 
 // `fride proof` and `fride pr` run in the agent's own process, inside its
@@ -27,24 +27,13 @@ import (
 // process already carries. Only the review goes through the running server,
 // which owns the AI pass (see prReview).
 
-// proofTargets are the task's repositories with a worktree, their base, and
-// their commands from config.json.
+// proofTargets are the task's repositories with a worktree, as the review
+// reads them, with their commands from config.json.
 func proofTargets(cfg *config.Config, t *store.Task) []review.Target {
 	var out []review.Target
-	for _, r := range t.Repos {
-		dir := cfg.RepoDir(t.Slug, r.Name)
-		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-			continue
-		}
-		base := r.BaseRef
-		if base == "" {
-			base = workspace.DefaultBase(dir)
-		}
-		rs := cfg.Settings.Repo(r.Name)
-		out = append(out, review.Target{
-			RepoSpec: review.RepoSpec{Name: r.Name, Dir: dir, Base: base},
-			Build:    rs.Build, Test: rs.Test,
-		})
+	for _, sp := range review.Specs(cfg, t) {
+		rs := cfg.Settings.Repo(sp.Name)
+		out = append(out, review.Target{RepoSpec: sp, Build: rs.Build, Test: rs.Test})
 	}
 	return out
 }
@@ -109,6 +98,7 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 	opt := review.PROptions{
 		Title: title, Body: body, Env: env, Log: os.Stderr,
 		Forge: func(dir string) review.Forge { return forgeFor(cfg.Settings, dir) },
+		Gate:  func() review.Gate { return review.GateFor(cfg, t) },
 	}
 	if cfg.Settings.PRReview() {
 		opt.Review = prReview(t.Slug)
@@ -125,10 +115,11 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 	// open: say where. An older record says nothing about this run.
 	if r := res.Proof.PR; r != nil && !r.At.Before(start) {
 		state := map[string]string{
-			review.ReviewOff:      "ready",
-			review.ReviewClean:    "ready: the fresh-context review found nothing red",
+			review.ReviewOff:      "ready for review",
+			review.ReviewClean:    "ready for review: the fresh-context review found nothing red",
 			review.ReviewFindings: "a draft: NOT READY",
 			review.ReviewFailed:   "a draft: the review could not run",
+			review.ReviewCapped:   "a draft: the review round cap is reached",
 			review.ReviewRunning:  "a draft",
 		}[r.Review]
 		if n := res.Verdict.Yellow; n > 0 && r.Review == review.ReviewClean {
@@ -137,8 +128,18 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 		for _, l := range r.Links {
 			fmt.Printf("%s: %s, %s\n", l.Repo, l.URL, state)
 		}
+		if r.Needs != "" {
+			fmt.Printf("\nReady for review is not approved: %s. The proof and the AI review count as no "+
+				"approval; a person gives it in the Review tab, and the task is not Done before.\n", r.Needs)
+		}
 	}
 	switch {
+	case errors.Is(err, review.ErrRoundCap):
+		fmt.Println("\nSTOP: " + err.Error())
+		fmt.Println("The review round cap is there to end a review-and-fix loop. The owner of this change " +
+			"decides what happens next; a blocking comment in the task's Review tab tells them. Do not run " +
+			"`fride pr` again, and do not mark the pull request ready yourself: tell the user and wait.")
+		os.Exit(1)
 	case err == review.ErrFindings:
 		fmt.Println("\nThe fresh-context review found these, each confirmed by a second look:")
 		for i, f := range res.Verdict.Red {
@@ -176,11 +177,12 @@ var prPoll = 5 * time.Second
 // server, and waits for its verdict.
 //
 // The pass is the Review tab's, through its normal entry point, so whatever
-// bounds it there (one at a time, a cap on rounds) bounds this too. It runs in
+// bounds it there (one at a time, the round cap) bounds this too. It runs in
 // the server rather than here because the server owns its running state: a
 // pass started by this process would look interrupted to it. A pass already
 // done on this very version is used as it is, and one already running is
-// waited for rather than doubled.
+// waited for rather than doubled. A refusal of the round cap comes back as
+// review.ErrRoundCap. It is never forced: only the owner may.
 func prReview(slug string) func(context.Context) (review.Verdict, error) {
 	path := "/api/tasks/" + url.PathEscape(slug) + "/changes"
 	return func(ctx context.Context) (review.Verdict, error) {
@@ -213,7 +215,10 @@ func prReview(slug string) func(context.Context) (review.Verdict, error) {
 			case refused != nil:
 				return review.Verdict{}, refused
 			default:
-				err := serverCall(http.MethodPost, path+"/ai", nil, nil, time.Minute)
+				capped, err := startPass(path + "/ai")
+				if capped {
+					return review.Verdict{}, roundCapErr{err.Error()}
+				}
 				if status, _ := replyStatus(err); err != nil && status != http.StatusConflict {
 					return review.Verdict{}, err
 				}
@@ -227,6 +232,39 @@ func prReview(slug string) func(context.Context) (review.Verdict, error) {
 		}
 	}
 }
+
+// startPass asks the server for an AI pass, with no body: a plain start,
+// never a forced one. capped is set when the round cap refused it, which the
+// reply says in so many words ("roundCap"), so nothing hangs on its wording.
+func startPass(path string) (capped bool, err error) {
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", servePort(), path), nil)
+	if err != nil {
+		return false, err
+	}
+	res, err := (&http.Client{Timeout: time.Minute}).Do(req)
+	if err != nil {
+		return false, fmt.Errorf("no fride is serving on :%d — start one with `fride serve`", servePort())
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 400 {
+		return false, nil
+	}
+	var e struct {
+		Error    string `json:"error"`
+		RoundCap bool   `json:"roundCap"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&e)
+	if e.Error == "" {
+		return false, &serverError{status: res.StatusCode, bare: true, text: res.Status}
+	}
+	return e.RoundCap, &serverError{status: res.StatusCode, text: e.Error}
+}
+
+// roundCapErr is the server's round-cap refusal, as review.ErrRoundCap.
+type roundCapErr struct{ msg string }
+
+func (e roundCapErr) Error() string { return e.msg }
+func (e roundCapErr) Unwrap() error { return review.ErrRoundCap }
 
 // verdictOf is what a pass leaves standing: findings a person dismissed, or
 // whose hunk is gone, no longer count.

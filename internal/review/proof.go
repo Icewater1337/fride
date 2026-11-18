@@ -546,6 +546,12 @@ func (p Proof) Brief(byHand []agent.Command, changed bool) string {
 			fmt.Fprintf(&b, "still a draft: the fresh-context review left %d red finding(s), handed back to the agent.", r.Red)
 		case ReviewFailed:
 			b.WriteString("still a draft: the review could not run (" + clipLine(r.Err, 200) + ").")
+		case ReviewCapped:
+			b.WriteString("still a draft: the review round cap is reached, and the owner decides " +
+				"what happens next (a blocking comment in the Review tab says so). Do not send the agent back.")
+		}
+		if r.Needs != "" {
+			b.WriteString(" Ready for review is not approved: before Done, " + r.Needs + ", which only a person can give.")
 		}
 	}
 	if len(byHand) > 0 {

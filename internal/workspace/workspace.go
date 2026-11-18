@@ -500,7 +500,8 @@ func prSection(cfg *config.Config) string {
 	ready := "It opens it as a draft, and marks the pull request ready only once a review\n" +
 		"that never saw this conversation finds nothing red in the diff. If it reports\n" +
 		"findings, fix them, commit, and run `fride pr` again: it updates the same pull\n" +
-		"request."
+		"request. If it says the review round cap is reached, stop: the change's owner\n" +
+		"decides what comes next, so tell the user instead of trying again."
 	if !cfg.Settings.PRReview() {
 		ready = "It opens the pull request ready; run it again after a change, and it\n" +
 			"updates the same pull request with a new proof."
@@ -519,6 +520,8 @@ It runs each changed repository's build and test commands on exactly what you
 committed, and refuses while one fails or while anything is uncommitted. Then it
 pushes the branch and opens the pull request with the commands' output attached
 as proof. ` + ready + `
+Ready for review is not approved: when the change's review tier needs a person's
+approval, ` + "`fride pr`" + ` says so, and the task waits for them.
 ` + "`fride proof`" + ` runs the build and the tests alone, without opening anything.
 `
 }

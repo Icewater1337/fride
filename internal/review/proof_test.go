@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/settings"
 )
 
 // changed is repo(t) with one committed change on its branch.
@@ -408,6 +410,54 @@ func TestPRStaysADraftWhenTheReviewCannotRun(t *testing.T) {
 	}
 	if strings.Contains(readFile(t, filepath.Join(fdir, "log")), "pr ready") {
 		t.Error("a pull request nobody reviewed was marked ready")
+	}
+}
+
+// Past the round cap another review is the loop the cap ends: the pull
+// request stays a draft, nothing is forced, and the agent is told to stop.
+func TestPRStopsAtTheRoundCap(t *testing.T) {
+	dir, _, f, fdir := forgeT(t)
+	cfg := testCfg(t)
+	capped := fmt.Errorf("%w: 3 of 3 review rounds are done", ErrRoundCap)
+	_, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
+		PROptions{Forge: func(string) Forge { return f },
+			Review: func(context.Context) (Verdict, error) { return Verdict{}, capped }})
+	if !errors.Is(err, ErrRoundCap) {
+		t.Fatalf("the cap should come back as ErrRoundCap, got %v", err)
+	}
+	p := LoadProof(cfg, "t1")
+	if p.PR.Review != ReviewCapped || p.PR.Ready {
+		t.Errorf("the record should say capped, still a draft: %+v", p.PR)
+	}
+	if strings.Contains(readFile(t, filepath.Join(fdir, "log")), "pr ready") {
+		t.Error("a capped review marked the pull request ready")
+	}
+	if b := p.Brief(nil, true); !strings.Contains(b, "round cap is reached") || !strings.Contains(b, "Do not send the agent back") {
+		t.Errorf("the orchestrator should be told to leave it to the owner: %q", b)
+	}
+}
+
+// Ready for review is not approved: a tier that needs people says so, and
+// fride pr records no approval of its own.
+func TestReadyForReviewIsNoApproval(t *testing.T) {
+	dir, _, f, _ := forgeT(t)
+	cfg := testCfg(t)
+	gate := Gate{Tier: settings.TierRisky, Need: 2, Repos: []RepoTier{{Repo: "api", Tier: settings.TierRisky, Need: 2}}}
+	res, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
+		PROptions{Forge: func(string) Forge { return f }, Gate: func() Gate { return gate },
+			Review: func(context.Context) (Verdict, error) { return Verdict{}, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := res.Proof.PR
+	if !r.Ready || r.Review != ReviewClean || !strings.Contains(r.Needs, "needs 2 human approvals") {
+		t.Errorf("want ready for review, with the approvals still needed: %+v", r)
+	}
+	if b := res.Proof.Brief(nil, true); !strings.Contains(b, "Ready for review is not approved") {
+		t.Errorf("the orchestrator should hear that people still have to approve: %q", b)
+	}
+	if k := LoadKept(cfg, "t1"); len(k.Approvals) != 0 {
+		t.Errorf("fride pr recorded an approval: %+v", k.Approvals)
 	}
 }
 

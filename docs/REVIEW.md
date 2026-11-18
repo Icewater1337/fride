@@ -222,8 +222,9 @@ Risk     { score (0-100), level (low|medium|high), reasons }
 Proof    { taken, finished, ok, err, stale, repos: [{repo, head, tree, dirty, unchanged,
            err, stale, checks: [{kind (build|test), command, exitCode, ok, seconds,
            output (tail), err}]}],
-           pr: {at, links: [{repo, url}], review (off|running|clean|findings|failed),
-                red, err, ready} }
+           pr: {at, links: [{repo, url}],
+                review (off|running|clean|findings|failed|capped),
+                red, err, ready (for review), needs (what the tier still asks of people)} }
 Gate     { tier, need, have, ready, repos: [{repo, tier, need, err}],
            why: [{repo, path, tier, why, rule}], more, version: {repo: {head, hash}},
            approvals: [Approval], accountable: Accountable, you }
@@ -645,10 +646,19 @@ the workspace guide tells it so, and never to use `gh` or `glab` for it:
    done on this version is used as it is, and one already running is waited
    for rather than doubled.
 5. No red finding left (one a person dismissed, or whose hunk is gone, does
-   not count): the pull request is marked ready. Red findings: it stays a
-   draft, and `fride pr` prints them for the agent and exits 1. The agent fixes
-   them, commits, and runs `fride pr` again. A review that cannot run (no
-   server, a refused or failed pass) leaves the draft for a person.
+   not count): the pull request is marked ready *for review*. Red findings: it
+   stays a draft, and `fride pr` prints them for the agent and exits 1. The
+   agent fixes them, commits, and runs `fride pr` again. A review that cannot
+   run (no server, a refused or failed pass) leaves the draft for a person.
+   The round cap's refusal (the API flags it, `"roundCap": true`) is a state
+   of its own, *capped*: `fride pr` tells the agent to stop and tell the user,
+   since the cap has already handed the change to its owner.
+6. Ready for review is not approved. The proof and the AI pass are no
+   person's approval and `fride pr` records none: once the pull request is
+   ready it reads the task's [gate](#review-tiers-and-approvals) and, when the
+   tier still wants people, says what is missing (`needs` in the record), so
+   the agent and the orchestrator report that the task waits for them. Done
+   stays behind the gate as before.
 
 What happened is kept with the proof (`pr` in `proof.json`) and noted in the
 decision log, so the rationale document says which pull request went out with
@@ -665,15 +675,18 @@ failed, passed, or passed on an earlier version; what `fride pr` did; and any
 `gh pr create`, `gh pr ready`, `glab mr create` or `glab mr update --ready`
 the agent ran itself since, read from its transcript. Its prompt treats a pull
 request without a passing proof like a skipped test: the agent is sent back
-to run `fride pr`. Findings go back the same way; a review that could not run
-goes to the user, not round again.
+to run `fride pr`. Findings go back the same way; a review that could not run,
+or that the round cap stopped, goes to the user, not round again; and a pull
+request ready for review that its tier holds for approval is reported as
+waiting for a person, not as done.
 
 *Bounds.* Each `fride pr` costs at most one AI pass, none when the change has
 not moved since the last one, and each pass is a [review round](#review-rounds)
 like one started from the tab. Past `review.maxRounds` the pass refuses to
 start, `fride pr` reports that the pull request stays a draft, and the round
 cap's blocking thread hands the change to its owner; `fride pr` never forces
-a round. The orchestrator is told not to loop on a review that could not run.
+a round (it asks with no body, a plain start). The orchestrator is told not to
+loop on a review that could not run or was capped.
 
 ## Outcomes and evals
 

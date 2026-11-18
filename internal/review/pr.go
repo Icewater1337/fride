@@ -31,6 +31,9 @@ const (
 	ReviewClean    = "clean"    // no red finding: marked ready
 	ReviewFindings = "findings" // red findings remain: still a draft
 	ReviewFailed   = "failed"   // the review could not run: still a draft
+	// ReviewCapped is the round cap refusing another review: still a draft,
+	// and the change's owner decides what happens next, not the agent.
+	ReviewCapped = "capped"
 )
 
 // PRRecord is what `fride pr` last did.
@@ -41,7 +44,11 @@ type PRRecord struct {
 	Review string `json:"review"`
 	Red    int    `json:"red,omitempty"`
 	Err    string `json:"err,omitempty"`
-	Ready  bool   `json:"ready"`
+	// Ready is ready for review, which is all the proof and the AI review can
+	// say. Needs is what the review tier still asks of people before the task
+	// may be Done (Gate.Missing); neither counts as an approval.
+	Ready bool   `json:"ready"`
+	Needs string `json:"needs,omitempty"`
 }
 
 // PRLink is one pull request, of one repository.
@@ -71,8 +78,13 @@ type PROptions struct {
 	// open one's.
 	Body string
 	// Review runs the fresh-context review over the change and waits for its
-	// verdict. nil means pr.review is off: the pull request opens ready.
+	// verdict. nil means pr.review is off: the pull request opens ready. Past
+	// the round cap it returns an error wrapping ErrRoundCap; it never forces
+	// a round, which only the owner may.
 	Review func(context.Context) (Verdict, error)
+	// Gate is the task's review tier and its human approvals (GateFor), read
+	// once the pull request is ready for review. nil leaves it unsaid.
+	Gate func() Gate
 	// Forge picks the tool for a repository, by its worktree.
 	Forge func(dir string) Forge
 	// Env is extra environment for the push and the forge tool: the task's
@@ -193,6 +205,9 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		rec.Review, rec.Ready = ReviewRunning, false
 	}
 	p.PR = rec
+	if !draft {
+		rec.Needs = needs(opt)
+	}
 	if err := SaveProof(cfg, slug, p); err != nil {
 		return res, err
 	}
@@ -206,6 +221,11 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 	v, err := opt.Review(ctx)
 	res.Verdict = v
 	switch {
+	case errors.Is(err, ErrRoundCap):
+		// Another round would be the loop the cap exists to stop. The cap has
+		// told the owner (a blocking thread); the agent stops here.
+		rec.Review, rec.Err = ReviewCapped, err.Error()
+		err = fmt.Errorf("the pull request stays a draft: %w", err)
 	case err != nil:
 		rec.Review, rec.Err = ReviewFailed, err.Error()
 		err = fmt.Errorf("the review could not run, so the pull request stays a draft: %w", err)
@@ -222,6 +242,7 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		}
 		if err == nil {
 			rec.Review, rec.Ready = ReviewClean, true
+			rec.Needs = needs(opt)
 		}
 	}
 	if e := SaveProof(cfg, slug, p); e != nil && err == nil {
@@ -230,6 +251,16 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 	res.Proof = p
 	notePR(cfg, slug, p)
 	return res, err
+}
+
+// needs is what the review tier still asks of people once a pull request is
+// ready for review. Ready for review is not approved: a proof and an AI
+// review are no person's approval, so nothing here records one.
+func needs(opt PROptions) string {
+	if opt.Gate == nil {
+		return ""
+	}
+	return opt.Gate().Missing()
 }
 
 // notePR writes what `fride pr` did into the decision log, so the task's
@@ -259,6 +290,11 @@ func notePR(cfg *config.Config, slug string, p Proof) {
 		text += fmt.Sprintf(" A fresh-context review left %d red finding(s), so it stays a draft until they are fixed.", r.Red)
 	case ReviewFailed:
 		text += " The review could not run (" + clipLine(r.Err, 200) + "), so it stays a draft."
+	case ReviewCapped:
+		text += " The review round cap stopped another review, so it stays a draft for the owner to decide."
+	}
+	if r.Needs != "" {
+		text += " Before Done, " + r.Needs + "."
 	}
 	_ = journal.Append(cfg, slug, journal.Entry{Kind: journal.KindNote, Text: text, Source: "fride"})
 }

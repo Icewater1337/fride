@@ -16,7 +16,9 @@ func TestTheBrainSendsBackAPullRequestWithoutProof(t *testing.T) {
 		"A pull request without a passing proof — opened BY HAND,",
 		"PROOF none or FAILED, or a proof the change has moved past — is unfinished",
 		"work, like a skipped test: send the agent back to commit and run",
-		"When the review could not\n     run, the pull request stays a draft for a person: report it, do not loop.",
+		"When the review could not\n     run, or its round cap is reached, the pull request stays a draft for a\n" +
+			"     person: report it, do not loop.",
+		"Ready for review is not approved",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Errorf("system prompt lacks %q", want)

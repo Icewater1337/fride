@@ -621,7 +621,11 @@ itself:
    to the agent, which fixes them, commits and runs `fride pr` again; that
    updates the same pull request. A pass already made on the same version is
    used again, so a second `fride pr` with nothing changed costs no model
-   turn.
+   turn. Past `review.maxRounds` the pass is refused: the pull request stays a
+   draft, the agent is told to stop, and the owner decides.
+5. Ready means ready for review, not approved. When the change's review tier
+   (`review.approvals`, `repos.<name>.review`) wants people's approval,
+   `fride pr` says what is missing; it never records an approval itself.
 
 ```json
 "pr": { "review": false }

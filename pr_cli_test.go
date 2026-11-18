@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,10 +37,15 @@ func fakeReviewServer(t *testing.T, post func() (int, string), states ...review.
 			_ = json.NewEncoder(w).Encode(map[string]any{"ai": states[min(i, len(states)-1)]})
 			i++
 		case r.Method == http.MethodPost && r.URL.Path == "/api/tasks/t1/changes/ai":
+			if b, _ := io.ReadAll(r.Body); len(b) > 0 {
+				t.Errorf("a pass was asked for with a body, %s: automation never forces a round", b)
+			}
 			code, msg := post()
 			if code >= 400 {
+				// As the server answers: the round cap's refusal is flagged.
 				w.WriteHeader(code)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": msg,
+					"roundCap": strings.HasPrefix(msg, review.ErrRoundCap.Error())})
 				return
 			}
 			started++
@@ -92,11 +99,20 @@ func TestPRReviewRunsTheServersPassAndWaitsForIt(t *testing.T) {
 		t.Errorf("a pass started meanwhile should be waited for: %v %+v", err, v)
 	}
 
-	// The pass's own refusal (a cap on rounds, nothing to review) is the answer.
-	fakeReviewServer(t, func() (int, string) { return http.StatusConflict, "this change was reviewed 3 times already" },
+	// The pass's own refusal (nothing to review) is the answer.
+	fakeReviewServer(t, func() (int, string) { return http.StatusConflict, "there is nothing to review" },
 		review.AI{})
-	if _, err := prReview("t1")(context.Background()); err == nil || !strings.Contains(err.Error(), "3 times") {
+	if _, err := prReview("t1")(context.Background()); err == nil || !strings.Contains(err.Error(), "nothing to review") ||
+		errors.Is(err, review.ErrRoundCap) {
 		t.Errorf("a refused pass should be the error, got %v", err)
+	}
+
+	// The round cap's refusal is told apart by the reply's flag, at once.
+	started = fakeReviewServer(t, func() (int, string) {
+		return http.StatusConflict, review.ErrRoundCap.Error() + ": 3 of 3 review rounds are done"
+	}, review.AI{State: "done", Stale: true, Anchors: anchored})
+	if _, err := prReview("t1")(context.Background()); !errors.Is(err, review.ErrRoundCap) || *started != 0 {
+		t.Errorf("the round cap should come back as ErrRoundCap, got %v", err)
 	}
 
 	// Ours failed: say why.
