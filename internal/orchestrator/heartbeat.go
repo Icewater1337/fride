@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -112,12 +113,12 @@ func (o *Orchestrator) heartbeat(obs []Observation, shown []string) {
 // round: the task is one it supervises, and the loop is not held back by a
 // question to the user or by failed turns. Called with the lock held.
 func (o *Orchestrator) brainWillLook(slug string, shown []string, now time.Time) bool {
-	return contains(shown, slug) && !o.mem.awaiting && !now.Before(o.mem.retryAt)
+	return slices.Contains(shown, slug) && !o.mem.awaiting && !now.Before(o.mem.retryAt)
 }
 
 func overlaps(a, b []int) bool {
 	for _, x := range a {
-		if containsInt(b, x) {
+		if slices.Contains(b, x) {
 			return true
 		}
 	}
