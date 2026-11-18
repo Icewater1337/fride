@@ -519,6 +519,14 @@ function card(t) {
     meta.appendChild(n);
   }
   for (const r of (t.repos || [])) meta.appendChild(el('span', 'pill', r.name));
+  // Work the agent found but left for another task: on the card, so it is
+  // still in sight when the task is closed. The list is in the Rationale panel.
+  if (t.followups) {
+    const f = el('span', 'pill followups', `${t.followups} follow-up${t.followups === 1 ? '' : 's'}`);
+    f.title = 'Work the agent found but left out of this task, for tasks of their own. '
+      + 'Open the task: they are listed in the Rationale panel.';
+    meta.appendChild(f);
+  }
   c.appendChild(meta);
   if ((t.prs || []).length) c.appendChild(prRow(t));
   if (lane(t) !== t.status) c.appendChild(el('div', 'instrow', 'Every pull request merged: drop it on Done to close the task.'));
@@ -1828,19 +1836,108 @@ async function deleteTask(t, done) {
   path.style.display = 'block';
   path.style.margin = '8px 0';
   body.appendChild(path);
-  body.appendChild(el('div', null, 'Commits already pushed are safe; anything else is not.'));
+  body.appendChild(el('div', null, 'Its uncommitted work, decision log and conversation stay restorable for 30 days ' +
+    'from Recently deleted on the board. Ignored files (build output, .env) are not kept.'));
   if (dirty.length) {
     const w = el('div', 'warn', 'Uncommitted changes: ' + dirty.map(([r, n]) => `${r} (${n})`).join(', '));
     w.style.marginTop = '10px';
     body.appendChild(w);
   }
-  if (!await ask({ title: `Delete “${detail.name || t.name}”?`, body, ok: 'Delete task', danger: true, icon: 'trash' })) return;
+  const name = detail.name || t.name;
+  if (!await ask({ title: `Delete “${name}”?`, body, ok: 'Delete task', danger: true, icon: 'trash' })) return;
+  const url = `${nodeBase(t.node)}/tasks/${t.slug}?purge=1`;
+  let res;
   try {
-    await api.del(`${nodeBase(t.node)}/tasks/${t.slug}?purge=1`);
-  } catch (e) { toast(e.message); return; }
-  toast(`Deleted ${detail.name || t.name}.`, 'ok');
+    res = await api.del(url);
+  } catch (e) {
+    // The copy could not be made, so nothing was deleted. Deleting anyway
+    // is the user's call, asked separately and plainly.
+    if (!(e.data && e.data.noCopy)) { toast(e.message); return; }
+    const why = el('div');
+    why.appendChild(el('div', null, 'Nothing was deleted: the task could not be put in the trash.'));
+    // The reason alone: the lines around it already say what happened.
+    const reason = el('div', 'warn', e.message.replace(/^no restorable copy could be made: /, '').replace(/ — nothing was deleted$/, ''));
+    reason.style.marginTop = '10px';
+    why.appendChild(reason);
+    const lost = el('div', null, 'Deleting it anyway cannot be undone: its uncommitted work is gone for good.');
+    lost.style.marginTop = '10px';
+    why.appendChild(lost);
+    if (!await ask({ title: `Delete “${name}” for good?`, body: why, ok: 'Delete for good', danger: true, icon: 'trash' })) return;
+    try { res = await api.del(url + '&notrash=1'); } catch (e2) { toast(e2.message); return; }
+  }
+  toast(res && res.trash ? `Deleted ${name}. Recently deleted keeps it for 30 days.` : `Deleted ${name}.`, 'ok');
   if (done) await done();
 }
+
+/* ------------------------------------------------------------------ trash */
+
+// The Recently deleted list: this computer's trash and, in a fleet, every
+// online computer's, as a task is kept by the computer that deleted it.
+async function loadTrash() {
+  const nodes = [''].concat(state.fleet.enabled ? onlinePeers().map(p => p.name) : []);
+  const lists = await Promise.all(nodes.map(async n => {
+    try { return (await api.get(nodeBase(n) + '/trash')).map(e => Object.assign(e, { node: n })); }
+    catch (e) { if (!n) throw e; return []; }
+  }));
+  return lists.flat().sort((a, b) => new Date(b.deleted) - new Date(a.deleted));
+}
+
+function renderTrash(entries) {
+  const host = $('#trash-list');
+  host.innerHTML = '';
+  if (!entries.length) { host.appendChild(el('div', 'cards-empty', 'Nothing deleted in the last 30 days.')); return; }
+  for (const e of entries) {
+    const row = el('div', 'trash-row');
+    const main = el('div', 'trash-main');
+    main.appendChild(el('div', 'trash-name', e.name || e.slug));
+    const meta = el('div', 'meta');
+    if (state.fleet.enabled) {
+      const n = el('span', 'pill node' + (isLocal(e.node) ? ' here' : ''));
+      n.appendChild(icon('monitor'));
+      n.appendChild(document.createTextNode(isLocal(e.node) ? 'this computer' : e.node));
+      meta.appendChild(n);
+    }
+    for (const r of e.repos || []) {
+      const p = el('span', 'pill', r.name + (r.branch ? ' @ ' + r.branch : ''));
+      if (r.uncommitted) { p.classList.add('amber'); p.title = 'with uncommitted work'; p.textContent += ' + uncommitted'; }
+      meta.appendChild(p);
+    }
+    main.appendChild(meta);
+    const days = Math.max(0, Math.ceil((new Date(e.expires) - Date.now()) / 86400000));
+    let line = `deleted ${whenShort(e.deleted)} · kept ${days} more day${days === 1 ? '' : 's'}`;
+    if (e.partial) line += ' · the delete stopped part-way; the task is still on the board';
+    main.appendChild(el('div', 'hint', line));
+    row.appendChild(main);
+    const b = el('button', 'ghost sm');
+    b.appendChild(icon('history'));
+    b.appendChild(el('span', null, e.taken ? `Restore as ${e.restoreAs}` : 'Restore'));
+    b.title = e.taken
+      ? `A task ${e.slug} exists now, so this one comes back as ${e.restoreAs}`
+      : 'Put the task back on the board, on its branch, with its uncommitted work';
+    b.disabled = !e.restoreAs;
+    b.addEventListener('click', () => restoreTrash(e, b));
+    row.appendChild(b);
+    host.appendChild(row);
+  }
+}
+
+async function restoreTrash(e, btn) {
+  btn.disabled = true;
+  let res;
+  try {
+    res = await api.post(`${nodeBase(e.node)}/trash/${encodeURIComponent(e.id)}/restore`, { as: e.taken ? e.restoreAs : '' });
+  } catch (err) { toast(err.message); btn.disabled = false; return; }
+  const notes = (res.notes || []).filter(n => !/conversation\(s\) put back|back as uncommitted/.test(n));
+  toast(`Restored ${e.name || e.slug}` + (notes.length ? ': ' + notes.join('; ') : '.'), 'ok');
+  $('#trashpop').classList.add('hidden');
+  await loadBoard();
+}
+
+$('#btn-trash').addEventListener('click', async () => {
+  try { renderTrash(await loadTrash()); } catch (e) { toast(e.message); return; }
+  openModal('trashpop');
+});
+$('#trashpop-close').addEventListener('click', () => $('#trashpop').classList.add('hidden'));
 
 $('#btn-delete').addEventListener('click', async () => {
   const t = findTask(state.current, state.currentNode) || { slug: state.current, name: state.current, node: state.currentNode };
@@ -3267,7 +3364,9 @@ $('#inbox-close').addEventListener('click', async () => {
 // recorded after the fact is a reconstruction, and this card cannot tell the
 // two apart. So this is a reader — filter to a kind, open one entry, or open
 // the whole document.
-const JR_KINDS = ['plan', 'decision', 'assumption', 'issue', 'note'];
+const JR_KINDS = ['plan', 'decision', 'assumption', 'issue', 'followup', 'note'];
+// The filter's plural, where adding an "s" to the kind reads wrong.
+const JR_LABELS = { followup: 'Follow-ups' };
 
 async function loadJournal(p = pin()) {
   const host = $('#jr-list'), sel = $('#jr-filter');
@@ -3285,7 +3384,7 @@ async function loadJournal(p = pin()) {
   sel.appendChild(new Option(`All entries (${state.journal.length})`, 'all'));
   for (const k of JR_KINDS) {
     if (!counts[k]) continue;
-    sel.appendChild(new Option(`${k[0].toUpperCase() + k.slice(1)}s (${counts[k]})`, k));
+    sel.appendChild(new Option(`${JR_LABELS[k] || k[0].toUpperCase() + k.slice(1) + 's'} (${counts[k]})`, k));
   }
   sel.value = [...sel.options].some(o => o.value === keep) ? keep : 'all';
   renderJournalList();
@@ -3319,7 +3418,7 @@ function openEntry(e) {
   const head = $('#jrpop-head');
   head.innerHTML = '';
   head.appendChild(el('span', 'jrkind ' + e.kind, e.kind));
-  head.appendChild(el('span', 'jrmeta', [when, e.repo, e.source].filter(Boolean).join(' · ')));
+  head.appendChild(el('span', 'jrmeta', [when, e.repo, e.path, e.source].filter(Boolean).join(' · ')));
   $('#jrpop-text').textContent = e.text;
   const why = $('#jrpop-why');
   why.innerHTML = '';

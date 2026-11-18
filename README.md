@@ -74,7 +74,11 @@ checkout. That is how ten tasks can run the same app at once.
 the user's calls (`fride note`). When the task is done, they become a document in
 the task, `docs/rationale/<task>.md`. A *ledger* repository can also collect the
 documents of every task, published through plain git, including GitLab merge
-requests that merge by themselves (see `ledger` in docs/CONFIG.md).
+requests that merge by themselves (see `ledger` in docs/CONFIG.md). Work the
+agent found but left out of the task, such as a second bug or a flaky test, is
+recorded as a *follow-up* (`fride note followup`): the card shows how many, the
+document lists them, and a companion gets them with the task's `done` event
+(docs/COMPANION.md), ready to become new tickets.
 
 **Ideas.** A task that explores an idea rather than implementing a ticket
 keeps a page about it, written by its agent as the work happens, and
@@ -101,7 +105,11 @@ merge-base to see whether they notice the change. *Tour* orders the files from
 schema to tests, a header chip scores the merge risk, and a change past about
 400 lines offers to split itself into a verified stack of commits on a new
 branch. The *Reviews* view lists every task with something to review, and whose
-turn it is. See [docs/REVIEW.md](docs/REVIEW.md).
+turn it is. Below it, and in `fride quality`, FrIDE follows its tasks' changes
+past the merge: how many per week or month were reverted, needed follow-up
+fixes or caused an incident (`fride incident`). Those, and the AI findings you
+voted on, form an eval set that `fride review eval` replays the AI review
+against. See [docs/REVIEW.md](docs/REVIEW.md).
 
 **Agent review.** *Agent review* in a task's header starts a reviewer in a tab of its
 own, with the agent, model and effort you pick. It finds the merge requests
@@ -177,6 +185,36 @@ or in the UI's Inbox, and answer with `fride in reply <id> "…"`.
 
 The same is `POST /api/inbox` on the local API. See [docs/INBOX.md](docs/INBOX.md).
 
+## Deleting a task, and taking it back
+
+*Delete task* (and `fride task rm`, and a delete from another computer of the
+fleet or a companion) first puts a copy into the trash, where it stays
+restorable for 30 days:
+
+- per repository, everything not committed — modified, deleted and untracked
+  files — as a commit on top of the branch, pinned by
+  `refs/fride/trash/<id>/<repo>` in the repository. The ref also pins the
+  branch's commits, so a branch the delete removed comes back where it stood;
+- the task record, its decision log, its review state, the files at the
+  workspace root and the agent's conversation, under `~/.fride/trash/<id>`.
+
+Ignored files (`.env`, `node_modules`, build output) are not kept; a restored
+workspace copies its local config again, like a new one. *Recently deleted* on
+the board lists the trash and restores a task with one click;
+`fride task restore <id>` does the same. The task comes back on its branch,
+with its uncommitted work as uncommitted changes. A branch that has moved on
+or is checked out elsewhere is never touched: the task continues on
+`<branch>-restored`. When another task has taken the id since, the restore
+refuses (`--as <new-id>` restores it under another), and in the board it
+offers `<id>-restored`.
+
+When the copy cannot be made — an untracked file over 100 MB, a folder in the
+workspace that is not a worktree of its repository — the delete refuses and
+deletes nothing. Deleting anyway, without a copy, is a second, explicit choice:
+*Delete for good* in the board, `--no-trash` on the CLI. Entries expire after
+30 days, when the server starts, once a day while it runs, and on each delete;
+`fride task trash rm <id>` drops one sooner.
+
 ## CLI
 
 Everything the UI does is a subcommand, so the agent inside a workspace can
@@ -195,7 +233,9 @@ fride git ls                              # the git identities, and whether each
 fride git token set <id>                  # the token from stdin, or typed without echo
 fride task profile <task> <profile>       # applies at the next stack up
 fride task service <task> <svc> <shared|task|off|default>
-fride task rm <task> [--force]
+fride task rm <task> [--force] [--no-trash]   # a copy stays restorable for 30 days
+fride task trash [rm <id>]                # recently deleted tasks
+fride task restore <id> [--as <new-id>]   # bring one back
 
 fride stack up [task] [--wait] [--force]  # --wait: block until ready, exit 1 with logs if not
 fride stack status [task]
@@ -207,6 +247,7 @@ fride infra [status|up|down] [task]       # the containers behind a task
 fride infra down --shared                # stop the containers all tasks share
 
 fride note decision "..." --why "..."     # the decision log the rationale document is built from
+fride note followup "..." --why "..." [--repo R] [--path P]   # work found but left for a new task
 fride rationale [task] [--narrate] [--publish]   # --publish: also push it to the ledger repo
 fride idea ls | idea cat <path> | idea publish [task]   # the ideas repository
 

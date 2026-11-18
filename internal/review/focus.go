@@ -189,6 +189,11 @@ func focus(repos []RepoChanges, dirs map[string]string, tr agent.Trace, ev Evide
 		case journal.KindIssue:
 			add(Focus{Severity: "low", Kind: "issue", Repo: e.Repo,
 				Title: "Issue: " + clipLine(e.Text, 100), Reason: orDash(e.Why)})
+		case journal.KindFollowup:
+			// What the change deliberately does not do. A reviewer should
+			// know before judging it incomplete, or before missing that it is.
+			add(Focus{Severity: "low", Kind: "followup", Repo: e.Repo,
+				Title: "Left out: " + clipLine(e.Text, 100), Reason: orDash(e.Why)})
 		}
 	}
 

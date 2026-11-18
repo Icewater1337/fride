@@ -63,3 +63,21 @@ func TestEnsureGuideLeavesAWorkspaceWithoutAGuideAlone(t *testing.T) {
 		t.Error("a guide was created where none existed")
 	}
 }
+
+// The guide is how an agent learns that out-of-scope findings have a place
+// (issue #141): without it, it fixes them on the side or drops them.
+func TestWriteGuideTellsTheAgentToRecordFollowups(t *testing.T) {
+	cfg := &config.Config{WorkspaceRoot: t.TempDir()}
+	if err := os.MkdirAll(cfg.WorkspaceDir("t1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteGuide(cfg, "t1", []string{"backend"}, "claude", "feat/x"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(cfg.WorkspaceDir("t1"), "CLAUDE.md"))
+	for _, want := range []string{`fride note followup "..." --why "..."`, "instead of fixing it on the side or\n  dropping it"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("guide lacks %q", want)
+		}
+	}
+}

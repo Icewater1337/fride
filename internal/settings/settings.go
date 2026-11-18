@@ -71,6 +71,8 @@ type Settings struct {
 	Git *Git `json:"git,omitempty"`
 	// PullRequests is how FrIDE follows the pull requests of task branches.
 	PullRequests *PullRequests `json:"pullRequests,omitempty"`
+	// Quality schedules the outcome record and the eval replay (REVIEW.md).
+	Quality *Quality `json:"quality,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -300,6 +302,38 @@ type Memory struct {
 	// DockerPerStackGB is Docker's memory one stack needs: the containers its
 	// services start, Testcontainers included. Default 0 (not checked).
 	DockerPerStackGB *float64 `json:"dockerPerStackGB,omitempty"`
+}
+
+// Quality is how often `fride serve` updates the quality record by itself:
+// what became of the tasks' changes after they merged, and the replay of the
+// AI review against the eval set. Without it both run only when asked.
+type Quality struct {
+	// RefreshHours is how often the server fetches the bases and looks for
+	// merges, reverts and follow-ups. 0, the default, is never by itself.
+	RefreshHours int `json:"refreshHours,omitempty"`
+	// EvalHours is how often it replays the eval set. Each replay spends
+	// model calls, three turns per case, so 0, the default, is never.
+	EvalHours int `json:"evalHours,omitempty"`
+	// EvalMax caps the cases one replay takes. Default 5.
+	EvalMax int `json:"evalMax,omitempty"`
+	// FollowUpDays is how soon after a merge a fix that rewrites the
+	// change's lines counts as a follow-up. Default 14.
+	FollowUpDays int `json:"followUpDays,omitempty"`
+}
+
+// QualitySchedule is quality, with its defaults; the zero value when unset.
+func (s *Settings) QualitySchedule() Quality {
+	var q Quality
+	if s != nil && s.Quality != nil {
+		q = *s.Quality
+	}
+	if q.EvalMax <= 0 {
+		q.EvalMax = 5
+	}
+	if q.FollowUpDays <= 0 {
+		q.FollowUpDays = 14
+	}
+	return q
 }
 
 // Inbox configures the orchestrator's inbox.
