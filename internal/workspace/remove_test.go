@@ -74,24 +74,53 @@ func branchExists(t *testing.T, repo, b string) bool {
 
 // 1.2: a branch named like a folder of the checkout made `rev-list` fail with
 // "ambiguous argument", the failure read as "no unique commits", and the
-// branch was deleted with its commit.
+// branch was deleted with its commit. The count is the branch's one commit,
+// with a remote and without (#163).
 func TestRemoveKeepsAnAmbiguousBranchWithCommits(t *testing.T) {
+	for origin, want := range map[bool]string{
+		true:  "KEPT branch docs (1 unpushed commit(s))",
+		false: "KEPT branch docs (1 commit(s) on no other branch)",
+	} {
+		cfg, api := setup(t, origin)
+		if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "docs"); err != nil {
+			t.Fatal(err)
+		}
+		wt := cfg.RepoDir("t1", "api")
+		write(t, filepath.Join(wt, "docs", "new.md"), "work\n")
+		run(t, wt, "add", "-A")
+		run(t, wt, "commit", "-qm", "the only copy of this work")
+		res, err := Remove(cfg, "t1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !branchExists(t, api, "docs") {
+			t.Fatalf("origin=%v: branch docs and its commit were deleted: %+v", origin, res)
+		}
+		if len(res) != 1 || !res[0].Removed || !strings.Contains(res[0].Detail, want) {
+			t.Errorf("origin=%v: results = %+v, want %q", origin, res, want)
+		}
+	}
+}
+
+// #163: in a repository without a remote, `--not --remotes` excluded nothing,
+// so every commit of main counted as unpushed and a task branch with no
+// commits of its own was never deleted — the next task of that name continued
+// it instead of starting from its base.
+func TestRemoveDeletesAnUntouchedBranchWithoutARemote(t *testing.T) {
 	cfg, api := setup(t, false)
-	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api", BaseRef: "main"}}, "claude", "docs"); err != nil {
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "two")
+	run(t, api, "commit", "-q", "--allow-empty", "-m", "three")
+	if _, err := Create(cfg, "t1", []RepoSpec{{Name: "api"}}, "claude", "feat/x"); err != nil {
 		t.Fatal(err)
 	}
-	wt := cfg.RepoDir("t1", "api")
-	write(t, filepath.Join(wt, "docs", "new.md"), "work\n")
-	run(t, wt, "add", "-A")
-	run(t, wt, "commit", "-qm", "the only copy of this work")
 	res, err := Remove(cfg, "t1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !branchExists(t, api, "docs") {
-		t.Fatalf("branch docs and its commit were deleted: %+v", res)
+	if branchExists(t, api, "feat/x") {
+		t.Errorf("a branch with no commits of its own was kept: %+v", res)
 	}
-	if len(res) != 1 || !res[0].Removed || !strings.Contains(res[0].Detail, "KEPT branch docs") {
+	if len(res) != 1 || !res[0].Removed || !strings.Contains(res[0].Detail, "deleted") {
 		t.Errorf("results = %+v", res)
 	}
 }
