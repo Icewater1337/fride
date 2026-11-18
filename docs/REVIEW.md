@@ -8,7 +8,9 @@ change works, and why each hunk exists.
 
 Status: the MVP, phase 2 and phase 3 are implemented: the **Review** tab of a
 task, and the **Reviews** view across tasks. Where the build differs from the
-first proposal, the phase sections below say how and why.
+first proposal, the phase sections below say how and why. On top of them,
+[review tiers](#review-tiers-and-approvals) decide how many human approvals a
+change needs before its task can be Done.
 
 ## What FrIDE already has, and why review belongs here
 
@@ -173,6 +175,7 @@ $FRIDE_HOME/review/<slug>/
   ai.json        AI (the last pass, and the reviewer's marks on its findings)
   revert.json    { "<repo>": RevertCheck }
   edits.jsonl    Capture, one line per agent edit, appended by the hook
+  approvals.json { "accountable": Accountable, "approvals": [Approval] }
 ```
 
 Computed per request, not stored:
@@ -180,10 +183,11 @@ Computed per request, not stored:
 ```
 Changes  { repos: [RepoChanges], focus: [Focus], evidence: Evidence, traced: bool,
            threads: [Thread], ai: AI, revert: {repo: RevertCheck}, size: Size,
-           risk: Risk, lastReview }
+           risk: Risk, gate: Gate, lastReview }
 RepoChanges { repo, base, mergeBase, head, branch, files: [File], err }
 File     { path, oldPath, status (A|M|D|R|T), added, deleted, binary, hash,
            noise ("" | generated | vendored | lockfile), noiseWhy, layer,
+           tier (auto | normal | risky), tierWhy, tierRule,
            viewed ("" | viewed | changed), hunks: [Hunk], truncated, withheld }
 Hunk     { id (sha1 of path+content), header, oldStart, oldLines, newStart, newLines,
            lines: ["+…", "-…", " …"], mechanical ("" | whitespace | moved),
@@ -202,6 +206,12 @@ AI       { state (running|done|failed), started, finished, err, anchors: {repo: 
                        quote, verdict, dismissed, vote, stale}], unverified, stale }
 RevertCheck { repo, state, command, caught, exitCode, output, tests, err, anchor, stale }
 Risk     { score (0-100), level (low|medium|high), reasons }
+Gate     { tier, need, have, ready, repos: [{repo, tier, err}],
+           why: [{repo, path, tier, why, rule}], more, version: {repo: {head, hash}},
+           approvals: [Approval], accountable: Accountable, you }
+Approval { by, via (browser | "fleet: <computer>" | api), at, version: {repo: {head, hash}},
+           tier, human, current, counts, note }
+Accountable { person, how, at, recorded, via }
 ```
 
 API, served under the existing task routes, so it works for fleet computers
@@ -216,6 +226,10 @@ POST /api/tasks/<slug>/changes/threads      {repo, path, hunk, line, quote, text
 PUT  /api/tasks/<slug>/changes/threads/<id> {text?, blocking?, satisfied?, send?}
 POST /api/tasks/<slug>/changes/revert       {repo}: start a revert check
 POST /api/tasks/<slug>/changes/split        {repo}: write the stack branch
+GET  /api/tasks/<slug>/changes/gate         the tier and the approvals alone (Gate)
+POST /api/tasks/<slug>/changes/approve      {version, by?}: approve this version (201; 202 when it
+                                            does not count; 409 when the change moved on)
+POST /api/tasks/<slug>/changes/withdraw     {by?}: take an approval back (from a browser only)
 GET  /api/review/queue                      this computer's open tasks with something to review
 ```
 
@@ -354,6 +368,100 @@ is not folded and goes into the AI pass. Tree-sitter would need a C toolchain an
 grammar per language in a binary that is otherwise self-contained; line runs
 catch the common case (a function moved to another file) and miss a function
 moved and edited in the middle, which shows as two moved runs around the edit.
+
+## Review tiers and approvals
+
+How much human review a change needs is set by what it touches, not by who
+wrote it, an agent or a person. Each changed file gets a tier from its path
+(`tier.go`). A repository's tier is the highest of its files, and the task's
+the highest of its repositories.
+
+| Tier | What | Human approvals |
+| --- | --- | --- |
+| auto | documentation; code a repository declares flag-guarded | 0 |
+| normal | code, config, anything no rule places | 1 |
+| risky | auth and access control, secrets and cryptography, payments and billing, migrations and schema, CI/CD, infrastructure and deployment config | 2 |
+
+**Rules.** The first rule a path matches decides, in this order:
+
+1. a change to the repository's own rules file, `.fride/review.json`: risky,
+   always, since it changes how much review everything else gets;
+2. `repos.<name>.review.tiers` in config.json ([CONFIG.md](CONFIG.md#reposnamereview));
+3. the repository's `.fride/review.json`, the same shape, committed so the
+   team shares it, and read as it is at the merge-base: an agent's change
+   cannot lower its own tier;
+4. a file the review withholds as credentials (`.env`, keys): risky;
+5. FrIDE's defaults: instructions for coding agents (`CLAUDE.md`,
+   `AGENTS.md`, `SKILL.md`, `.claude/`) are normal, since they steer what
+   later agents do; documentation (Markdown, reStructuredText and AsciiDoc
+   anywhere, text and images under `docs/`) is auto, so a README in an auth
+   folder is still a README; the risky areas above, by the words of a path
+   (`auth`, `login`, `permissions`, `secrets`, `tls`, `payments`, `billing`,
+   `migrations`, `.github/workflows/`, `Dockerfile`, `deploy/`, `*.tf`,
+   `CODEOWNERS`, …); everything else is normal.
+
+A rename counts the higher of its two paths: moving a file out of an auth
+folder changes the auth folder. Nothing is guessed safe. FrIDE cannot see
+whether code runs behind a flag, so flag-guarded code is auto only where a
+repository's rules say so. A rules file that does not parse, or names a tier
+that does not exist, makes its repository risky until it is fixed, since its
+rules may have raised a tier; a config.json rule with an unknown tier counts as
+risky; a repository whose change cannot be read is at least normal.
+
+The tier is separate from the [risk score](#phase-3-scale): the score weighs
+the evidence, the tier only the paths, so a team can agree on it as rules. The
+tour's layers are not reused: its schema layer takes in every `models/`
+folder, and its last layer every file that is not code, infrastructure YAML
+included. Too broad for a gate. The migration pattern is the Focus list's own,
+so the two agree on what a migration is.
+
+**Approvals** (`approve.go`). A person approves in the **Approval** card at
+the top of the Review tab, or a second person at the same screen under their
+own name. An approval records who, how it arrived, when, and the version it
+was given on: each repository's head and diff hash as the page drew them. Once
+the change moves on it is *of an earlier version* and stops counting, and a
+click on a page drawn before the change moved is refused. One person counts
+once, by their email, else their name. Approving again replaces one's earlier
+approval; *Withdraw* takes it back. The header shows the tier and the approvals
+(`Risky 1/2`), a file in a risky area carries a tag, and the Reviews view lists
+both; a task whose only missing piece is an approval is the reviewer's turn.
+
+FrIDE has no logins. An approval from this computer is recorded as the person
+FrIDE knows here: the name and email of the task's git identity, else git's
+`user.name` and `user.email`, else the computer's user.
+
+**An agent's approval never counts.** Only a person's browser counts. On this
+computer such a request carries the page's `Origin`, which the guard has
+already checked is FrIDE's own. Through the fleet the forwarding node says
+whether its browser sent the request (`X-Fride-From-Browser`, set and
+stripped by the node proxy, believed only on the fleet listener). The CLI,
+scripts and the tool calls of an agent (a `curl` from a task's session) send
+no `Origin`: their approvals are kept, shown struck through with the reason,
+and never counted, and they cannot withdraw one. There is no
+`fride review approve` for the same reason. This guards against an agent
+approving through FrIDE; it is not authentication. A process running as the
+user can forge a header or write `approvals.json`, and to FrIDE an agent
+driving a browser is a browser.
+
+**Accountable.** When a task is created (New task, `fride task new`, the
+orchestrator), the person FrIDE knows, as above, is recorded as accountable
+for its change: who gave the prompt, whoever approves. A task that came from an
+inbox message also names the thread and its source. A task created before the
+record existed shows the person worked out now, and says so.
+
+**The gate.** `CheckDone` refuses Done while the change lacks its approvals,
+the same way as a blocking thread, on every path to Done: the status buttons,
+the board, `fride task status`, the orchestrator's `set_status` and the
+companion's close. The refusal says which file set the tier.
+
+**What "auto-merge" means here.** FrIDE opens and merges no pull requests. An
+auto change needs no human: its task can be Done once nothing else blocks.
+Whatever merges, whether a person, CI, or an agent told to merge its own pull
+requests, asks the gate: `GET /api/tasks/<slug>/changes/gate`, or
+`fride review gate [task] [--json]`, which exits 1 while approvals are
+missing. A repository where agents may merge everything themselves says so
+with a rule, `{ "tier": "auto", "paths": ["**"] }`, rather than by skipping
+the gate.
 
 ## Effort
 

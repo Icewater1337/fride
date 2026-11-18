@@ -121,6 +121,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   idea ls                               the ideas already in the ideas repository
   idea cat <path>                       read one of them, e.g. ideas/<slug>.md
   idea publish [task]                   push the task's idea page(s) (config: ideas)
+  review gate [task] [--json]           the change's review tier and its human approvals
+                                        (exit 1 while it lacks some); approvals are given
+                                        in the Review tab
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
@@ -249,6 +252,8 @@ func main() {
 		cmdRationale(cfg, st, os.Args[2:])
 	case "idea":
 		cmdIdea(cfg, st, os.Args[2:])
+	case "review":
+		cmdReview(cfg, st, os.Args[2:])
 	case "repos":
 		cmdRepos(cfg)
 	default:

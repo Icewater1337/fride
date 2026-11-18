@@ -86,6 +86,7 @@ func (s *Settings) Check() []Problem {
 				add(true, fmt.Sprintf("repos.%s.setup[%d]", name, i), "run is empty")
 			}
 		}
+		out = append(out, r.Review.Problems("repos."+name+".review")...)
 	}
 
 	if len(s.Profiles) == 0 {

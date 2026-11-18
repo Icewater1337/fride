@@ -139,6 +139,7 @@ backend's compose file.
 | `ide` | The JetBrains launcher this repo opens in: `idea`, `pycharm`, `webstorm`, `goland` and so on. Empty means FrIDE detects it from the build files. |
 | `setup` | Steps that prepare a fresh worktree, such as dependency installs or code generation. They run in the background when a task is created. They run again before a service from this repo starts, if a step's `creates` path is missing. |
 | `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. |
+| `review` | `{ "tiers": [...] }`: which review tier a change to this repo's paths falls in, and so how many human approvals it needs before the task can be Done. See [below](#reposnamereview). |
 
 A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 
@@ -147,6 +148,48 @@ A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 - `fallback` runs when `run` fails, for example `npm ci` refusing an out-of-sync lockfile, then `npm install`.
 
 A service waits for its repo's setup to finish before it starts. A setup that fails is reported on the board and by `stack up --wait`.
+
+### repos.&lt;name&gt;.review
+
+A change's review tier is set by the paths it touches: `auto` needs no human
+approval, `normal` one, `risky` two (see [REVIEW.md](REVIEW.md#review-tiers-and-approvals)).
+FrIDE has generic defaults: docs are auto; auth, secrets, payments, migrations,
+CI/CD and infrastructure are risky; everything else is normal. Rules here come
+first and override them:
+
+```json
+"repos": {
+  "api": {
+    "review": {
+      "tiers": [
+        { "tier": "auto", "paths": ["internal/experiments/**"], "why": "flag-guarded: runs only behind the experiments flag" },
+        { "tier": "normal", "paths": ["deploy/local/"], "why": "the local dev stack, not production" },
+        { "tier": "risky", "paths": ["internal/ledger/", "*.proto"] }
+      ]
+    }
+  }
+}
+```
+
+| field | meaning |
+|---|---|
+| `tiers[].tier` | `auto`, `normal` or `risky`. |
+| `tiers[].paths` | Patterns, as in `.gitignore`: one without a slash matches a name at any depth (`*.md`), one with a slash matches from the repo root (`docs/**`, `/Makefile`); `*` stays within a folder, `**` crosses folders, `{a,b}` is either. Every pattern also covers what is below it, so `flags` and `flags/` both mean the whole folder. Case matters. |
+| `tiers[].why` | Shown to the reviewer next to each file the rule placed. |
+
+The first rule a path matches decides. The order is: a change to the repo's
+own rules file (always risky), these rules, the repo's own
+`.fride/review.json`, FrIDE's defaults. `.fride/review.json` has the same
+shape (`{ "tiers": [...] }`), is committed with the repo so the team shares
+it, and is read as it is at the merge-base, so a change cannot lower its own
+tier. One that does not parse makes the repo risky until it is fixed.
+
+Nothing is flag-guarded by default: FrIDE cannot see from a path whether code
+runs behind a flag. List such paths as `auto`, with a `why`. A repo whose
+agents may merge their own work without a person (see
+[REVIEW.md](REVIEW.md#review-tiers-and-approvals)) says so with
+`{ "tier": "auto", "paths": ["**"] }`. `fride config check` reports an unknown
+tier, a rule without paths and an empty pattern.
 
 ## profiles.&lt;name&gt;
 
