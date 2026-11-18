@@ -50,7 +50,7 @@ func TestValidateBaseRef(t *testing.T) {
 }
 
 func TestCreateRefusesOptionLikeBaseRefBeforeGit(t *testing.T) {
-	_, err := Create(&config.Config{}, "s", []RepoSpec{{Name: "r", BaseRef: "origin/-x"}}, "", "fix/a")
+	_, err := Create(&config.Config{}, "s", []RepoSpec{{Name: "r", BaseRef: "origin/-x"}}, "", "fix/a", nil)
 	if err == nil || !strings.Contains(err.Error(), "dash") {
 		t.Fatalf("err = %v, want a base ref validation error", err)
 	}

@@ -228,14 +228,11 @@ func PruneStale(cfg *config.Config) {
 // or branch that was there before. A caller must not clean up after it. An
 // earlier version left that to the caller, which ran a forced Remove and so
 // wiped the existing task whenever the slug was already taken.
-func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) ([]Created, error) {
-	return CreateWith(cfg, slug, specs, agentKind, branch, nil)
-}
-
-// CreateWith is Create with the task's git identity environment (gitid.Env)
-// for its fetches, so a private remote is reached with the task's own
-// credentials rather than whatever git finds for the user.
-func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string, env []string) (out []Created, err error) {
+//
+// env is the task's git identity environment (gitid.Env) for its fetches, so
+// a private remote is reached with the task's own credentials rather than
+// whatever git finds for the user; nil for none.
+func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string, env []string) (out []Created, err error) {
 	if len(specs) == 0 {
 		return nil, fmt.Errorf("name at least one repo")
 	}
@@ -272,7 +269,7 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 			if pending != nil {
 				made = append(made, *pending)
 			}
-			undo(cfg, slug, made)
+			Undo(cfg, slug, made)
 			out = nil
 		}
 	}()
@@ -331,7 +328,7 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 			c.branchAt, _ = git(repo.Main, "rev-parse", "--verify", "--quiet", "--end-of-options", start+"^{commit}")
 		}
 		// Set before the add: a failed `worktree add -b` can leave the branch
-		// behind, and undo has to know it was this call's.
+		// behind, and Undo has to know it was this call's.
 		pending = &c
 		if _, err := git(repo.Main, addArgs...); err != nil {
 			return out, fmt.Errorf("%s: %w (is branch %q checked out elsewhere?)", repo.Name, err, branch)
@@ -342,7 +339,11 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 		out = append(out, c)
 	}
 	pending = nil
-	if err := writeGuide(cfg, slug, specs, agentKind, branch); err != nil {
+	names := make([]string, 0, len(specs))
+	for _, sp := range specs {
+		names = append(names, sp.Name)
+	}
+	if err := WriteGuide(cfg, slug, names, agentKind, branch); err != nil {
 		return out, fmt.Errorf("the workspace's guide file could not be written: %w", err)
 	}
 	// Best effort: a missing hook costs some rationale, not the workspace, and
@@ -354,14 +355,10 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 	return out, nil
 }
 
-// Undo takes back a workspace Create returned, for a caller whose next step
-// failed (the task could not be registered). Like Create's own cleanup, it
-// removes only what Create made.
-func Undo(cfg *config.Config, slug string, created []Created) {
-	undo(cfg, slug, created)
-}
-
-func undo(cfg *config.Config, slug string, made []Created) {
+// Undo takes back what Create made: Create's own cleanup, and for a caller
+// whose next step failed (the task could not be registered), the workspace
+// Create returned. It removes only what Create made.
+func Undo(cfg *config.Config, slug string, made []Created) {
 	for i := len(made) - 1; i >= 0; i-- {
 		c := made[i]
 		repo, ok := cfg.Repo(c.Repo)
@@ -399,19 +396,17 @@ func checkedOut(repo, branch string) bool {
 	return false
 }
 
-// writeGuide drops the agent's own instructions file at the workspace root,
+// WriteGuide drops the agent's own instructions file at the workspace root,
 // which is where the agent is started. The name matters: Claude Code reads
 // CLAUDE.md, while Codex and Antigravity read AGENTS.md, so writing the wrong
 // one means the agent silently never sees any of this.
 //
 // It is how the agent learns that FrIDE owns this workspace's stack and that
 // the journal exists — the same way it picks up any other project convention.
-// It sits outside every repo, so it never appears in a diff.
-func writeGuide(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch string) error {
-	names := make([]string, 0, len(specs))
-	for _, s := range specs {
-		names = append(names, s.Name)
-	}
+// It sits outside every repo, so it never appears in a diff. A workspace that
+// arrived from another computer gets it rewritten, as that one named the other
+// computer's paths.
+func WriteGuide(cfg *config.Config, slug string, names []string, agentKind, branch string) error {
 	body := `# Workspace ` + slug + `
 
 This folder is a FrIDE task workspace. Each subdirectory is a git worktree of
@@ -1013,17 +1008,6 @@ func countLines(path string) int {
 		n++
 	}
 	return n
-}
-
-// WriteGuide (re)writes the agent's guide file at the workspace root — for a
-// workspace that arrived from another computer, whose guide named that
-// computer's paths.
-func WriteGuide(cfg *config.Config, slug string, repos []string, agentKind, branch string) error {
-	specs := make([]RepoSpec, 0, len(repos))
-	for _, r := range repos {
-		specs = append(specs, RepoSpec{Name: r})
-	}
-	return writeGuide(cfg, slug, specs, agentKind, branch)
 }
 
 // CopyLocalConfig copies a repository's git-ignored local config from its main

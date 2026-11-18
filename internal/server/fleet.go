@@ -661,7 +661,7 @@ func (s *Server) handleImportPrepare(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 405, fmt.Errorf("POST the archive"))
 		return
 	}
-	m, err := move.Prepare(s.cfg, s.st, r.Body)
+	m, err := move.Prepare(s.cfg, s.st, r.Body, "")
 	if err != nil {
 		writeErr(w, 400, err)
 		return
