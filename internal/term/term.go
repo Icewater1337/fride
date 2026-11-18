@@ -216,6 +216,14 @@ func (s *Session) Subscribe() (<-chan []byte, func()) {
 	if len(s.buf) > 0 {
 		ch <- append([]byte(nil), s.buf...)
 	}
+	// An exited session will never publish or close again: a channel left
+	// open here kept the reopened tab's socket open, and the tab pulsing busy,
+	// forever (#150). The cancel func tolerates the unregistered channel.
+	if s.closed {
+		close(ch)
+		s.mu.Unlock()
+		return ch, func() {}
+	}
 	if s.subs == nil {
 		s.subs = map[chan []byte]struct{}{}
 	}
@@ -279,6 +287,9 @@ func (s *Session) close(msg string) {
 	}
 	s.closed = true
 	s.exitMsg = msg
+	// The exit message was published just before, which set Busy; nothing
+	// will clear it again, so an exited tab would pulse busy forever.
+	s.Busy = false
 	for ch := range s.subs {
 		delete(s.subs, ch)
 		close(ch)
