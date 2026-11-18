@@ -100,6 +100,9 @@ type RepoSpec struct {
 	Base string
 	// Review is the repo's review settings from config.json, nil for none.
 	Review *settings.RepoReview
+	// Approvals is how many human approvals each tier needs in this repo
+	// (settings.ApprovalsFor); nil is the defaults.
+	Approvals settings.Approvals
 }
 
 // Build reads every repository's change, attributes its lines to the agent's

@@ -42,7 +42,7 @@ func printGate(t *store.Task, g review.Gate) {
 	fmt.Printf("task %s — %s tier, %d of %d human approval%s: %s\n", t.Slug, g.Tier, g.Have, g.Need, reviewPlural(g.Need), state)
 	if len(g.Repos) > 1 {
 		for _, r := range g.Repos {
-			fmt.Printf("  repo %s: %s\n", r.Repo, r.Tier)
+			fmt.Printf("  repo %s: %s, %d approval%s\n", r.Repo, r.Tier, r.Need, reviewPlural(r.Need))
 		}
 	}
 	for _, r := range g.Repos {

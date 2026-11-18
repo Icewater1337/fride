@@ -215,7 +215,7 @@ Round    { n, at, anchors: {repo: {head, hash}}, by: [ai|agent], forced }
 Rounds   { done: [Round], max, next, capped, escalation }
 RevertCheck { repo, state, command, caught, exitCode, output, tests, err, anchor, stale }
 Risk     { score (0-100), level (low|medium|high), reasons }
-Gate     { tier, need, have, ready, repos: [{repo, tier, err}],
+Gate     { tier, need, have, ready, repos: [{repo, tier, need, err}],
            why: [{repo, path, tier, why, rule}], more, version: {repo: {head, hash}},
            approvals: [Approval], accountable: Accountable, you }
 Approval { by, via (browser | "fleet: <computer>" | api), at, version: {repo: {head, hash}},
@@ -392,11 +392,20 @@ wrote it, an agent or a person. Each changed file gets a tier from its path
 (`tier.go`). A repository's tier is the highest of its files, and the task's
 the highest of its repositories.
 
-| Tier | What | Human approvals |
+| Tier | What | Human approvals, by default |
 | --- | --- | --- |
 | auto | documentation; code a repository declares flag-guarded | 0 |
 | normal | code, config, anything no rule places | 1 |
 | risky | auth and access control, secrets and cryptography, payments and billing, migrations and schema, CI/CD, infrastructure and deployment config | 2 |
+
+**The counts** are `review.approvals` in config.json, and
+`repos.<name>.review.approvals` for one repository, whose value wins there,
+tier by tier ([CONFIG.md](CONFIG.md#review)). A task whose repositories have
+different counts needs the most any of them needs. All zeros turns the gate
+off while the tiers are still worked out and shown: the setting for a setup
+where something other than a person closes tasks, such as a companion's close
+or the orchestrator. Only config.json sets counts; a repository's own
+`.fride/review.json` that tries is refused like a broken one.
 
 **Rules.** The first rule a path matches decides, in this order:
 
@@ -470,16 +479,16 @@ record existed shows the person worked out now, and says so.
 **The gate.** `CheckDone` refuses Done while the change lacks its approvals,
 the same way as a blocking thread, on every path to Done: the status buttons,
 the board, `fride task status`, the orchestrator's `set_status` and the
-companion's close. The refusal says which file set the tier.
+companion's close. The refusal says which file set the tier and how many
+approvals it needs.
 
-**What "auto-merge" means here.** FrIDE opens and merges no pull requests. An
-auto change needs no human: its task can be Done once nothing else blocks.
-Whatever merges, whether a person, CI, or an agent told to merge its own pull
-requests, asks the gate: `GET /api/tasks/<slug>/changes/gate`, or
-`fride review gate [task] [--json]`, which exits 1 while approvals are
-missing. A repository where agents may merge everything themselves says so
-with a rule, `{ "tier": "auto", "paths": ["**"] }`, rather than by skipping
-the gate.
+**What "auto-merge" means here.** FrIDE opens and merges no pull requests. A
+change whose tier needs no approval (auto by default) can be Done once nothing
+else blocks. Whatever merges, whether a person, CI, or an agent told to merge
+its own pull requests, asks the gate: `GET /api/tasks/<slug>/changes/gate`,
+or `fride review gate [task] [--json]`, which exits 1 while approvals are
+missing. A setup where agents may merge everything themselves says so with
+counts of zero in `review.approvals`, rather than by skipping the gate.
 
 ## Review rounds
 

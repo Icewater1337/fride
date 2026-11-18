@@ -170,7 +170,7 @@ func TestHighestTierWins(t *testing.T) {
 	rules, _ := repoRules(RepoSpec{}, "")
 	docs := RepoChanges{Repo: "web", Files: []File{{Path: "README.md"}, {Path: "docs/a.md"}}}
 	api := RepoChanges{Repo: "api", Files: []File{{Path: "docs/b.md"}, {Path: "main.go"}}}
-	tiers := []RepoTier{tierFiles(&docs, rules, nil), tierFiles(&api, rules, nil)}
+	tiers := []RepoTier{tierFiles(&docs, rules, nil, nil), tierFiles(&api, rules, nil, nil)}
 	if tiers[0].Tier != "auto" || tiers[1].Tier != "normal" {
 		t.Fatalf("repo tiers: %+v", tiers)
 	}
@@ -181,7 +181,7 @@ func TestHighestTierWins(t *testing.T) {
 
 	// A rename out of an auth folder changes the auth folder.
 	mv := RepoChanges{Repo: "api", Files: []File{{Path: "lib/helpers.go", OldPath: "auth/helpers.go", Status: "R"}}}
-	if rt := tierFiles(&mv, rules, nil); rt.Tier != "risky" {
+	if rt := tierFiles(&mv, rules, nil, nil); rt.Tier != "risky" {
 		t.Errorf("rename out of auth: %+v", rt)
 	}
 
@@ -192,7 +192,7 @@ func TestHighestTierWins(t *testing.T) {
 	}
 	// A repo whose change cannot be read is not waved through.
 	bad := RepoChanges{Repo: "x", Err: "cannot resolve the base main"}
-	if g := gate([]RepoChanges{bad}, []RepoTier{tierFiles(&bad, rules, nil)}, Kept{}); g.Ready || g.Tier != "normal" ||
+	if g := gate([]RepoChanges{bad}, []RepoTier{tierFiles(&bad, rules, nil, nil)}, Kept{}); g.Ready || g.Tier != "normal" ||
 		!strings.Contains(g.Missing(), "cannot resolve") {
 		t.Errorf("unreadable change: %+v %q", g, g.Missing())
 	}
@@ -203,7 +203,7 @@ func TestHighestTierWins(t *testing.T) {
 func TestApprovalsCountPerVersionAndPerson(t *testing.T) {
 	rules, _ := repoRules(RepoSpec{}, "")
 	rc := RepoChanges{Repo: "api", Head: "abc", Files: []File{{Path: "db/migrations/1.sql", Hash: "h1"}}}
-	tiers := []RepoTier{tierFiles(&rc, rules, nil)}
+	tiers := []RepoTier{tierFiles(&rc, rules, nil, nil)}
 	now := map[string]Anchor{"api": {Head: "abc", Hash: repoHash(rc)}}
 	old := map[string]Anchor{"api": {Head: "abc", Hash: "older"}}
 
@@ -363,6 +363,58 @@ func TestDoneWaitsForApprovals(t *testing.T) {
 	}
 	if err := CheckDone(cfg, "t1"); err != nil {
 		t.Fatalf("two approvals of a risky change: %v", err)
+	}
+}
+
+// The counts come from config.json: per repo, the task needing the most any
+// repo needs. All zeros never blocks, and the tier is still worked out.
+func TestApprovalCountsAreConfigured(t *testing.T) {
+	rules, _ := repoRules(RepoSpec{}, "")
+	api := RepoChanges{Repo: "api", Files: []File{{Path: "db/migrations/1.sql"}}}
+	web := RepoChanges{Repo: "web", Files: []File{{Path: "main.go"}}}
+	tiers := []RepoTier{
+		tierFiles(&api, rules, nil, settings.Approvals{"risky": 1}),
+		tierFiles(&web, rules, nil, nil),
+	}
+	g := gate([]RepoChanges{api, web}, tiers, Kept{})
+	if g.Tier != "risky" || g.Need != 1 || tiers[0].Need != 1 || tiers[1].Need != 1 {
+		t.Errorf("a repo's own counts: %+v %+v", g, tiers)
+	}
+	off := settings.Approvals{"auto": 0, "normal": 0, "risky": 0}
+	g = gate([]RepoChanges{api}, []RepoTier{tierFiles(&api, rules, nil, off)}, Kept{})
+	if !g.Ready || g.Need != 0 || g.Tier != "risky" || len(g.Why) != 1 {
+		t.Errorf("all zeros: %+v", g)
+	}
+
+	cfg, _, _, dir := gateTask(t)
+	write(t, dir, "migrations/0001_init.sql", "create table t (id int);\n")
+	if err := CheckDone(cfg, "t1"); err == nil || !strings.Contains(err.Error(), "needs 2") {
+		t.Fatalf("defaults: %v", err)
+	}
+	cfg.Settings = &settings.Settings{Review: &settings.Review{Approvals: settings.Approvals{"risky": 1}}}
+	if err := CheckDone(cfg, "t1"); err == nil || !strings.Contains(err.Error(), "needs 1 human approval ") {
+		t.Fatalf("review.approvals: %v", err)
+	}
+	cfg.Settings.Repos = map[string]*settings.Repo{"api": {Review: &settings.RepoReview{Approvals: off}}}
+	if err := CheckDone(cfg, "t1"); err != nil {
+		t.Fatalf("all zeros for the repo, and Done still waits: %v", err)
+	}
+}
+
+// A repository cannot carry in its own counts: they are the setup's call.
+func TestRepoFileCannotSetApprovals(t *testing.T) {
+	dir := repo(t)
+	gitT(t, dir, "switch", "-q", "main")
+	write(t, dir, RulesFile, `{"approvals": {"risky": 0, "normal": 0}}`)
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "rules")
+	gitT(t, dir, "switch", "-q", "work")
+	gitT(t, dir, "merge", "-q", "main")
+	write(t, dir, "server.go", "package api\n")
+	rc := Diff(dir, "api", "main", newBudget())
+	rt := placeRepo(RepoSpec{Name: "api", Dir: dir, Base: "main"}, &rc)
+	if rt.Tier != "risky" || rt.Need != 2 || !strings.Contains(rt.Err, "only config.json") {
+		t.Errorf("approvals from the repo's own file: %+v", rt)
 	}
 }
 

@@ -269,12 +269,14 @@ function rvProgress(d) {
 }
 
 // The review tiers (settings.Tiers on the server): set by the paths a change
-// touches, each with the human approvals it needs.
+// touches. How many approvals each needs is config.json's review.approvals,
+// so the counts always come from the server (gate.need, repos[].need).
 const RV_TIERS = {
-  auto: ['Auto', 'Docs or flag-guarded code: no human approval needed'],
-  normal: ['Normal', 'Code: one human approval'],
-  risky: ['Risky', 'Auth, payments, migrations, CI/CD or infrastructure: two human approvals'],
+  auto: ['Auto', 'Docs or flag-guarded code'],
+  normal: ['Normal', 'Code'],
+  risky: ['Risky', 'Auth, payments, migrations, CI/CD or infrastructure'],
 };
+const rvNeeds = n => n ? `${n} human approval${n === 1 ? '' : 's'}` : 'no human approval';
 
 // rvGateChip is the header's tier chip: the tier and the approvals it has.
 function rvGateChip(d) {
@@ -286,7 +288,7 @@ function rvGateChip(d) {
   chip.appendChild(icon(g.ready ? 'check' : 'shield'));
   const t = RV_TIERS[g.tier] || [g.tier, ''];
   chip.appendChild(el('span', null, g.need ? `${t[0]} ${g.have}/${g.need}` : t[0]));
-  chip.title = `${t[1]}.\n` + (g.ready ? 'This version can be Done.' : `${g.need - g.have} more human approval${g.need - g.have === 1 ? '' : 's'} of this version before the task can be Done.`);
+  chip.title = `${t[1]}: ${rvNeeds(g.need)}.\n` + (g.ready ? 'This version can be Done.' : `${g.need - g.have} more human approval${g.need - g.have === 1 ? '' : 's'} of this version before the task can be Done.`);
   chip.onclick = () => { const c = $('#rv-main .rv-gatecard'); if (c) c.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
 }
 
@@ -396,7 +398,7 @@ function rvFile(r, f) {
   if (f.untracked) head.appendChild(rvTag('untracked', 'muted', 'Not yet known to git'));
   if (f.withheld) head.appendChild(rvTag('withheld', 'amber', 'Holds credentials; not served'));
   if (f.noise) head.appendChild(rvTag(f.noise, 'muted', f.noiseWhy));
-  if (f.tier === 'risky') head.appendChild(rvTag('risky', 'red', `Review tier risky: ${f.tierWhy}. Two human approvals.`));
+  if (f.tier === 'risky') head.appendChild(rvTag('risky', 'red', `Review tier risky: ${f.tierWhy}.`));
   if (f.viewed === 'changed') head.appendChild(rvTag('changed since viewed', 'amber',
     'The hunks you already read are folded as "read before"'));
   head.appendChild(el('span', 'spacer'));
@@ -790,13 +792,16 @@ function rvGate(d) {
   s.classList.add('rv-gatecard', g.ready ? 'ready' : 'waiting');
 
   const line = el('div', 'rv-gline');
-  const tag = rvTag(t[0], g.tier === 'risky' ? 'red' : g.tier === 'auto' ? 'green' : 'amber', t[1]);
+  const tag = rvTag(t[0], g.tier === 'risky' ? 'red' : g.tier === 'auto' ? 'green' : 'amber', `${t[1]}: ${rvNeeds(g.need)}`);
   line.appendChild(tag);
   line.appendChild(el('span', null, g.ready
-    ? (g.need ? 'Approved: this version can be Done.' : 'No human approval needed: this version can be Done.')
+    ? (g.need ? 'Approved: this version can be Done.'
+      : g.tier === 'auto' ? 'No human approval needed: this version can be Done.'
+        : 'No human approval needed here (review.approvals in config.json): this version can be Done.')
     : `Needs ${left} more human approval${left === 1 ? '' : 's'} of this version before the task can be Done.`));
   s.appendChild(line);
-  if (g.repos.length > 1) s.appendChild(el('div', 'dim rv-grepos', 'Per repository: ' + g.repos.map(r => `${r.repo} ${r.tier}`).join(' · ')));
+  if (g.repos.length > 1) s.appendChild(el('div', 'dim rv-grepos', 'Per repository: ' +
+    g.repos.map(r => `${r.repo} ${r.tier} (${rvNeeds(r.need)})`).join(' · ')));
   for (const r of g.repos) if (r.err) s.appendChild(el('div', 'rv-err', `${r.repo}: ${r.err}`));
 
   if (g.why.length && g.tier !== 'auto') {

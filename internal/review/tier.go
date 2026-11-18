@@ -12,7 +12,8 @@ import (
 
 // A change's review tier is set by the paths it touches, never by who wrote
 // it: docs need no human, code needs one, the areas where a mistake is
-// expensive (auth, payments, migrations, CI/CD, infrastructure) need two. The
+// expensive (auth, payments, migrations, CI/CD, infrastructure) need two;
+// those counts are review.approvals, and a repo may have its own. The
 // highest tier of any file is the repo's, and the highest repo's is the
 // task's. The 0–100 risk score is separate: it weighs the evidence, the tier
 // only the paths, so it can be stated as rules a team agrees on.
@@ -21,18 +22,6 @@ import (
 // shape of repos.<name>.review. It is read at the merge-base, not from the
 // working tree: an agent's change must not lower its own tier.
 const RulesFile = ".fride/review.json"
-
-// Need is how many human approvals a tier asks for. An unknown tier asks for
-// one: a tier nobody can name is not a reason to skip review.
-func Need(tier string) int {
-	switch tier {
-	case settings.TierAuto:
-		return 0
-	case settings.TierRisky:
-		return 2
-	}
-	return 1
-}
 
 func tierRank(tier string) int {
 	switch tier {
@@ -58,6 +47,9 @@ type FileTier struct {
 type RepoTier struct {
 	Repo string `json:"repo"`
 	Tier string `json:"tier"`
+	// Need is how many human approvals that tier needs in this repo
+	// (settings.ApprovalsFor).
+	Need int `json:"need"`
 	// Err says why the repo's change or its own rules could not be read; the
 	// tier then errs on the side of more review.
 	Err string `json:"err,omitempty"`
@@ -180,6 +172,11 @@ func readRepoRules(dir, mergeBase string) (*settings.RepoReview, error) {
 			return nil, fmt.Errorf("%s: %s", p.Where, p.Msg)
 		}
 	}
+	// How many people must approve is the setup's call (a person closes its
+	// tasks, or a companion does), not something a branch can carry in.
+	if rv.Approvals != nil {
+		return nil, fmt.Errorf("%s sets approvals, which only config.json does (review.approvals, repos.<name>.review.approvals)", RulesFile)
+	}
 	return &rv, nil
 }
 
@@ -194,9 +191,10 @@ func place(rules []rule, p string) rule {
 }
 
 // tierFiles places every file of a repository's change in a tier, and the
-// repository in the highest of them. A rename counts the higher of its two
+// repository in the highest of them, which needs approvals.For(tier) people
+// (nil approvals: the defaults). A rename counts the higher of its two
 // paths: moving a file out of an auth folder changes the auth folder.
-func tierFiles(rc *RepoChanges, rules []rule, rulesErr error) RepoTier {
+func tierFiles(rc *RepoChanges, rules []rule, rulesErr error, approvals settings.Approvals) RepoTier {
 	rt := RepoTier{Repo: rc.Repo, Tier: settings.TierAuto}
 	raise := func(tier string) {
 		if tierRank(tier) > tierRank(rt.Tier) {
@@ -223,13 +221,14 @@ func tierFiles(rc *RepoChanges, rules []rule, rulesErr error) RepoTier {
 		raise(settings.TierNormal)
 		rt.Err = "its change could not be read: " + rc.Err
 	}
+	rt.Need = approvals.For(rt.Tier)
 	return rt
 }
 
 // placeRepo reads a repository's rules and places its change.
 func placeRepo(spec RepoSpec, rc *RepoChanges) RepoTier {
 	rules, err := repoRules(spec, rc.MergeBase)
-	return tierFiles(rc, rules, err)
+	return tierFiles(rc, rules, err, spec.Approvals)
 }
 
 // globsRE compiles gitignore-style patterns into one expression, nil for

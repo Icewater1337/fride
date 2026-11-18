@@ -61,7 +61,9 @@ type Accountable struct {
 // Gate is what a task's change needs before it may be Done: the approvals
 // its tier asks for, of its current version.
 type Gate struct {
-	Tier  string     `json:"tier"`
+	Tier string `json:"tier"`
+	// Need is the most any repo's tier needs there (RepoTier.Need), which is
+	// usually what the task's tier needs; each repo may set its own counts.
 	Need  int        `json:"need"`
 	Have  int        `json:"have"`
 	Ready bool       `json:"ready"`
@@ -255,8 +257,8 @@ func gate(repos []RepoChanges, tiers []RepoTier, kept Kept) Gate {
 		if tierRank(rt.Tier) > tierRank(g.Tier) {
 			g.Tier = rt.Tier
 		}
+		g.Need = max(g.Need, rt.Need)
 	}
-	g.Need = Need(g.Tier)
 	for _, rc := range repos {
 		g.Version[rc.Repo] = Anchor{Head: rc.Head, Hash: repoHash(rc)}
 		for _, f := range rc.Files {
@@ -313,7 +315,8 @@ func Specs(cfg *config.Config, t *store.Task) []RepoSpec {
 		if cfg.Settings != nil {
 			rv = cfg.Settings.Repo(tr.Name).Review
 		}
-		repos = append(repos, RepoSpec{Name: tr.Name, Dir: dir, Base: base, Review: rv})
+		repos = append(repos, RepoSpec{Name: tr.Name, Dir: dir, Base: base, Review: rv,
+			Approvals: cfg.Settings.ApprovalsFor(tr.Name)})
 	}
 	return repos
 }
