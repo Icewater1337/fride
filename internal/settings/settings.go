@@ -75,6 +75,9 @@ type Settings struct {
 	Review *Review `json:"review,omitempty"`
 	// Quality schedules the outcome record and the eval replay (REVIEW.md).
 	Quality *Quality `json:"quality,omitempty"`
+	// PR configures `fride pr`: the proof a pull request carries, and the
+	// review it waits for before it is marked ready (REVIEW.md).
+	PR *PR `json:"pr,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -99,8 +102,13 @@ type Repo struct {
 	Setup []Step `json:"setup,omitempty"`
 	// Test runs this repo's tests from a fresh checkout, installs included
 	// ("npm ci && npm test"). The Review tab's revert check runs it with the
-	// change reverted, to see whether the tests notice.
+	// change reverted, to see whether the tests notice, and `fride proof` runs
+	// it in the task's worktree before a pull request.
 	Test string `json:"test,omitempty"`
+	// Build builds this repo in a task's worktree ("go build ./...", "npm run
+	// build"). `fride proof` runs it before Test. What it writes has to be
+	// git-ignored: a build that changes the tree it proves proves nothing.
+	Build string `json:"build,omitempty"`
 }
 
 // Step is one setup command.
@@ -372,6 +380,24 @@ type Companion struct {
 	// for one, to merge a pull request no human approved. Rules that grant
 	// any command (Bash, Bash(*)) are dropped by auto mode and warned about.
 	ClaudeAllow []string `json:"claudeAllow,omitempty"`
+}
+
+// PR configures how a task's agent opens a pull request, with `fride pr`.
+type PR struct {
+	// Review runs the AI review pass, which never saw the agent's
+	// conversation, once the pull request is open as a draft, and marks it
+	// ready only when no red finding remains. Default true. false opens the
+	// pull request ready at once, with the proof attached.
+	Review *bool `json:"review,omitempty"`
+}
+
+// PRReview reports whether `fride pr` waits for a fresh-context review before
+// it marks a pull request ready.
+func (s *Settings) PRReview() bool {
+	if s == nil || s.PR == nil || s.PR.Review == nil {
+		return true
+	}
+	return *s.PR.Review
 }
 
 // ClaudeAllowRules is companion.claudeAllow, trimmed, without empty or

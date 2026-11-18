@@ -34,6 +34,7 @@ serve_client.go          the HTTP client of the running server those commands sh
 update_cli.go            `fride update`: install the latest GitHub release
 companion_cli.go         `serve` modes, `fride pair-companion`, `fride task export|import`
 quality_cli.go           `fride quality`, `fride incident`, `fride review eval`
+pr_cli.go                `fride proof` / `fride pr`: prove, push, open a draft, review, ready
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
@@ -62,7 +63,8 @@ internal/store           tasks.json, flock'd (the CLI and the server share it)
 internal/journal         decision log, rationale document, ledger, idea pages
 internal/review          the Review tab (changes vs merge-base, viewed marks, focus,
                          evidence, hunk links, moves, provenance, AI pass, threads,
-                         revert check, split, risk, queue) and the reviewer skill
+                         revert check, split, risk, queue), the reviewer skill, and
+                         the pull request gate (proof, `fride pr`)
 internal/quality         what became of the tasks' changes after merge (reverts, follow-ups,
                          incidents), the metric, and the eval set the AI review is replayed on
 internal/server          HTTP + WebSocket
@@ -72,7 +74,8 @@ docs/FLEET.md            fleet mode
 docs/INBOX.md            messages from outside: `fride in`, /api/inbox
 docs/COMPANION.md        companion mode: pairing, /api/companion, webhook, export/import
 docs/GIT.md              git identities: who a task commits and pushes as, tokens
-docs/REVIEW.md           the Review tab: design, the MVP and phases 2 and 3, data model, API
+docs/REVIEW.md           the Review tab: design, the MVP and phases 2 and 3, data model, API;
+                         proof before a pull request
 ```
 
 Conventions:

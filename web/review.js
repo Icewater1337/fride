@@ -783,6 +783,7 @@ function rvEvidence(d) {
   const bad = ev.commands.filter(c => c.done && !c.ok).length;
   const aside = el('span', 'dim', ev.commands.length ? `${ok} passed · ${bad} failed` : '');
   const s = rvSection('Evidence', 'activity', aside);
+  if (d.proof) s.appendChild(rvProof(d.proof));
   if (!d.traced) {
     s.appendChild(el('div', 'rv-quiet',
       'No Claude Code session was found in this workspace. Evidence and the agent links on hunks come from its transcripts.'));
@@ -830,6 +831,78 @@ function rvEvidence(d) {
   s.appendChild(tests);
   s.appendChild(rvReverts(d));
   return s;
+}
+
+// rvProof: the build and tests FrIDE itself ran on the change (fride proof),
+// on which version, and what fride pr did with it. Unlike the agent's own runs
+// above, this is what a pull request carries.
+function rvProof(p) {
+  const wrap = el('div', 'rv-reverts');
+  const h = el('div', 'rv-subh', 'Proof');
+  h.title = 'Each changed repository\'s build and test commands (repos.<name>.build and .test in config.json), run by ' +
+    'fride proof or fride pr in the task\'s worktree. A pull request carries it. It goes stale once the change moves.';
+  wrap.appendChild(h);
+  const top = el('div', 'rv-chead');
+  const dot = el('span', 'rv-cst ' + (p.ok ? 'ok' : 'bad'));
+  dot.appendChild(icon(p.ok ? 'check' : 'x'));
+  top.appendChild(dot);
+  top.appendChild(el('span', 'rv-ctext', p.ok ? 'Build and tests passed' : 'The proof failed' + (p.err ? ': ' + p.err : '')));
+  top.appendChild(el('span', 'dim', rvTime(p.taken)));
+  top.appendChild(p.stale
+    ? rvTag('stale', 'amber', 'The change moved since: this proves an earlier version')
+    : rvTag('this version', 'green', 'Taken on the change exactly as it is now'));
+  wrap.appendChild(top);
+  for (const r of p.repos || []) {
+    if (r.unchanged) continue;
+    const version = (r.head || '').slice(0, 10) + (r.dirty ? ' + uncommitted' : '');
+    const rows = (r.checks || []).map(c => ({ c }));
+    if (r.err) rows.push({ err: r.err });
+    for (const x of rows) {
+      const row = el('div', 'rv-cmd');
+      const head = el('div', 'rv-chead');
+      const ok = x.c ? x.c.ok : false;
+      const st = el('span', 'rv-cst ' + (ok ? 'ok' : 'bad'));
+      st.appendChild(icon(ok ? 'check' : 'x'));
+      head.appendChild(st);
+      head.appendChild(el('b', 'rv-rrepo', r.repo));
+      if (x.c) {
+        head.appendChild(rvTag(x.c.kind, 'muted'));
+        const cmd = el('code', 'rv-ctext', x.c.command);
+        cmd.title = x.c.command;
+        head.appendChild(cmd);
+        head.appendChild(el('span', 'dim', x.c.err ? x.c.err : `exit ${x.c.exitCode} · ${x.c.seconds}s`));
+      } else {
+        head.appendChild(el('span', 'rv-ctext', x.err));
+      }
+      const v = el('span', 'dim', version);
+      v.title = 'The commit checked out when the proof ran' + (r.stale ? '; this repository changed since' : '');
+      head.appendChild(v);
+      row.appendChild(head);
+      if (x.c && x.c.output) {
+        row.appendChild(el('pre', 'rv-cout', x.c.output));
+        head.classList.add('link');
+        head.addEventListener('click', () => row.classList.toggle('open'));
+      }
+      wrap.appendChild(row);
+    }
+  }
+  const pr = p.pr;
+  if (pr && (pr.links || []).length) {
+    const said = { off: 'opened ready (the automatic review is off)', running: 'a draft while the review runs',
+      clean: 'marked ready after a clean fresh-context review',
+      findings: `a draft: the review left ${pr.red} red finding${pr.red === 1 ? '' : 's'}`,
+      failed: 'a draft: the review could not run' + (pr.err ? ` (${pr.err})` : '') }[pr.review] || pr.review;
+    for (const l of pr.links) {
+      const row = el('div', 'rv-chead');
+      row.appendChild(el('b', 'rv-rrepo', l.repo));
+      const a = el('a', null, l.url);
+      if (/^https?:\/\//.test(l.url)) { a.href = l.url; a.target = '_blank'; a.rel = 'noopener'; }
+      row.appendChild(a);
+      row.appendChild(el('span', 'dim', said));
+      wrap.appendChild(row);
+    }
+  }
+  return wrap;
 }
 
 // rvReverts: per repo, whether its changed tests fail with the change reverted.

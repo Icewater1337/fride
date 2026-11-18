@@ -111,6 +111,16 @@ fixes or caused an incident (`fride incident`). Those, and the AI findings you
 voted on, form an eval set that `fride review eval` replays the AI review
 against. See [docs/REVIEW.md](docs/REVIEW.md).
 
+**Proof before a pull request.** A task's agent opens its pull request with
+`fride pr`, as its workspace guide says. That runs each changed repository's
+build and tests (`repos.<name>.build` and `.test`) on exactly what was
+committed, refuses while one fails, and opens the pull request with their
+output attached, as a draft. The AI review pass, which never saw the agent's
+conversation, then reads the change, and the pull request is marked ready only
+when no red finding is left; findings go back to the agent. `pr.review` turns
+the review off. The Review tab shows the proof and the version it was taken
+on, and the orchestrator sends back an agent whose pull request has none.
+
 **Agent review.** *Agent review* in a task's header starts a reviewer in a tab of its
 own, with the agent, model and effort you pick. It finds the merge requests
 (or pull requests) of the task's branches and reviews them against each
@@ -250,6 +260,9 @@ fride note decision "..." --why "..."     # the decision log the rationale docum
 fride note followup "..." --why "..." [--repo R] [--path P]   # work found but left for a new task
 fride rationale [task] [--narrate] [--publish]   # --publish: also push it to the ledger repo
 fride idea ls | idea cat <path> | idea publish [task]   # the ideas repository
+
+fride proof [task]                        # each changed repo's build and tests, as Markdown
+fride pr [task] --title "..." --body-file f.md   # prove, push, draft, fresh-context review, ready
 
 fride fleet                               # this computer and your others (fleet mode)
 fride task move <task> <computer>         # continue a task on another computer

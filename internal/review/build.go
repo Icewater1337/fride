@@ -29,6 +29,8 @@ type Changes struct {
 	Rounds Rounds `json:"rounds"`
 	// LastReview is when the reviewer last marked a file viewed.
 	LastReview time.Time `json:"lastReview,omitzero"`
+	// Proof is the last `fride proof`, nil before the first.
+	Proof *Proof `json:"proof,omitempty"`
 }
 
 // Kept is what the review stored for a task, as Build needs it.
@@ -41,6 +43,7 @@ type Kept struct {
 	Rounds   roundsState
 	// MaxRounds is the round cap from config.json, 0 for none.
 	MaxRounds int
+	Proof     Proof
 }
 
 // LoadKept reads everything the review stored for a task.
@@ -53,6 +56,7 @@ func LoadKept(cfg *config.Config, slug string) Kept {
 		AI:       loadAI(cfg, slug),
 		Revert:   loadRevert(cfg, slug),
 		Captures: loadCaptures(cfg, slug),
+		Proof:    loadProof(cfg, slug),
 	}
 	k.Rounds, k.MaxRounds = loadRounds(cfg, slug), maxRounds(cfg)
 	return k
@@ -154,6 +158,12 @@ func Build(repos []RepoSpec, kept Kept, tr agent.Trace, entries []journal.Entry)
 	out.Evidence = evidence(out.Repos, tr)
 	out.Focus = focus(out.Repos, dirs, tr, out.Evidence, entries)
 	out.Focus = append(out.Focus, judged(out)...)
+	if !kept.Proof.Taken.IsZero() {
+		p := kept.Proof
+		MarkStale(&p, repos)
+		out.Proof = &p
+		out.Focus = proofFocus(out.Focus, out.Proof)
+	}
 	bySeverity(out.Focus)
 	if out.Focus == nil {
 		out.Focus = []Focus{}

@@ -133,6 +133,7 @@ backend's compose file.
 | `review` | `{ "maxRounds": 3, "finders": 3, "agree": 2 }`: the cap on a task's review rounds, and how many finders the AI pass runs and must agree. See [review](#review). |
 | `quality` | How often `fride serve` updates the quality record and replays the AI review's eval set. See [quality](#quality). |
 | `pullRequests` | `{ "watch": true, "feedback": true }`: follow the pull requests of task branches, and tell agents what is wrong with theirs. On unless turned off. See [pullRequests](#pullrequests). |
+| `pr` | `{ "review": true }`: how `fride pr` opens a task's pull request, with its proof, and whether it waits for a fresh-context review before marking it ready. See [pr](#pr). |
 
 ## repos.&lt;name&gt;
 
@@ -141,7 +142,8 @@ backend's compose file.
 | `copy` | Git-ignored local files copied from the main checkout into every new worktree, such as `.env` or `config/local.yml`. If you leave it out, the repo's own `.worktreeinclude` is used, which is the file `claude --worktree` reads too. Literal paths only. |
 | `ide` | The JetBrains launcher this repo opens in: `idea`, `pycharm`, `webstorm`, `goland` and so on. Empty means FrIDE detects it from the build files. |
 | `setup` | Steps that prepare a fresh worktree, such as dependency installs or code generation. They run in the background when a task is created. They run again before a service from this repo starts, if a step's `creates` path is missing. |
-| `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. |
+| `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. `fride proof` and `fride pr` run it in the task's worktree before a pull request (see [pr](#pr)). |
+| `build` | A shell command that builds this repo in a task's worktree: `go build ./...`, `npm run build`, `./gradlew assemble`. `fride proof` and `fride pr` run it before `test`. What it writes must be git-ignored: a build that changes the tree it proves fails the proof. |
 
 A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 
@@ -545,6 +547,43 @@ The token the tool uses needs to read, besides the repository:
 |---|---|
 | GitHub, fine-grained token or app | **Pull requests: read** (the pull request, reviews, review threads), **Checks: read** and **Commit statuses: read** (CI), **Actions: read** (job logs). A classic token needs `repo`. |
 | GitLab | `read_api` (or `api`), as a member who can see the project's pipelines, job logs and members. Without the members, no GitLab review comment is passed on. |
+
+## pr
+
+How a task's agent opens a pull request (or merge request). The workspace
+guide tells it to run `fride pr`, never `gh pr create` or `glab mr create`
+itself:
+
+1. `fride pr` refuses while anything is uncommitted. A pull request carries
+   commits, and its proof has to be of what it carries.
+2. It runs each changed repository's `build` and then its `test` command (see
+   `repos.<name>` above) in the task's worktree, and refuses
+   while one fails, or while a changed repository has neither. A proof taken
+   earlier on exactly this version is used again instead.
+3. It pushes the branch and opens the pull request with the commands' exit
+   codes and the end of their output in its description, or updates the one
+   that is open. `gh` or `glab` is picked by the kind of the git identity whose
+   host the remote is on, else by the host's name.
+4. With `review` on, the pull request opens as a draft. The Review tab's AI
+   review pass then reads the change in the running `fride serve`, without
+   the agent's conversation, and the pull request is marked ready only when
+   no red finding is left that a person did not dismiss. Red findings go back
+   to the agent, which fixes them, commits and runs `fride pr` again; that
+   updates the same pull request. A pass already made on the same version is
+   used again, so a second `fride pr` with nothing changed costs no model
+   turn.
+
+```json
+"pr": { "review": false }
+```
+
+| field | meaning |
+|---|---|
+| `review` | Default `true`: wait for the fresh-context review before marking the pull request ready. `false` opens it ready at once, with the proof attached, and the workspace guide says so. The review needs a running `fride serve`; without one, the pull request stays a draft. Each review is a round of the AI pass, so [review](#review)'s `maxRounds` caps them, and its `finders` and `agree` apply. |
+
+The proof is kept in the task's review folder and shown in the Review tab's
+Evidence, with the version it was taken on. It goes stale as soon as the
+change moves. See [REVIEW.md](REVIEW.md#proof-before-a-pull-request).
 
 ## requirements
 
