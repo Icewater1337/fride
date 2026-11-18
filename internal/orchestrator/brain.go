@@ -3,9 +3,9 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -350,111 +350,35 @@ func (b *brain) turn(ctx context.Context, input, session string) (Reply, string,
 	ctx, cancel := context.WithTimeout(ctx, brainTimeout)
 	defer cancel()
 
-	argv := []string{
-		"-p",
-		"--output-format", "json",
-		"--json-schema", schema(),
-		// Read-only tools, and a system prompt that REPLACES the default one.
-		// The default is written for an agent that edits files and would both
-		// cost more per turn and describe capabilities this session does not
-		// have.
-		"--tools", brainTools,
-		"--system-prompt", systemPrompt,
-		"--model", brainModel,
-		"--permission-mode", "dontAsk",
-	}
-	if session != "" {
-		argv = append(argv, "--resume", session)
-	}
 	// The workspaces root only comes into being with the first task, and the
 	// first thing anyone asks the orchestrator for is usually that task. An
 	// empty folder to read is harmless; a missing one fails every turn.
 	if err := os.MkdirAll(b.dir, 0o755); err != nil {
 		return Reply{}, session, fmt.Errorf("the orchestrator could not think: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, b.bin, argv...)
-	cmd.Dir = b.dir
-	// The prompt goes on stdin, which `-p` reads when it is given no prompt
-	// argument. As an argument it would be bounded by the OS: Linux caps a
-	// single one at 128 KiB, and the state of a handful of supervised tasks,
-	// each with its recent turns and its screen, gets there.
-	cmd.Stdin = strings.NewReader(input)
-	// A clean top-level session: the conversation has to be resumable, and a
-	// child session's transcript is never written. See agent.CleanEnv.
-	cmd.Env = agent.CleanEnv()
-
-	out, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if ok := asExit(err, &ee); ok && len(ee.Stderr) > 0 {
-			return Reply{}, session, fmt.Errorf("the orchestrator could not think: %s",
-				firstLine(string(ee.Stderr)))
-		}
-		// With --output-format json the CLI reports some failures — a login
-		// that has expired, among them — as a result on stdout, exits 1 and
-		// leaves stderr empty. "exit status 1" alone says nothing worth acting on.
-		var failed struct {
-			IsError bool   `json:"is_error"`
-			Result  string `json:"result"`
-		}
-		if json.Unmarshal(out, &failed) == nil && failed.IsError && failed.Result != "" {
-			return Reply{}, session, fmt.Errorf("the orchestrator could not think: %s",
-				firstLine(failed.Result))
-		}
-		if ctx.Err() != nil {
-			return Reply{}, session, fmt.Errorf("the orchestrator timed out after %s", brainTimeout)
-		}
-		return Reply{}, session, fmt.Errorf("the orchestrator could not think: %w", err)
-	}
-
-	var res struct {
-		SessionID  string          `json:"session_id"`
-		IsError    bool            `json:"is_error"`
-		Subtype    string          `json:"subtype"`
-		Result     string          `json:"result"`
-		Structured json.RawMessage `json:"structured_output"`
-	}
-	if err := json.Unmarshal(out, &res); err != nil {
-		return Reply{}, session, fmt.Errorf("the orchestrator returned something unreadable: %w", err)
-	}
-	if res.SessionID != "" {
-		session = res.SessionID
-	}
-	if res.IsError {
-		return Reply{}, session, fmt.Errorf("the orchestrator failed: %s", firstLine(res.Result))
-	}
-	raw := res.Structured
-	if len(raw) == 0 {
-		// The schema is enforced by the CLI, so this is the rare shape where the
-		// validated object is only present as the result string.
-		raw = json.RawMessage(res.Result)
-	}
 	var r Reply
-	if err := json.Unmarshal(raw, &r); err != nil {
+	next, err := agent.Headless{
+		Bin: b.bin, Dir: b.dir, Model: brainModel, Schema: schema(),
+		// Read-only tools, and a system prompt that REPLACES the default one.
+		// The default is written for an agent that edits files and would both
+		// cost more per turn and describe capabilities this session does not
+		// have.
+		Tools: brainTools, System: systemPrompt,
+		// Persisted: the next turn resumes this conversation.
+		Resume: session, Persist: true,
+	}.Run(ctx, input, &r)
+	if next != "" {
+		session = next
+	}
+	switch {
+	case err == nil:
+	case ctx.Err() != nil && errors.Is(err, ctx.Err()):
+		return Reply{}, session, fmt.Errorf("the orchestrator timed out after %s", brainTimeout)
+	case errors.Is(err, agent.ErrUnreadable):
 		return Reply{}, session, fmt.Errorf("the orchestrator returned something unreadable: %w", err)
+	default:
+		return Reply{}, session, fmt.Errorf("the orchestrator could not think: %w", err)
 	}
 	r.Say = strings.TrimSpace(r.Say)
 	return r, session, nil
-}
-
-func asExit(err error, dst **exec.ExitError) bool {
-	ee, ok := err.(*exec.ExitError)
-	if ok {
-		*dst = ee
-	}
-	return ok
-}
-
-func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > 400 {
-		s = s[:400] + "…"
-	}
-	if s == "" {
-		return "no detail given"
-	}
-	return s
 }
