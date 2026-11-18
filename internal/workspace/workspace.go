@@ -39,6 +39,10 @@ type Created struct {
 	// NewBranch: this call created the branch, rather than checking out one
 	// that already existed. Only such a branch may be deleted by Undo.
 	NewBranch bool
+	// branchAt is the commit a new branch starts at, "" when it could not be
+	// read. Undo deletes the branch only while it is still there: one that
+	// stands elsewhere is not what Create made.
+	branchAt string
 }
 
 // ErrExists is returned by Create when the task's folder is already there. It
@@ -177,6 +181,12 @@ func dashify(s string) string {
 // ValidateBranch defers to git itself rather than reimplementing its rules,
 // which are more intricate than they look (no "..", no trailing ".lock", no
 // leading dot in any path component, and so on).
+//
+// It checks the full ref, not `check-ref-format --branch`: that one expands
+// "@{-1}" to the branch checked out before in whatever repository fride runs
+// in, so the name passed, and every later git command read it as that other
+// branch — the failed create's cleanup force-deleted it. Git reads a lone "@"
+// as HEAD, so that is refused too, as is "HEAD", which --branch refused.
 func ValidateBranch(b string) error {
 	if b == "" {
 		return fmt.Errorf("branch name is empty")
@@ -184,7 +194,10 @@ func ValidateBranch(b string) error {
 	if strings.HasPrefix(b, "-") {
 		return fmt.Errorf("branch %q may not start with a dash", b)
 	}
-	if _, err := git("", "check-ref-format", "--branch", b); err != nil {
+	if b == "@" || b == "HEAD" || strings.Contains(b, "@{") {
+		return fmt.Errorf("%q is not a valid git branch name: git reads it as another ref", b)
+	}
+	if _, err := git("", "check-ref-format", "refs/heads/"+b); err != nil {
 		return fmt.Errorf("%q is not a valid git branch name", b)
 	}
 	return nil
@@ -296,6 +309,7 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 		// force it back to base and throw away whatever was on it. Only the
 		// first case creates anything.
 		var addArgs []string
+		start := base
 		_, localErr := git(repo.Main, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 		_, remoteErr := git(repo.Main, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
 		switch {
@@ -308,10 +322,14 @@ func CreateWith(cfg *config.Config, slug string, specs []RepoSpec, agentKind, br
 			addArgs = []string{"worktree", "add", "--track", "-b", branch, dest, "origin/" + branch}
 			c.Notes = append(c.Notes, "branch "+branch+" existed on origin — checked out and tracking it")
 			c.BaseRef = "origin/" + branch
+			start = "refs/remotes/origin/" + branch
 		default:
 			addArgs = []string{"worktree", "add", "--no-track", "-b", branch, dest, base}
 		}
 		c.NewBranch = localErr != nil
+		if c.NewBranch {
+			c.branchAt, _ = git(repo.Main, "rev-parse", "--verify", "--quiet", "--end-of-options", start+"^{commit}")
+		}
 		// Set before the add: a failed `worktree add -b` can leave the branch
 		// behind, and undo has to know it was this call's.
 		pending = &c
@@ -352,15 +370,33 @@ func undo(cfg *config.Config, slug string, made []Created) {
 		}
 		_, _ = git(repo.Main, "worktree", "remove", "--force", cfg.RepoDir(slug, c.Repo))
 		_, _ = git(repo.Main, "worktree", "prune")
-		if c.NewBranch {
-			// Fresh from its base, so nothing is on it. branch -D refuses a
-			// branch that is checked out anywhere, which keeps it safe even so.
-			_, _ = git(repo.Main, "branch", "-D", c.Branch)
+		if c.NewBranch && c.branchAt != "" && !checkedOut(repo.Main, c.Branch) {
+			// Fresh from its base, so nothing is on it. By its full ref and
+			// only at the commit Create made it at: git expands a short name
+			// (`branch -D @{-1}` deleted the branch checked out before), and a
+			// branch that stands elsewhere was never this call's to delete.
+			_, _ = git(repo.Main, "update-ref", "-d", "refs/heads/"+c.Branch, c.branchAt)
 		}
 	}
 	// Create made this folder with Mkdir, so everything left in it — guide,
 	// hook, copied local config — is the same call's.
 	_ = os.RemoveAll(cfg.WorkspaceDir(slug))
+}
+
+// checkedOut reports whether a worktree of repo has branch checked out, as
+// `branch -D` refuses to delete such a branch and update-ref does not. A list
+// that cannot be read counts as checked out: the branch is then kept.
+func checkedOut(repo, branch string) bool {
+	out, err := git(repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		return true
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if l == "branch refs/heads/"+branch {
+			return true
+		}
+	}
+	return false
 }
 
 // writeGuide drops the agent's own instructions file at the workspace root,
