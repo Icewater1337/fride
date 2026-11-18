@@ -763,7 +763,7 @@ function rvFocus(d) {
       li.classList.add('link');
       li.title = 'Go to ' + it.path;
       li.addEventListener('click', () => rvGo(it.repo + '/' + it.path, true, it.hunk));
-    } else if (it.kind === 'assumption' || it.kind === 'issue') {
+    } else if (it.kind === 'assumption' || it.kind === 'issue' || it.kind === 'followup') {
       li.title = 'From the decision log (Rationale panel)';
     }
     list.appendChild(li);

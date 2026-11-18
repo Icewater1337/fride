@@ -344,13 +344,19 @@ type taskView struct {
 	Branches  map[string]string `json:"branches,omitempty"`
 	Dirty     map[string]int    `json:"dirty,omitempty"`
 	Terminals []*term.Session   `json:"terminals,omitempty"`
+	// Followups is how many follow-ups the journal holds: work found but left
+	// for a task of its own, which the card shows so that it is not lost when
+	// the task is closed. Cheap enough for the list: journal.Count reads a
+	// journal only when it changed.
+	Followups int `json:"followups,omitempty"`
 }
 
 func (s *Server) view(t *store.Task, detail bool) *taskView {
 	n := s.terms.Waiting(t.Slug)
 	v := &taskView{Task: t, Agent: agent.Normalize(t.Agent),
 		Workspace: s.cfg.WorkspaceDir(t.Slug),
-		Attention: n > 0, Waiting: n, Stack: stack.Get(s.cfg, t.Slug)}
+		Attention: n > 0, Waiting: n, Stack: stack.Get(s.cfg, t.Slug),
+		Followups: journal.Count(s.cfg, t.Slug)[journal.KindFollowup]}
 	for _, r := range t.Repos {
 		if st := stack.SetupState(s.cfg, t.Slug, r.Name); st != "" {
 			if v.Setup == nil {

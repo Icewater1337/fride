@@ -118,6 +118,8 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   usage [task]                          token consumption of the task workspace
   note <kind> "<text>" [--why "..."]    record plan|decision|assumption|issue|note
                         [--source user]  mark an entry as the user's call, not the agent's
+                        [--repo R] [--path P]  the repository (and file) it concerns
+  note followup "<title>" --why "..."   work found but left out of this task, for a new one
   note ls [task]                        show what has been recorded
   rationale [task] [--narrate] [--commit] [--publish]
                                         compose docs/rationale/<task>.md; --publish
@@ -1228,7 +1230,8 @@ func cmdUsage(cfg *config.Config, st *store.Store, args []string) {
 // directory, so an agent inside a worktree needs no arguments beyond the text.
 func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 	if len(args) == 0 {
-		check(fmt.Errorf(`usage: fride note <plan|decision|assumption|issue|note> "<text>" [--why "..."] [--repo <name>] [--source user]
+		check(fmt.Errorf(`usage: fride note <plan|decision|assumption|issue|note> "<text>" [--why "..."] [--repo <name>] [--path <file>] [--source user]
+       fride note followup "<title>" --why "..." [--repo <name>] [--path <file>]
        fride note ls [task]`))
 	}
 	if args[0] == "ls" {
@@ -1260,6 +1263,7 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 	source, rest := flagValue(rest, "--source")
 	why, rest := flagValue(rest, "--why")
 	repo, rest := flagValue(rest, "--repo")
+	path, rest := flagValue(rest, "--path")
 	file, rest := flagValue(rest, "--file")
 	text := ""
 	if len(rest) > 0 {
@@ -1284,8 +1288,18 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 	if source != "" {
 		src = source
 	}
+	if path != "" {
+		roots := map[string]string{}
+		for _, r := range t.Repos {
+			roots[r.Name] = cfg.RepoDir(t.Slug, r.Name)
+		}
+		wd, err := os.Getwd()
+		check(err)
+		repo, path, err = journal.ScopePath(roots, wd, repo, path)
+		check(err)
+	}
 	check(journal.Append(cfg, t.Slug, journal.Entry{
-		Kind: kind, Text: text, Why: why, Repo: repo, Source: src,
+		Kind: kind, Text: text, Why: why, Repo: repo, Path: path, Source: src,
 	}))
 	fmt.Printf("recorded %s for %s\n", kind, t.Slug)
 }

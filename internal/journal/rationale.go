@@ -176,6 +176,9 @@ func Compose(cfg *config.Config, slug string, opt Options) (string, error) {
 			if e.Repo != "" {
 				scope = " · `" + e.Repo + "`"
 			}
+			if e.Path != "" {
+				scope += " · `" + e.Path + "`"
+			}
 			src := e.Source
 			if src == "" {
 				src = "unknown"
@@ -206,6 +209,10 @@ func Compose(cfg *config.Config, slug string, opt Options) (string, error) {
 		"No assumptions were recorded.")
 	section(KindIssue, "Issues encountered",
 		"No issues were recorded.")
+	// Work found but left for later, each one a candidate for its own ticket.
+	// Optional, like notes: most tasks have none, and an empty heading in
+	// every document would only teach readers to skip it.
+	section(KindFollowup, "Follow-ups found", "")
 
 	// Notes are optional: no notes, no section.
 	section(KindNote, "Notes", "")

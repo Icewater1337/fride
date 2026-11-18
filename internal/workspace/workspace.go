@@ -425,6 +425,7 @@ fride note plan --file PLAN.md                  # the plan, yours or the user's
 fride note decision "..." --why "..."           # a choice, and why you took it
 fride note assumption "..." --why "..."         # something you assumed, unconfirmed
 fride note issue "..."                          # a problem hit along the way
+fride note followup "..." --why "..."           # work found but left out of this task
 fride note ls                                   # what has been recorded so far
 ` + "```" + `
 
@@ -436,6 +437,10 @@ Record an entry when you:
 - pick between real alternatives (a library, a layer, a data shape, a workaround)
 - assume something you did not verify (an API's behaviour, an owner's intent, a default)
 - hit a problem that cost time, or that the next person would hit too
+- find work outside this task (a second bug nearby, a flaky test, a part of the
+  brief you leave out): record it as a ` + "`followup`" + ` (with ` + "`--repo`" + ` and
+  ` + "`--path <file>`" + ` when it has a place) instead of fixing it on the side or
+  dropping it, so it can become a task of its own
 
 Do not narrate routine steps. Four good decision entries beat forty notes.
 
