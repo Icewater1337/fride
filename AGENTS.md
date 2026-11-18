@@ -33,6 +33,7 @@ in_cli.go                `fride in …`: the inbox, a client of the running serv
 serve_client.go          the HTTP client of the running server those commands share
 update_cli.go            `fride update`: install the latest GitHub release
 companion_cli.go         `serve` modes, `fride pair-companion`, `fride task export|import`
+quality_cli.go           `fride quality`, `fride incident`, `fride review eval`
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
@@ -41,6 +42,8 @@ internal/mem             the memory check before a stack starts
 internal/fleet           fleet mode: tailnet (tsnet) / loopback network, identity, tunnels
 internal/move            continue a task on another computer: snapshot, bundles, restore;
                          the same archive as a file (task export / import)
+internal/trash           deleted tasks, restorable for 30 days: save, restore, expiry
+internal/wip             uncommitted work as a commit without touching the worktree, and back
 internal/companion       companion mode: pairing code and token, the signed webhook
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
@@ -57,6 +60,8 @@ internal/journal         decision log, rationale document, ledger, idea pages
 internal/review          the Review tab (changes vs merge-base, viewed marks, focus,
                          evidence, hunk links, moves, provenance, AI pass, threads,
                          revert check, split, risk, queue) and the reviewer skill
+internal/quality         what became of the tasks' changes after merge (reverts, follow-ups,
+                         incidents), the metric, and the eval set the AI review is replayed on
 internal/server          HTTP + WebSocket
 web/                     the UI, no build step (xterm.js vendored); review.js is the Review tab
 docs/CONFIG.md           config.json reference

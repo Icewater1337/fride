@@ -111,6 +111,15 @@ back with `fride in reply`.
   prompt, where it would sit idle. The orchestrator types "continue" for it,
   in any mode, up to three times with a growing pause, and tells the sender
   once; if it keeps failing, it says so and leaves it to them.
+- **A usage limit is waited out.** When the error is a usage limit whose
+  message says when it resets ("5-hour limit reached ∙ resets 3pm", with or
+  without a date or a time zone), repeating it cannot help. The orchestrator
+  tells the sender once that the agent is paused until two minutes after the
+  reset, then types "continue" for it, and the wait does not count toward the
+  three tries. Right before typing it looks again, and types only if the
+  agent is still at its prompt on that same error. A later reading of the
+  reset only moves the pause later. A limit whose reset it cannot read, or
+  one already past, is handled like any other API error.
 - **Long work sends progress notes.** When a thread's agent has been working
   for 15 minutes with no news in the thread, the sender gets a short note:
   what the agent last said, and how long ago. An agent whose conversation has

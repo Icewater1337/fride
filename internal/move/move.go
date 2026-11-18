@@ -57,6 +57,7 @@ import (
 	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/store"
+	"github.com/Icewater1337/fride/internal/wip"
 	"github.com/Icewater1337/fride/internal/workspace"
 )
 
@@ -248,47 +249,17 @@ func rootFiles(ws string, repos []store.TaskRepo) ([]RootFile, error) {
 	return out, err
 }
 
-// snapshotWIP commits the worktree's uncommitted state — staged or not,
-// untracked included, ignored files excluded — without touching the worktree,
-// its index or its branch: a throwaway index builds the tree, and the commit is
-// only referenced by refs/fride/wip/<task>/<repo>.
+// snapshotWIP commits the worktree's uncommitted state (wip.Commit) and
+// points refs/fride/wip/<task>/<repo> at it.
 func snapshotWIP(wt, slug, repo, head string) (string, error) {
-	// A path, not a file: git treats an existing empty file as a corrupt index.
-	idx, err := os.CreateTemp("", "fride-index-*")
-	if err != nil {
+	c, err := wip.Commit(wt, head, "FrIDE: uncommitted work of "+slug)
+	if err != nil || c == "" {
 		return "", err
 	}
-	idx.Close()
-	os.Remove(idx.Name())
-	defer os.Remove(idx.Name())
-	env := []string{"GIT_INDEX_FILE=" + idx.Name()}
-	if _, err := git(wt, env, "read-tree", "HEAD"); err != nil {
+	if _, err := git(wt, nil, "update-ref", wipRef(slug, repo), c); err != nil {
 		return "", err
 	}
-	if _, err := git(wt, env, "add", "-A"); err != nil {
-		return "", err
-	}
-	tree, err := git(wt, env, "write-tree")
-	if err != nil {
-		return "", err
-	}
-	headTree, err := git(wt, nil, "rev-parse", "HEAD^{tree}")
-	if err != nil {
-		return "", err
-	}
-	if tree == headTree {
-		return "", nil
-	}
-	env = append(env, "GIT_AUTHOR_NAME=FrIDE", "GIT_AUTHOR_EMAIL=fride@localhost",
-		"GIT_COMMITTER_NAME=FrIDE", "GIT_COMMITTER_EMAIL=fride@localhost")
-	wip, err := git(wt, env, "commit-tree", tree, "-p", head, "-m", "FrIDE: uncommitted work of "+slug)
-	if err != nil {
-		return "", err
-	}
-	if _, err := git(wt, nil, "update-ref", wipRef(slug, repo), wip); err != nil {
-		return "", err
-	}
-	return wip, nil
+	return c, nil
 }
 
 // Bases lists, per repository, the commit the bundle would like to start from.
@@ -575,35 +546,8 @@ func Restore(cfg *config.Config, m *Manifest) error {
 }
 
 // applyWIP re-creates uncommitted work in a worktree checked out at the WIP
-// commit's parent: modified and deleted files as unstaged changes, new files
-// as untracked ones.
-func applyWIP(wt, wip string) error {
-	patch, err := os.CreateTemp("", "fride-wip-*.patch")
-	if err != nil {
-		return err
-	}
-	patch.Close()
-	defer os.Remove(patch.Name())
-	// Plumbing, and every flag spelled out: porcelain `git diff` honours the
-	// user's configuration (diff.noprefix, color.ui=always, diff.external,
-	// textconv), and any of them makes a patch that `git apply` rejects — the
-	// uncommitted work then never comes back.
-	cmd := exec.Command("git", "diff-tree", "-p", "--binary", "--no-color", "--no-ext-diff",
-		"--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", wip)
-	cmd.Dir = wt
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("git diff-tree: %w", err)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	if err := os.WriteFile(patch.Name(), out, 0o600); err != nil {
-		return err
-	}
-	_, err = git(wt, nil, "apply", "--binary", "--whitespace=nowarn", patch.Name())
-	return err
-}
+// commit's parent (wip.Apply).
+func applyWIP(wt, c string) error { return wip.Apply(wt, c) }
 
 // Forget removes what is left of the task on the source after a successful
 // move: the files that travelled, the sidecar, the folders they leave empty and
@@ -1058,7 +1002,7 @@ func Finish(cfg *config.Config, st *store.Store, slug string, land Landing) (*Ma
 				src, dst := filepath.Join(staging, "review", e.Name()), filepath.Join(rdir, e.Name())
 				if e.Name() == "edits.jsonl" && m.Workspace != ws {
 					if b, err := os.ReadFile(src); err == nil {
-						_ = os.WriteFile(dst, rewriteCaptures(b, m.Workspace, ws), 0o644)
+						_ = os.WriteFile(dst, RewriteCaptures(b, m.Workspace, ws), 0o644)
 						continue
 					}
 				}
@@ -1192,12 +1136,12 @@ func installTranscripts(cfg *config.Config, staging string, m *Manifest, ws stri
 	return n, nil
 }
 
-// rewriteCaptures points the review captures (edits.jsonl) at this computer's
-// workspace: they store absolute paths, which provenance matches against the
-// current worktree. Only a "file" that is the old workspace or lies under it
-// (whole path component) changes; any other line, malformed ones included,
-// stays byte for byte.
-func rewriteCaptures(b []byte, from, to string) []byte {
+// RewriteCaptures points the review captures (edits.jsonl) at this computer's
+// workspace, or at the folder a task restored from the trash got: they store
+// absolute paths, which provenance matches against the current worktree. Only
+// a "file" that is the old workspace or lies under it (whole path component)
+// changes; any other line, malformed ones included, stays byte for byte.
+func RewriteCaptures(b []byte, from, to string) []byte {
 	lines := bytes.SplitAfter(b, []byte("\n"))
 	for i, l := range lines {
 		var c struct {

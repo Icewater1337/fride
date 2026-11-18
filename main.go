@@ -92,7 +92,11 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
                                         uncommitted work, decision log, conversation
   task import <file> [--as <id>]        land an exported task here in a fresh workspace;
                                         --as imports it under another id
-  task rm <task> [--force]              remove the workspace
+  task rm <task> [--force] [--no-trash] remove the workspace; a copy (uncommitted work,
+                                        decision log, conversation) stays restorable for
+                                        30 days, unless --no-trash
+  task trash [rm <id>]                  recently deleted tasks; rm drops one for good
+  task restore <id> [--as <new-id>]     bring a deleted task back; --as under another id
 
   stack up [task] [--wait] [--timeout 10m] [--ide <svc,...>] [--force]
                                         start the stack; --wait blocks until ready
@@ -114,6 +118,8 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   usage [task]                          token consumption of the task workspace
   note <kind> "<text>" [--why "..."]    record plan|decision|assumption|issue|note
                         [--source user]  mark an entry as the user's call, not the agent's
+                        [--repo R] [--path P]  the repository (and file) it concerns
+  note followup "<title>" --why "..."   work found but left out of this task, for a new one
   note ls [task]                        show what has been recorded
   rationale [task] [--narrate] [--commit] [--publish]
                                         compose docs/rationale/<task>.md; --publish
@@ -124,6 +130,16 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   review gate [task] [--json]           the change's review tier and its human approvals
                                         (exit 1 while it lacks some); approvals are given
                                         in the Review tab
+
+  quality [ls] [--repo R] [--since 90d|2026-01-31] [--by week|month] [--no-fetch]
+          [--json]                      what became of the tasks' changes after they
+                                        merged: reverted, followed up, incident (fetches
+                                        the bases first; ls lists every change)
+  incident <task|change|#12|commit> --why "…" [--repo R] [--path file]
+                                        record that a merged change caused an incident
+  review eval [--max N] [--json]        replay the AI review on the eval set: would it
+                                        have caught them? Spends model calls
+  review eval cases|runs [--json]       the eval set; past runs, for the trend
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
@@ -252,6 +268,10 @@ func main() {
 		cmdRationale(cfg, st, os.Args[2:])
 	case "idea":
 		cmdIdea(cfg, st, os.Args[2:])
+	case "quality":
+		cmdQuality(cfg, st, os.Args[2:])
+	case "incident":
+		cmdIncident(cfg, os.Args[2:])
 	case "review":
 		cmdReview(cfg, st, os.Args[2:])
 	case "repos":
@@ -858,17 +878,27 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 			fmt.Printf("%s is back on the board\n", t.Slug)
 		}
 
+	case "restore":
+		cmdTaskRestore(cfg, st, args[1:])
+
+	case "trash":
+		cmdTaskTrash(cfg, args[1:])
+
 	case "rm":
-		if len(args) < 2 {
-			check(fmt.Errorf("usage: fride task rm <task> [--force]"))
+		force, rest := flagBool(args[1:], "--force")
+		noTrash, rest := flagBool(rest, "--no-trash")
+		if len(rest) < 1 {
+			check(fmt.Errorf("usage: fride task rm <task> [--force] [--no-trash]"))
 		}
-		t, err := st.Resolve(args[1])
+		t, err := st.Resolve(rest[0])
 		check(err)
-		force := len(args) > 2 && args[2] == "--force"
 		if stack.LookupK(cfg, t.Slug) > 0 {
 			fmt.Println("stopping the stack first...")
 		}
-		res, err := task.Remove(cfg, st, t.Slug, force, false)
+		res, trashID, err := task.Remove(cfg, st, t.Slug, task.RemoveOptions{Force: force, NoTrash: noTrash})
+		if errors.Is(err, task.ErrNoCopy) {
+			check(fmt.Errorf("%v\n  delete it anyway, without a copy (uncommitted work is then gone for good): fride task rm %s --force --no-trash", err, t.Slug))
+		}
 		kept := 0
 		for _, r := range res {
 			fmt.Printf("  %s: %s\n", r.Repo, r.Detail)
@@ -876,16 +906,22 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 				kept++
 			}
 		}
+		if err != nil && trashID != "" {
+			fmt.Printf("  the uncommitted work of what was removed is in the trash: fride task restore %s --as <new-id>\n", trashID)
+		}
 		// Even --force keeps what it must not discard (commits on a detached
 		// HEAD); forgetting the task then would leave its folder orphaned.
 		if errors.Is(err, task.ErrKept) && !force {
-			check(fmt.Errorf("workspace kept — %d repo(s) still have work (use --force to discard uncommitted work)", kept))
+			check(fmt.Errorf("workspace kept — %d repo(s) still have work (--force removes it anyway; the trash keeps a copy for %d days)", kept, trashDays))
 		}
 		if errors.Is(err, task.ErrKept) {
 			check(fmt.Errorf("workspace kept — %d repo(s) hold what --force does not discard (see above)", kept))
 		}
 		check(err)
 		fmt.Printf("task %s removed\n", t.Slug)
+		if trashID != "" {
+			fmt.Printf("  restorable for %d days: fride task restore %s\n", trashDays, trashID)
+		}
 
 	default:
 		check(fmt.Errorf("unknown task command %q", args[0]))
@@ -1213,7 +1249,8 @@ func cmdUsage(cfg *config.Config, st *store.Store, args []string) {
 // directory, so an agent inside a worktree needs no arguments beyond the text.
 func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 	if len(args) == 0 {
-		check(fmt.Errorf(`usage: fride note <plan|decision|assumption|issue|note> "<text>" [--why "..."] [--repo <name>] [--source user]
+		check(fmt.Errorf(`usage: fride note <plan|decision|assumption|issue|note> "<text>" [--why "..."] [--repo <name>] [--path <file>] [--source user]
+       fride note followup "<title>" --why "..." [--repo <name>] [--path <file>]
        fride note ls [task]`))
 	}
 	if args[0] == "ls" {
@@ -1245,6 +1282,7 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 	source, rest := flagValue(rest, "--source")
 	why, rest := flagValue(rest, "--why")
 	repo, rest := flagValue(rest, "--repo")
+	path, rest := flagValue(rest, "--path")
 	file, rest := flagValue(rest, "--file")
 	text := ""
 	if len(rest) > 0 {
@@ -1269,8 +1307,18 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 	if source != "" {
 		src = source
 	}
+	if path != "" {
+		roots := map[string]string{}
+		for _, r := range t.Repos {
+			roots[r.Name] = cfg.RepoDir(t.Slug, r.Name)
+		}
+		wd, err := os.Getwd()
+		check(err)
+		repo, path, err = journal.ScopePath(roots, wd, repo, path)
+		check(err)
+	}
 	check(journal.Append(cfg, t.Slug, journal.Entry{
-		Kind: kind, Text: text, Why: why, Repo: repo, Source: src,
+		Kind: kind, Text: text, Why: why, Repo: repo, Path: path, Source: src,
 	}))
 	fmt.Printf("recorded %s for %s\n", kind, t.Slug)
 }

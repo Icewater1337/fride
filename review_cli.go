@@ -11,17 +11,13 @@ import (
 	"github.com/Icewater1337/fride/internal/store"
 )
 
-// cmdReview is `fride review gate`: the change's review tier and its human
-// approvals, for whatever merges the work (a script, CI, an agent told to
-// merge its own pull requests). FrIDE does not merge; this is how it tells
+// cmdReviewGate is `fride review gate`: the change's review tier and its
+// human approvals, for whatever merges the work (a script, CI, an agent told
+// to merge its own pull requests). FrIDE does not merge; this is how it tells
 // the one that does. There is no `review approve`: an approval counts only
 // when a person gives it in the Review tab, and a command is what an agent
 // would run.
-func cmdReview(cfg *config.Config, st *store.Store, args []string) {
-	if len(args) == 0 || args[0] != "gate" {
-		check(fmt.Errorf("usage: fride review gate [task] [--json]"))
-	}
-	args = args[1:]
+func cmdReviewGate(cfg *config.Config, st *store.Store, args []string) {
 	asJSON := slices.Contains(args, "--json")
 	args = slices.DeleteFunc(args, func(a string) bool { return a == "--json" })
 	t := resolveTask(cfg, st, args)
