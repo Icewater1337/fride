@@ -399,6 +399,10 @@ type Failure struct {
 	UUID string    `json:"uuid"`
 	Text string    `json:"text"`
 	Time time.Time `json:"time"`
+	// Reset is when the usage limit this error reports lifts, read from its
+	// text (see LimitReset); zero when it is not a usage limit or does not
+	// say. Until then a "continue" only hits the same limit again.
+	Reset time.Time `json:"reset,omitzero"`
 }
 
 // Failed reports the API error the conversation's latest turn ended on, or
@@ -443,7 +447,8 @@ func Failed(k Kind, home, workspaceDir, sessionID string, since time.Time) (*Fai
 			if text == "" {
 				text = "API Error"
 			}
-			last = &Failure{UUID: e.UUID, Text: text, Time: e.Timestamp}
+			last = &Failure{UUID: e.UUID, Text: text, Time: e.Timestamp,
+				Reset: LimitReset(text, e.Timestamp, time.Local)}
 		}
 		return true
 	})

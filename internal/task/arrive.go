@@ -44,8 +44,18 @@ func Landing(cfg *config.Config) move.Landing {
 // not have falls back to its default, and the repositories' setup steps start
 // in the background, as for a new task. It returns notes for the user.
 func Arrived(cfg *config.Config, st *store.Store, m *move.Manifest) []string {
+	repos := make([]string, 0, len(m.Repos))
+	for _, rp := range m.Repos {
+		repos = append(repos, rp.Name)
+	}
+	return arrived(cfg, st, m.Task.Slug, repos)
+}
+
+// arrived is Arrived for a task that is registered here already, by a move or
+// an import, or by a restore from the trash: the profile and the identity
+// were chosen while this computer's configuration may have been another one.
+func arrived(cfg *config.Config, st *store.Store, slug string, repos []string) []string {
 	var notes []string
-	slug := m.Task.Slug
 	if t, err := st.Get(slug); err == nil && t.Profile != "" && cfg.Settings != nil {
 		if _, _, ok := cfg.Settings.Profile(t.Profile); !ok {
 			_, _ = st.Update(slug, func(t *store.Task) error { t.Profile = ""; return nil })
@@ -72,10 +82,6 @@ func Arrived(cfg *config.Config, st *store.Store, m *move.Manifest) []string {
 			}
 			notes = append(notes, note)
 		}
-	}
-	repos := make([]string, 0, len(m.Repos))
-	for _, rp := range m.Repos {
-		repos = append(repos, rp.Name)
 	}
 	stack.SetupAsync(cfg, slug, repos)
 	return notes
