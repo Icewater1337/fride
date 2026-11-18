@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"cmp"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/settings"
 )
 
 // The ledger is a git repository collecting every task's rationale document,
@@ -42,11 +44,56 @@ func PublishOnDone(cfg *config.Config) bool {
 	return l.OnDone == nil || *l.OnDone
 }
 
+// repoConf is a publish repository, the ledger or the ideas repository, with
+// the defaults both share applied.
+type repoConf struct {
+	key                 string // its config.json key, "ledger" or "ideas"
+	what                string // what messages call it
+	remote, branch, dir string
+	options, env        []string
+}
+
+// repoOf reads the publish repository configured under key, whose pages go
+// into dir.
+func repoOf(r settings.PublishRepo, key, what, dir string) (*repoConf, error) {
+	env, err := authorEnv(r.Author, key+".author")
+	if err != nil {
+		return nil, err
+	}
+	return &repoConf{key: key, what: what, remote: r.Remote, branch: cmp.Or(r.Branch, "main"), dir: dir,
+		options: r.PushOptions, env: env}, nil
+}
+
+// commit commits what is staged in dir, as the configured author.
+func (c *repoConf) commit(dir, msg string) error {
+	_, err := run(dir, c.env, "commit", "--quiet", "-m", msg)
+	if err != nil && strings.Contains(err.Error(), "identity unknown") {
+		return fmt.Errorf("git does not know who is committing to the %s — set %s.author in config.json (\"Name <email>\")",
+			c.what, c.key)
+	}
+	return err
+}
+
+// pushTopic pushes HEAD to branch, a branch of its own for a merge or pull
+// request, with the push options filled in. It returns the link to that
+// request the server printed, if any. extra goes right after "push".
+func (c *repoConf) pushTopic(dir, branch, slug, title string, extra ...string) (string, error) {
+	args := append(append([]string{"push"}, extra...), "-u", "origin", "HEAD:"+branch)
+	fill := strings.NewReplacer("{{task}}", slug, "{{title}}", title, "{{branch}}", branch, "{{target}}", c.branch)
+	for _, o := range c.options {
+		args = append(args, "-o", fill.Replace(o))
+	}
+	out, err := run(dir, nil, args...)
+	if err != nil {
+		return "", err
+	}
+	return linkRe.FindString(out), nil
+}
+
 type ledgerConf struct {
-	remote, branch, dir, push string
-	options                   []string
-	wait                      time.Duration
-	env                       []string
+	*repoConf
+	push string
+	wait time.Duration
 }
 
 func ledgerOf(cfg *config.Config) (*ledgerConf, error) {
@@ -54,23 +101,12 @@ func ledgerOf(cfg *config.Config) (*ledgerConf, error) {
 		return nil, ErrNoLedger
 	}
 	l := cfg.Settings.Ledger
-	c := &ledgerConf{remote: l.Remote, branch: l.Branch, dir: l.Dir, push: l.Push,
-		options: l.PushOptions, wait: time.Duration(l.WaitForMerge) * time.Second}
-	if c.branch == "" {
-		c.branch = "main"
-	}
-	if c.dir == "" {
-		c.dir = "rationale"
-	}
-	if c.push == "" {
-		c.push = "branch"
-	}
-	env, err := authorEnv(l.Author, "ledger.author")
+	r, err := repoOf(l.PublishRepo, "ledger", "ledger", cmp.Or(l.Dir, "rationale"))
 	if err != nil {
 		return nil, err
 	}
-	c.env = env
-	return c, nil
+	return &ledgerConf{repoConf: r, push: cmp.Or(l.Push, "branch"),
+		wait: time.Duration(l.WaitForMerge) * time.Second}, nil
 }
 
 var authorParts = regexp.MustCompile(`^([^<>]+)<([^<>\s]+@[^<>\s]+)>$`)
@@ -309,17 +345,8 @@ func Publish(cfg *config.Config, slug string, opt Options) (*Published, error) {
 	}
 
 	p.Branch = topic
-	args := []string{"push", "--force-with-lease", "-u", "origin", "HEAD:" + topic}
-	fill := strings.NewReplacer("{{task}}", slug, "{{title}}", title(opt, slug), "{{branch}}", topic, "{{target}}", c.branch)
-	for _, o := range c.options {
-		args = append(args, "-o", fill.Replace(o))
-	}
-	out, err := run(dir, nil, args...)
-	if err != nil {
+	if p.Link, err = c.pushTopic(dir, topic, slug, title(opt, slug), "--force-with-lease"); err != nil {
 		return nil, err
-	}
-	if m := linkRe.FindString(out); m != "" {
-		p.Link = m
 	}
 	if c.wait <= 0 {
 		return p, nil
@@ -391,13 +418,7 @@ func record(dir string, c *ledgerConf, rel, doc, slug, name, topic string) (stri
 	if _, err := run(dir, nil, "diff", "--cached", "--quiet"); err == nil {
 		return unchanged, nil
 	}
-	if _, err := run(dir, c.env, "commit", "--quiet", "-m", "docs: record design rationale for "+slug); err != nil {
-		if strings.Contains(err.Error(), "identity unknown") {
-			return "", fmt.Errorf("git does not know who is committing to the ledger — set ledger.author in config.json (\"Name <email>\")")
-		}
-		return "", err
-	}
-	return "", nil
+	return "", c.commit(dir, "docs: record design rationale for "+slug)
 }
 
 // CheckRemote reports whether a publishing repository (the ledger, the ideas
