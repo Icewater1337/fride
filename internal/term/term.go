@@ -384,21 +384,20 @@ func (m *Manager) watchIdle() {
 }
 
 // Attention reports whether any agent session of a task is waiting for input.
-func (m *Manager) Attention(task string) bool {
+func (m *Manager) Attention(task string) bool { return m.Waiting(task) > 0 }
+
+// Waiting counts a task's sessions waiting for input: each one has said
+// something the user has not answered yet, which is what the UI shows as unread.
+func (m *Manager) Waiting(task string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	n := 0
 	for _, s := range m.sessions {
-		if s.Task != task {
-			continue
-		}
-		s.mu.Lock()
-		a := s.Attention && !s.closed
-		s.mu.Unlock()
-		if a {
-			return true
+		if s.Task == task && s.Waiting() {
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // Start launches a command under a PTY in dir.
