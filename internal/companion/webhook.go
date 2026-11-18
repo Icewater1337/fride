@@ -46,6 +46,26 @@ type Event struct {
 	Branch        string    `json:"branch,omitempty"`
 	RationalePath string    `json:"rationale_path,omitempty"`
 	TS            time.Time `json:"ts"`
+	// Followups, on done only, is the work the thread's tasks found but left
+	// out, for the companion to turn into new tickets; absent when none.
+	Followups []Followup `json:"followups,omitempty"`
+}
+
+// Followup is one piece of work an agent found but did not do: a journal
+// entry of kind followup (`fride note followup`). It names its task, since a
+// thread can span several, and its place, so that a ticket filed from it
+// stands on its own once the workspace is gone.
+type Followup struct {
+	TaskID string `json:"task_id"`
+	Title  string `json:"title"`
+	Why    string `json:"why"`
+	// Repo and Path say where, when the agent said: a repository of the task,
+	// and a path relative to its root.
+	Repo string `json:"repo,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Source is who recorded it: "agent", "user", or another label.
+	Source string    `json:"source,omitempty"`
+	TS     time.Time `json:"ts"`
 }
 
 // Sender delivers events to the companion's webhook, one at a time and in

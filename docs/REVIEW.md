@@ -137,7 +137,8 @@ tabs. Its badge counts the files not yet viewed.
    - very large files (read them line by line);
    - files the agent edited many times (it struggled there);
    - the agent's own **assumptions** and **issues** from the decision log,
-     which are its "what to watch" notes;
+     which are its "what to watch" notes, and its **follow-ups**: work it
+     found but deliberately left out ("Left out: …");
    - evidence gaps: no test command ran after the last edit, or the last one
      failed.
 4. **Evidence**: the test, build, lint and type-check commands the agent ran

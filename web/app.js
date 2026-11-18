@@ -465,6 +465,14 @@ function card(t) {
     meta.appendChild(n);
   }
   for (const r of (t.repos || [])) meta.appendChild(el('span', 'pill', r.name));
+  // Work the agent found but left for another task: on the card, so it is
+  // still in sight when the task is closed. The list is in the Rationale panel.
+  if (t.followups) {
+    const f = el('span', 'pill followups', `${t.followups} follow-up${t.followups === 1 ? '' : 's'}`);
+    f.title = 'Work the agent found but left out of this task, for tasks of their own. '
+      + 'Open the task: they are listed in the Rationale panel.';
+    meta.appendChild(f);
+  }
   c.appendChild(meta);
 
   if (t.stack && t.stack.up) {
@@ -3211,7 +3219,9 @@ $('#inbox-close').addEventListener('click', async () => {
 // recorded after the fact is a reconstruction, and this card cannot tell the
 // two apart. So this is a reader — filter to a kind, open one entry, or open
 // the whole document.
-const JR_KINDS = ['plan', 'decision', 'assumption', 'issue', 'note'];
+const JR_KINDS = ['plan', 'decision', 'assumption', 'issue', 'followup', 'note'];
+// The filter's plural, where adding an "s" to the kind reads wrong.
+const JR_LABELS = { followup: 'Follow-ups' };
 
 async function loadJournal(p = pin()) {
   const host = $('#jr-list'), sel = $('#jr-filter');
@@ -3229,7 +3239,7 @@ async function loadJournal(p = pin()) {
   sel.appendChild(new Option(`All entries (${state.journal.length})`, 'all'));
   for (const k of JR_KINDS) {
     if (!counts[k]) continue;
-    sel.appendChild(new Option(`${k[0].toUpperCase() + k.slice(1)}s (${counts[k]})`, k));
+    sel.appendChild(new Option(`${JR_LABELS[k] || k[0].toUpperCase() + k.slice(1) + 's'} (${counts[k]})`, k));
   }
   sel.value = [...sel.options].some(o => o.value === keep) ? keep : 'all';
   renderJournalList();
@@ -3263,7 +3273,7 @@ function openEntry(e) {
   const head = $('#jrpop-head');
   head.innerHTML = '';
   head.appendChild(el('span', 'jrkind ' + e.kind, e.kind));
-  head.appendChild(el('span', 'jrmeta', [when, e.repo, e.source].filter(Boolean).join(' · ')));
+  head.appendChild(el('span', 'jrmeta', [when, e.repo, e.path, e.source].filter(Boolean).join(' · ')));
   $('#jrpop-text').textContent = e.text;
   const why = $('#jrpop-why');
   why.innerHTML = '';

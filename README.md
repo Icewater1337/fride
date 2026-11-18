@@ -74,7 +74,11 @@ checkout. That is how ten tasks can run the same app at once.
 the user's calls (`fride note`). When the task is done, they become a document in
 the task, `docs/rationale/<task>.md`. A *ledger* repository can also collect the
 documents of every task, published through plain git, including GitLab merge
-requests that merge by themselves (see `ledger` in docs/CONFIG.md).
+requests that merge by themselves (see `ledger` in docs/CONFIG.md). Work the
+agent found but left out of the task, such as a second bug or a flaky test, is
+recorded as a *follow-up* (`fride note followup`): the card shows how many, the
+document lists them, and a companion gets them with the task's `done` event
+(docs/COMPANION.md), ready to become new tickets.
 
 **Ideas.** A task that explores an idea rather than implementing a ticket
 keeps a page about it, written by its agent as the work happens, and
@@ -207,6 +211,7 @@ fride infra [status|up|down] [task]       # the containers behind a task
 fride infra down --shared                # stop the containers all tasks share
 
 fride note decision "..." --why "..."     # the decision log the rationale document is built from
+fride note followup "..." --why "..." [--repo R] [--path P]   # work found but left for a new task
 fride rationale [task] [--narrate] [--publish]   # --publish: also push it to the ledger repo
 fride idea ls | idea cat <path> | idea publish [task]   # the ideas repository
 
