@@ -702,13 +702,15 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		}
 		detail := "removed"
 		if branch := strings.TrimPrefix(ref, "refs/heads/"); branch != ref {
-			n, err := countCommits(repo.Main, ref, "--remotes")
+			n, local, err := ownCommits(repo.Main, branch)
 			switch {
 			case err != nil:
 				detail = fmt.Sprintf("removed — KEPT branch %s (its unpushed commits could not be counted: %v)", branch, err)
 			case n == 0:
 				_, _ = git(repo.Main, "branch", "-D", branch)
 				detail = "removed (branch had no unique commits — deleted)"
+			case local:
+				detail = fmt.Sprintf("removed — KEPT branch %s (%d commit(s) on no other branch)", branch, n)
 			default:
 				detail = fmt.Sprintf("removed — KEPT branch %s (%d unpushed commit(s))", branch, n)
 			}
@@ -755,6 +757,27 @@ func Remove(cfg *config.Config, slug string, force bool) ([]RemoveResult, error)
 		_ = os.Remove(ws) // only succeeds when empty, which is what we want
 	}
 	return res, nil
+}
+
+// ownCommits counts the commits of a branch that deleting it would lose: those
+// on no remote-tracking ref. A repository without remote-tracking refs (one
+// with no remote, which DefaultBase supports, or never fetched) has nothing to
+// compare with there, and every commit of the history counted, so a branch
+// was never deleted. There it counts the commits on no other local branch,
+// and local says so.
+func ownCommits(repo, branch string) (n int, local bool, err error) {
+	remotes, err := git(repo, "for-each-ref", "--count=1", "--format=%(refname)", "refs/remotes")
+	if err != nil {
+		return 0, false, err
+	}
+	if remotes != "" {
+		n, err = countCommits(repo, "refs/heads/"+branch, "--remotes")
+		return n, false, err
+	}
+	// --exclude matches what --branches lists, the name without refs/heads/;
+	// a branch name holds no glob characters, which git refuses in a ref.
+	n, err = countCommits(repo, "refs/heads/"+branch, "--exclude="+branch, "--branches")
+	return n, true, err
 }
 
 // countCommits counts the commits reachable from rev and from none of the refs
