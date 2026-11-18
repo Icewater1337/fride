@@ -101,7 +101,11 @@ merge-base to see whether they notice the change. *Tour* orders the files from
 schema to tests, a header chip scores the merge risk, and a change past about
 400 lines offers to split itself into a verified stack of commits on a new
 branch. The *Reviews* view lists every task with something to review, and whose
-turn it is. See [docs/REVIEW.md](docs/REVIEW.md).
+turn it is. Below it, and in `fride quality`, FrIDE follows its tasks' changes
+past the merge: how many per week or month were reverted, needed follow-up
+fixes or caused an incident (`fride incident`). Those, and the AI findings you
+voted on, form an eval set that `fride review eval` replays the AI review
+against. See [docs/REVIEW.md](docs/REVIEW.md).
 
 **Agent review.** *Agent review* in a task's header starts a reviewer in a tab of its
 own, with the agent, model and effort you pick. It finds the merge requests

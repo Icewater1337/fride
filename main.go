@@ -122,6 +122,16 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   idea cat <path>                       read one of them, e.g. ideas/<slug>.md
   idea publish [task]                   push the task's idea page(s) (config: ideas)
 
+  quality [ls] [--repo R] [--since 90d|2026-01-31] [--by week|month] [--no-fetch]
+          [--json]                      what became of the tasks' changes after they
+                                        merged: reverted, followed up, incident (fetches
+                                        the bases first; ls lists every change)
+  incident <task|change|#12|commit> --why "…" [--repo R] [--path file]
+                                        record that a merged change caused an incident
+  review eval [--max N] [--json]        replay the AI review on the eval set: would it
+                                        have caught them? Spends model calls
+  review eval cases|runs [--json]       the eval set; past runs, for the trend
+
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
   orch watch <task>... [--ask]          supervise these; --ask makes it propose
@@ -249,6 +259,12 @@ func main() {
 		cmdRationale(cfg, st, os.Args[2:])
 	case "idea":
 		cmdIdea(cfg, st, os.Args[2:])
+	case "quality":
+		cmdQuality(cfg, st, os.Args[2:])
+	case "incident":
+		cmdIncident(cfg, os.Args[2:])
+	case "review":
+		cmdReview(cfg, st, os.Args[2:])
 	case "repos":
 		cmdRepos(cfg)
 	default:

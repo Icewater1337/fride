@@ -15,6 +15,7 @@ import (
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/gitid"
+	"github.com/Icewater1337/fride/internal/quality"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
@@ -134,6 +135,10 @@ func Remove(cfg *config.Config, st *store.Store, slug string, force, purge bool)
 	if _, err := stack.Down(cfg, slug); err != nil {
 		log.Printf("task %s: stack down during delete: %v", slug, err)
 	}
+	// The quality record outlives the task: its changes, which may merge or
+	// be reverted later, and its review votes, which the review state below
+	// takes along. Read now, while the worktrees are still there.
+	quality.Keep(cfg, st, slug)
 	var res []workspace.RemoveResult
 	var err error
 	if purge {

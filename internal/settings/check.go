@@ -148,6 +148,15 @@ func (s *Settings) Check() []Problem {
 		}
 	}
 
+	if q := s.Quality; q != nil {
+		if q.RefreshHours < 0 || q.EvalHours < 0 || q.EvalMax < 0 || q.FollowUpDays < 0 {
+			add(true, "quality", "hours, days and evalMax cannot be negative")
+		}
+		if q.EvalMax > 50 {
+			add(false, "quality.evalMax", "%d cases per replay is %d model turns", q.EvalMax, 3*q.EvalMax)
+		}
+	}
+
 	out = append(out, s.checkGit()...)
 
 	for i, r := range s.Requirements {
