@@ -466,6 +466,20 @@ main { flex: 1; min-height: 0; display: flex; }
 .pill.up { color: var(--green); border-color: var(--green-line); background: var(--green-soft); }
 .pill.node { border-style: dashed; }
 .pill.node.here { opacity: .75; }
+.pill.followups { color: var(--accent-fg); border-color: var(--accent-line); border-style: dashed; }
+.pill.amber { color: var(--amber); border-color: var(--amber-line); background: var(--amber-soft); }
+
+/* the board's Recently deleted list */
+.trash-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; }
+.trash-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg2);
+}
+.trash-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.trash-name { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.trash-row .meta { display: flex; gap: 5px; flex-wrap: wrap; }
+.trash-row .hint { margin: 0; }
+.trash-row button { flex: none; }
 
 .card .attnrow {
   display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 5px 8px;
@@ -741,6 +755,8 @@ button.chip:hover { color: var(--fg); background: var(--bg3); }
 .jrkind.assumption { color: var(--amber); background: var(--amber-soft); }
 .jrkind.issue { color: var(--red); background: var(--red-soft); }
 .jrkind.plan { color: var(--green); background: var(--green-soft); }
+/* Dashed like the card's follow-up pill: work found, not done here. */
+.jrkind.followup { color: var(--accent-fg); background: transparent; outline: 1px dashed var(--accent-line); outline-offset: -1px; }
 .jrmeta { color: var(--faint); font-size: 11.5px; padding: 2px 6px; }
 .jrmeta:empty { display: none; }
 .jrwhy { color: var(--dim); font-size: 11px; padding-left: 4px; }
@@ -1086,6 +1102,20 @@ button.xs.on { color: var(--accent-fg); background: var(--accent-soft); }
 .rq-row.turn-you .rq-turn { color: var(--accent-fg); background: var(--accent-soft); }
 .rq-row.turn-agent .rq-turn { color: var(--amber); background: var(--amber-soft); }
 .rq-nums { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); flex: none; }
+
+/* ---------------------------------------------------------------- quality after merge (quality.js) */
+
+.qa .tablewrap { margin: 10px 0; }
+.qa-head { display: flex; align-items: center; gap: 10px; margin: 28px 0 10px; }
+.qa-head .sh { flex: 1; margin: 0; }
+.qa-by { height: 28px; font-size: 12.5px; }
+.qa .qa-total td { font-weight: 600; }
+.qa-changes { margin: 12px 0 4px; }
+.qa-changes > summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.qa-ttl { font-weight: 550; }
+.qa-out { display: flex; flex-wrap: wrap; gap: 4px; }
+.qa-form { display: flex; flex-direction: column; gap: 8px; }
+.qa-form textarea, .qa-form input { width: 100%; }
 
 /* ---------------------------------------------------------------- tables */
 

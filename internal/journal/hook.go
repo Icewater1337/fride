@@ -67,8 +67,9 @@ func PreCompact(cfg *config.Config, slugFor func(dir string) string) {
 			"hookEventName": "PreCompact",
 			"additionalContext": "Your conversation is about to be compacted, so anything you have " +
 				"not written down will be lost to you. Before continuing, record any plan changes, " +
-				"decisions taken with their reasons, assumptions you have not verified, and issues " +
-				"worth knowing about, using `fride note <kind> \"...\" --why \"...\"`. " +
+				"decisions taken with their reasons, assumptions you have not verified, issues " +
+				"worth knowing about, and work you found but are leaving out of this task (kind " +
+				"`followup`), using `fride note <kind> \"...\" --why \"...\"`. " +
 				"Include the questions the user settled in this conversation — what was being " +
 				"decided, the option that lost, and the reason they gave — with `--source user`. " +
 				"Record nothing if there is genuinely nothing new.",

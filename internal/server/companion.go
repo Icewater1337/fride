@@ -105,7 +105,35 @@ func (s *Server) companionNote(n orchestrator.Note) {
 			}
 		}
 	}
+	if ev == companion.EventDone {
+		// Every task the thread went to, not only e.TaskID: done means all of
+		// them were closed, and a follow-up of the first is no less work.
+		e.Followups = s.followups(n.Thread.Tasks...)
+	}
 	c.sender.Send(e)
+}
+
+// followups is what the tasks recorded as found but not done, in the
+// companion's shape, task by task. A journal that cannot be read gives what
+// it has: the event is news, and must go out with or without them.
+func (s *Server) followups(slugs ...string) []companion.Followup {
+	var out []companion.Followup
+	seen := map[string]bool{}
+	for _, slug := range slugs {
+		if seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		entries, err := journal.Followups(s.cfg, slug)
+		if err != nil {
+			log.Printf("task %s: reading its follow-ups: %v", slug, err)
+		}
+		for _, e := range entries {
+			out = append(out, companion.Followup{TaskID: slug, Title: e.Text, Why: e.Why,
+				Repo: e.Repo, Path: e.Path, Source: e.Source, TS: e.Time.UTC()})
+		}
+	}
+	return out
 }
 
 func firstBranch(t *store.Task) string {
@@ -375,6 +403,11 @@ func (s *Server) taskSummary(slug string) map[string]any {
 	}
 	if p := s.rationalePath(t); p != "" {
 		out["rationale_path"] = p
+	}
+	// The same list the done event carries, so a companion that polls, or
+	// closes the task itself, sees it too.
+	if f := s.followups(t.Slug); len(f) > 0 {
+		out["followups"] = f
 	}
 	return out
 }

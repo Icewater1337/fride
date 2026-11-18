@@ -8,7 +8,9 @@ change works, and why each hunk exists.
 
 Status: the MVP, phase 2 and phase 3 are implemented: the **Review** tab of a
 task, and the **Reviews** view across tasks. Where the build differs from the
-first proposal, the phase sections below say how and why.
+first proposal, the phase sections below say how and why. What happens to a
+change after it merges, and the eval replay of the AI review, are in
+[Outcomes and evals](#outcomes-and-evals).
 
 ## What FrIDE already has, and why review belongs here
 
@@ -137,7 +139,8 @@ tabs. Its badge counts the files not yet viewed.
    - very large files (read them line by line);
    - files the agent edited many times (it struggled there);
    - the agent's own **assumptions** and **issues** from the decision log,
-     which are its "what to watch" notes;
+     which are its "what to watch" notes, and its **follow-ups**: work it
+     found but deliberately left out ("Left out: …");
    - evidence gaps: no test command ran after the last edit, or the last one
      failed.
 4. **Evidence**: the test, build, lint and type-check commands the agent ran
@@ -464,6 +467,185 @@ independently (`consensus.go`).
 
 `finders: 1` is the pass as it was: one finder with no focus, no vote, every
 cited finding kept for the verifier.
+
+## Outcomes and evals
+
+Reviewing faster is only a gain if what merges holds up. So FrIDE follows the
+changes its tasks made past the merge, and counts how many were reverted,
+needed follow-up fixes, or caused an incident: the check that speed is not just
+moving bugs to later. The changes that went wrong, and the AI findings people
+voted on, become an eval set that the AI review is replayed against, to see
+whether it would have caught them. The code is `internal/quality`.
+
+### What is recorded
+
+A *change* is one repository of one task: its branch, base, merge-base, head,
+its own commits with their patch-ids, and the patch-id of the whole diff. It is
+recorded by every refresh (`fride quality`, **Look again** in the Reviews view,
+or the server's schedule) for every task whose branch has a commit of its own,
+and once more when the task is deleted (`task.Remove`), so a task deleted
+right after Done is still followed. The record lives in
+`$FRIDE_HOME/quality/changes.json`, outside every task's folders: it outlives
+the task, its worktree and its branch, which is the point, since a change is
+mostly reverted after its task is gone. The ledger repository was the other
+candidate. It is optional, and in its default mode every push to it is a merge
+request, which is too heavy for a record that changes on every refresh; the
+files here are plain JSON, so publishing them there later is open.
+
+A refresh fetches each base (`git fetch <remote> <branch>`, with the task's git
+identity), so a merge shows up as soon as the forge made it. Without the
+network, or with a remote that refuses, the refresh says so and works from the
+last fetch. Only git is used, no forge API: it works on any host, offline, and
+without a token.
+
+### The rules
+
+They are heuristics, few and strict, and each finding names the rule that read
+it so (`reverts-commit`, `revert-title`, `reverts-pr`, `mentions-pr`,
+`mentions-commit`, `same-lines`). They would rather miss a follow-up than call
+unrelated work one.
+
+**Merged**, the first that holds:
+
+1. the change's head is on the base: a merge commit (the first commit of the
+   base's own line that descends from it) or a fast-forward;
+2. a commit on the base has the patch-id of the whole change: a squash;
+3. every commit of the change has its patch-id on the base: a rebase;
+4. a merge commit on the base names the branch (`Merge pull request #12 from
+   owner/<branch>`, `Merge branch '<branch>'`), for a change that moved on
+   after it was last seen.
+
+The request number is read from the merge commit's message: `#12` from
+GitHub's merge and squash commits, `!12` from GitLab's "See merge request". A
+rebase merge carries none.
+
+**Reverted**, by a commit on the base after the merge whose message
+
+- says `This reverts commit <sha>` for one of the change's commits (the merge
+  commit, a landed commit, or one of its own);
+- or, with no such line, is `Revert "<subject>"` for one of the change's
+  subjects (a revert request squashed in turn, `Revert "Title (#12)" (#14)`);
+- or says `Reverts #12` (also `owner/repo#12`, `!12`) for its request.
+
+A message that names the commit it reverts is believed over its title:
+`Revert "Update docs"` may well be about another change with the same subject.
+
+**Followed up**, by a later commit that is not a revert, whose message
+
+- says it fixes or follows up the request: `fixes #12`, `follow-up to #12`,
+  `regression from #12`, `broken by #12`, `hotfix for #12`;
+- or says so of one of its commits: `Fixes: <sha>`;
+- or, within `quality.followUpDays` (14) of the merge, is a fix by its subject
+  (`fix…`, `fix(scope): …`, `hotfix…`) and removes or rewrites a line the
+  change added. A line counts when it holds at least 10 letters or digits, so
+  a closing brace touched by both is not a follow-up. A refactor that rewrites
+  a fresh change is normal work and does not count.
+
+A request number counts only in its forge's form: `#12` where the merge commit
+said `#12`, `!12` where it said `!12` (GitLab's `#12` is an issue). A
+reference qualified with another repository does not count. A change is
+watched for 90 days after its merge, then looked at once more and left as it
+is.
+
+**Incident**: only someone who was there can say so. `fride incident
+<task|change id|#12|request URL|commit> --why "…" [--repo R] [--path file]`,
+**Incident…** on a merged change in the Reviews view, or `POST
+/api/quality/incidents`. The path, when known, is where the eval asks for a
+finding.
+
+### The metric
+
+`fride quality [--repo R] [--since 2026-01-31|90d] [--by week|month]` refreshes
+and prints, per period and repository, the changes merged and how many were
+reverted, followed up, caused an incident, and went wrong in any of these ways
+(a change both reverted and followed up is one). `fride quality ls` lists
+every change and what became of it. The Reviews view shows the same under the
+review queue, with the evidence behind each change.
+
+A change counts in the period it merged, however late it is reverted: of what
+merged in March, how much went wrong. The answer for March keeps its meaning as
+it ages; the latest periods are still filling in.
+
+### The eval set
+
+`$FRIDE_HOME/quality/evals.json` holds one case per change and kind, newest
+first under `fride review eval cases`:
+
+```
+{ "cases": [Case] }
+Case   { id, kind (reverted | followup | incident | votes), change, slug, name, repo,
+         base, head,        the diff replayed is base..head, as commits
+         why, added,
+         targets: [{ path, lines: ["trimmed line", …] }],
+         votes:   [{ finding, grade, title, path, quote, vote (up | down) }] }
+```
+
+- *reverted* and *followup*: the targets are the change's own added lines that
+  the revert or fix removed or rewrote, by file; a fix that only added lines
+  targets the change's files it touched. They are derived from the record and
+  rebuilt on every gather.
+- *incident*: the file the incident named, else no target.
+- *votes*: the findings of a task's last AI pass that someone voted helpful or
+  not, with the version the pass read. They are gathered from every task's
+  `ai.json` on each refresh and before the task is deleted, and kept for good.
+  A vote on uncommitted work cannot be replayed; the result counts it apart.
+
+### Replay
+
+`fride review eval [--max N]` replays the cases replayed longest ago (never
+first), up to the cap: the case's head is checked out in a scratch worktree
+(removed afterwards whatever happens), laid out as a workspace, read like the
+Review tab reads a task (`review.Build`) and given to the AI pass's three turns
+through `review.ReplayAI`. Nothing is stored in any task's review.
+
+- A *reverted*, *followup* or *incident* case is **caught** when a red or
+  yellow finding sits on a hunk holding one of its target lines, or anywhere
+  in a target file named without lines; with no target, any red or yellow
+  finding counts, and the result says so. Gray findings are minor by the
+  reviewer's own grading and never catch.
+- A *votes* case is **scored**: of the voted findings, how many the replay
+  raises again (same file, same quoted line), helpful and unhelpful apart.
+  *Precision on votes* is helpful raised again over all voted ones raised
+  again.
+
+Each run is one line of `$FRIDE_HOME/quality/eval-runs.jsonl`:
+
+```
+Run        { started, finished, cases: [CaseResult], left, caught, missed, errors,
+             upKept, upTotal, downRepeated, downTotal }
+CaseResult { case, kind, slug, repo, state (caught | missed | scored | error),
+             detail, findings, hits, upKept, upTotal, downRepeated, downTotal, unasked }
+```
+
+`fride review eval runs` and the Reviews view show the trend: caught share and
+precision per run. A replay spends three model turns per case, so it runs only
+when asked (`fride review eval`, **Replay** in the Reviews view) or on the
+schedule `quality.evalHours` sets (see CONFIG.md), at most `quality.evalMax`
+(5) cases per run, and one at a time across processes. Ctrl-C stops the case
+in flight and keeps what ran.
+
+API, local and on the fleet listener alike (it is this computer's record):
+
+```
+GET  /api/quality?repo=&since=&by=   the metric, the changes, the eval set by kind, the last 20 runs
+POST /api/quality/refresh            fetch the bases and look again
+POST /api/quality/incidents          {target, repo?, path?, why}
+POST /api/quality/evals              {max?}: replay in the background (202; 409 while one runs)
+```
+
+### Limits
+
+- A squash whose diff git cannot match by patch-id is not seen merged: the
+  base changed the lines right around it in between, or the request got
+  commits after FrIDE last saw the branch and the task was deleted. A squash
+  commit names neither the branch nor the change, so only a forge API would
+  close that gap; a forge lookup of the request by branch is where it belongs.
+  A rebase merge likewise carries no request number, so `fixes #12` cannot be
+  tied to it (`Fixes: <sha>` and the same-lines rule still can).
+- A branch that goes on after its first request merged is followed as the one
+  change it was when it merged; the later commits are not a second change.
+- A partial revert counts as a revert.
+- Commits after a change's merge are read up to 5,000 per look.
 
 ## Effort
 

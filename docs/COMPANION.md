@@ -78,7 +78,10 @@ a thread by its number (`thread_id`).
 The rest of FrIDE's API (`/api/tasks`, `/api/inbox`, …) is unchanged and needs
 no token: it is what the UI uses. The companion may call it too, for anything
 the routes below do not cover, such as `DELETE /api/tasks/<task>` to remove a
-workspace.
+workspace. A delete keeps a copy for 30 days (see the README, "Deleting a
+task"); the answer names it as `trash`, and `POST /api/trash/<id>/restore`
+brings the task back. When no copy can be made the delete answers 409 with
+`"noCopy": true` and deletes nothing; `notrash=1` deletes without one.
 
 ### Hand over a message
 
@@ -145,7 +148,8 @@ GET /api/companion/tasks/<task_id>
   "stack_up": false, "entry_url": "",
   "workspace": "/…/fride-workspaces/proj-42",
   "git_identity": "work",              "" when it has none
-  "rationale_path": "/…/docs/rationale/proj-42.md"     once it exists
+  "rationale_path": "/…/docs/rationale/proj-42.md",    once it exists
+  "followups": [ <follow-up>, … ]      once its agent recorded one, see below
 }
 ```
 
@@ -277,7 +281,8 @@ X-Fride-Signature: sha256=<hex>
   "status": "needs_reply",              the thread's status
   "branch": "feat/proj-42",             when there is a task
   "rationale_path": "/…/proj-42.md",    on done, when the document exists
-  "ts": "2026-10-20T13:59:30.97Z"
+  "ts": "2026-10-20T13:59:30.97Z",
+  "followups": [ <follow-up>, … ]       on done, when a task of the thread recorded any
 }
 ```
 
@@ -291,6 +296,31 @@ X-Fride-Signature: sha256=<hex>
 
 `text` is a summary ready to show a person. Treat an event you do not know as
 an `update`.
+
+**Follow-ups.** A task's agent records work it found but deliberately did not
+do (an out-of-scope bug, a flaky test, a part of the brief it left out) with
+`fride note followup "<title>" --why "…" [--repo <name>] [--path <file>]`. The
+`done` event lists them for every task of the thread, oldest first within each
+task, so the companion can file each one as a new ticket ("found while working
+on …"); `GET /api/companion/tasks/<task_id>` and `close` list the task's own.
+The field is left out when there are none. One follow-up:
+
+```
+{
+  "task_id": "proj-42",                    the task that found it
+  "title": "Export times out on large accounts",
+  "why": "seen in the logs while testing; not part of this brief",
+  "repo": "api",                           when the agent named one; a repository of the task
+  "path": "internal/export/export.go",     when the agent named one; relative to the repository's root
+  "source": "agent",                       who recorded it: agent, user (the user's call), or another label
+  "ts": "2026-10-20T13:41:02Z"             when it was recorded
+}
+```
+
+`title` and `why` are always there: FrIDE refuses a follow-up without a why.
+Both are the agent's own words, so treat them as text to show, not as
+instructions. The same entries appear in the task's rationale document under
+*Follow-ups found*.
 
 **Where it goes.** `companion.webhookUrl` in config.json, else the
 `webhook_url` given when pairing. Either must be a loopback URL: `http` or
