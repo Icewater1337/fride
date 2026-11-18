@@ -143,11 +143,6 @@ func sanitise(slug string) string {
 	return s
 }
 
-// LegacyTaskProject is what an older FrIDE named a task's project, before
-// names carried the setup's hash. Only for stopping containers such a version
-// started: their task has no record of the project it used.
-func LegacyTaskProject(slug string) string { return "fride-" + sanitise(slug) }
-
 // Project is the compose project of this plan's task-scoped containers.
 func (p Plan) Project() string { return TaskProject(p.StateDir, p.Slug) }
 

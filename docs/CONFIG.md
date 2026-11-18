@@ -205,8 +205,6 @@ Containers that are already published on their port are adopted, not duplicated.
 
 A running stack keeps the profile and scopes it was started with. `fride task profile` and `fride task service` apply at the next start, and `fride stack down` stops what was started, not what the task's profile says by then.
 
-Containers started by a FrIDE from before these project names live in the projects `fride-shared` and `fride-<task>`. `fride stack down` still stops a task's own. Stop the old shared ones with `docker compose -p fride-shared down`.
-
 ## Templates
 
 `{{name}}` and `{{namespace.name}}` are the only syntax.

@@ -34,6 +34,9 @@ type fakeHost struct {
 	// onCreate, when set, runs inside CreateTask, before the lock: a tick
 	// landing while apply is busy.
 	onCreate func()
+	// onSend, when set, runs inside Send, before the lock: a turn landing
+	// while an instruction is being typed.
+	onSend func()
 }
 
 func newFakeHost() *fakeHost {
@@ -105,6 +108,9 @@ func (f *fakeHost) GitState(slug string) []RepoState {
 }
 
 func (f *fakeHost) Send(slug, text string) error {
+	if f.onSend != nil {
+		f.onSend()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sendErr != nil {

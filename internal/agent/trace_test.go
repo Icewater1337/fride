@@ -72,6 +72,57 @@ func TestClaudeTrace(t *testing.T) {
 	}
 }
 
+// Task subagents write their own transcripts under <session>/subagents. What
+// they edit and run is evidence like the session's own: a test run there is a
+// test run, and an edit there comes after the main agent's last one (#160).
+func TestClaudeTraceReadsSubagentTranscripts(t *testing.T) {
+	home := t.TempDir()
+	ws := filepath.Join(t.TempDir(), "task")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := ClaudeProjectDir(home, ws)
+	sub := filepath.Join(dir, "s1", "subagents")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	session := `{"type":"user","uuid":"u1","sessionId":"s1","cwd":"%WS%","timestamp":"2026-01-01T10:00:00Z","message":{"role":"user","content":"Fix the server"}}
+{"type":"assistant","uuid":"a1","sessionId":"s1","cwd":"%WS%","timestamp":"2026-01-01T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Task","input":{"prompt":"Fix it and run the tests"}}]}}
+`
+	agentX := `{"type":"user","uuid":"x1","sessionId":"s1","isSidechain":true,"agentId":"x","cwd":"%WS%","timestamp":"2026-01-01T10:01:00Z","message":{"role":"user","content":"Fix it and run the tests"}}
+{"type":"assistant","uuid":"x2","sessionId":"s1","isSidechain":true,"agentId":"x","cwd":"%WS%","timestamp":"2026-01-01T10:01:05Z","message":{"role":"assistant","content":[{"type":"text","text":"Adding the check."},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"%WS%/api/server.go","old_string":"listen()","new_string":"ready()\n\tlisten()"}}]}}
+{"type":"user","uuid":"x3","sessionId":"s1","isSidechain":true,"agentId":"x","cwd":"%WS%","timestamp":"2026-01-01T10:01:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}
+{"type":"assistant","uuid":"x4","sessionId":"s1","isSidechain":true,"agentId":"x","cwd":"%WS%","timestamp":"2026-01-01T10:01:10Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"go test ./..."}}]}}
+{"type":"user","uuid":"x5","sessionId":"s1","isSidechain":true,"agentId":"x","cwd":"%WS%","timestamp":"2026-01-01T10:01:20Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"ok","is_error":false}]}}
+`
+	for path, body := range map[string]string{
+		filepath.Join(dir, "s1.jsonl"):      session,
+		filepath.Join(sub, "agent-x.jsonl"): agentX,
+	} {
+		if err := os.WriteFile(path, []byte(strings.ReplaceAll(body, "%WS%", ws)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tr := ClaudeTrace(home, ws)
+	if tr.Sessions != 1 {
+		t.Errorf("sessions = %d, want 1: a subagent's transcript is part of its session", tr.Sessions)
+	}
+	if len(tr.Edits) != 1 || !tr.Edits[0].Sidechain || tr.Edits[0].Prompt != "Fix it and run the tests" ||
+		tr.Edits[0].Intent != "Adding the check." {
+		t.Errorf("the subagent's edit, with its own prompt and intent: %+v", tr.Edits)
+	}
+	if len(tr.Commands) != 1 || tr.Commands[0].Kind != "test" || !tr.Commands[0].Done || !tr.Commands[0].OK {
+		t.Errorf("the subagent's test run: %+v", tr.Commands)
+	}
+
+	// A move still takes only the conversations: it installs each at the top
+	// of its project folder, where a subagent's would pass for one.
+	if got := ClaudeTranscripts(home, ws); len(got) != 1 || got[0].Path != filepath.Join(dir, "s1.jsonl") {
+		t.Errorf("ClaudeTranscripts = %+v, want the session's own transcript", got)
+	}
+}
+
 func TestCommandKind(t *testing.T) {
 	for cmd, want := range map[string]string{
 		"go test ./...":                  "test",

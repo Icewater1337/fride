@@ -182,17 +182,13 @@ func (r *record) addProject(project string) {
 	}
 }
 
-// taskProjects are the compose projects holding the task's own containers. A
-// task without a record but with a compose override was started by an older
-// FrIDE, under that version's project name.
-func taskProjects(cfg *config.Config, slug string, r *record) []string {
-	if r != nil {
-		return r.Projects
+// projects are the compose projects holding the task's own containers; none
+// without a record. Up records a project before it starts anything in it.
+func (r *record) projects() []string {
+	if r == nil {
+		return nil
 	}
-	if _, err := os.Stat(overridePath(cfg, slug)); err == nil {
-		return []string{infra.LegacyTaskProject(slug)}
-	}
-	return nil
+	return r.Projects
 }
 
 func overridePath(cfg *config.Config, slug string) string {

@@ -76,12 +76,12 @@ type cachedTrace struct {
 	cmds  []Command
 }
 
-// ClaudeTrace reads every Claude Code transcript recorded in a workspace and
-// returns its edits and commands, oldest first. Other agents' transcripts are
-// not parsed: see Tailable.
+// ClaudeTrace reads every Claude Code transcript recorded in a workspace, its
+// subagents' included, and returns its edits and commands, oldest first. Other
+// agents' transcripts are not parsed: see Tailable.
 func ClaudeTrace(home, workspaceDir string) Trace {
 	tr := Trace{Edits: []Edit{}, Commands: []Command{}}
-	for _, t := range ClaudeTranscripts(home, workspaceDir) {
+	for _, t := range claudeTranscripts(home, workspaceDir, true) {
 		fi, err := os.Stat(t.Path)
 		if err != nil {
 			continue
@@ -99,7 +99,9 @@ func ClaudeTrace(home, workspaceDir string) Trace {
 			traceCache.m[t.Path] = c
 			traceCache.Unlock()
 		}
-		tr.Sessions++
+		if !t.Subagent {
+			tr.Sessions++ // a subagent's work is part of its session's
+		}
 		tr.Edits = append(tr.Edits, c.edits...)
 		tr.Commands = append(tr.Commands, c.cmds...)
 	}
