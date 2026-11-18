@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/forge"
 )
 
 // RepoInfo is one repository the orchestrator may enrol in a new task.
@@ -108,6 +109,9 @@ type RepoState struct {
 	Behind   int    `json:"behind,omitempty"`
 	// Changes are its uncommitted files, as `git status --short` lines.
 	Changes []string `json:"changes,omitempty"`
+	// PR is its branch's pull request as the forge last described it: CI,
+	// conflicts, reviews. Nil when it has none, or none is known.
+	PR *forge.PR `json:"pr,omitempty"`
 }
 
 // Detail is the expensive half of looking at a task: several git commands per
@@ -218,6 +222,11 @@ type Host interface {
 	// commit, upstream, uncommitted files. Read-only, and the part of Detail
 	// a turn without observations is given too.
 	GitState(slug string) []RepoState
+	// PullRequests are the task's pull requests whose news is to be typed
+	// into its agent (prfeedback.go), one per repository that has one, as
+	// last looked up: cheap, it is called on every tick. Empty when there are
+	// none, or when FrIDE is not to tell agents about them.
+	PullRequests(slug string) []forge.PR
 	// Notify tells whoever sent an inbox message that its thread has news.
 	// What that means — a command, nothing at all — is the host's to decide.
 	Notify(Note) error

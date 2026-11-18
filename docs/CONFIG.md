@@ -132,6 +132,7 @@ backend's compose file.
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
 | `review` | `{ "maxRounds": 3, "finders": 3, "agree": 2 }`: the cap on a task's review rounds, and how many finders the AI pass runs and must agree. See [review](#review). |
 | `quality` | How often `fride serve` updates the quality record and replays the AI review's eval set. See [quality](#quality). |
+| `pullRequests` | `{ "watch": true, "feedback": true }`: follow the pull requests of task branches, and tell agents what is wrong with theirs. On unless turned off. See [pullRequests](#pullrequests). |
 
 ## repos.&lt;name&gt;
 
@@ -468,6 +469,82 @@ server, a crontab does the same; its `PATH` has to reach both `fride` and
 PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 0 7 * * * fride quality >/dev/null && fride review eval --max 5
 ```
+
+## pullRequests
+
+Once a task's branch has a pull request (a merge request, on GitLab), FrIDE
+follows it: its state, its CI, whether it conflicts with its base, and the
+reviews and review threads still open. Each card on the board shows its
+task's pull requests, coloured by what they need; a task whose pull requests
+have all merged (and none is open) is shown under Done, until you drop it
+there to close it. The orchestrator's prompt carries the same facts.
+
+For a task the orchestrator supervises, or an inbox thread follows, FrIDE
+also types what is wrong into the task's agent, without a model call:
+
+- **CI failed**, once every check of the head commit has finished: each
+  failed check with its link and the last 20 lines of its log (GitHub
+  Actions and GitLab CI; terminal escapes stripped; for GitHub, the lines
+  up to the step's error rather than the runner's cleanup after it);
+- **changes requested**, one message per review;
+- **an unresolved review thread**, one message per thread, with its
+  comments; again when a reviewer answers in it, not when the pull
+  request's author does;
+- **a merge conflict** with the base ("rebase onto it"), but not for a pull
+  request stacked on another open one, whose conflicts its parent's merge
+  settles.
+
+Reviews and review comments are passed on only from people who can push to
+the repository, and from the pull request's own author (the account the task
+pushes as). On a public repository anyone can review a pull request, and the
+agent has a shell: a stranger's review must not become an instruction. On
+GitHub that is the author's role as GitHub states it on each review and
+comment: `OWNER`, `MEMBER` or `COLLABORATOR`. On GitLab a note carries no
+role, so the author's project membership is looked up (`Developer` or
+above, inherited membership included) and kept for ten minutes. A role that
+is missing, or a lookup that fails, counts as no access. A thread is passed
+on with its trusted comments only, and not at all when it has none; the
+threads following the task are told once per author that something from
+them was not passed on. What is passed on is introduced as the reviewer's
+words about the change, not as instructions beyond it.
+
+Each is a message of its own, typed only while the agent sits at its prompt
+(not working, not on a dialog, not just told something, no instruction held
+for it), one per look; the next waits until it is back at its prompt. Each
+is told once, and one condition at most 3 times (three failing commits in a
+row, three rounds on one thread): then the threads following the task are
+told FrIDE has stopped, instead. CI that passes, and a pull request that is
+mergeable again, start over. Whoever follows the task hears of every
+message typed. What was told is kept in the orchestrator's state, so a
+restart repeats nothing.
+
+```json
+"pullRequests": { "watch": true, "feedback": false }
+```
+
+| field | meaning |
+|---|---|
+| `watch` | Look the pull requests up and show them. Default `true`. `false` turns all of this off. |
+| `feedback` | Type what is wrong into the agents. Default `true`; nothing is typed while `watch` is off. |
+
+FrIDE asks through `gh` (GitHub) and `glab` (GitLab), run in the task's
+worktree with the task's [git identity](GIT.md), so it asks as the account
+the agent pushes as; a task without one uses the tools' own login. Which
+tool is told by the host of the worktree's `origin`, as identities are
+chosen: the identity for that host names it, else `github.com` is GitHub and
+`gitlab.com` or a `gitlab.*` host is GitLab. Only branches that have been
+pushed are asked about. An open pull request is looked up every 45 seconds,
+its review threads every 2 minutes, a pushed branch without one every 2
+minutes, a merged one every 10; a failing lookup waits longer each time.
+Without the tool, without a login, or on any other host, nothing is shown
+and nothing typed; a failure is logged once, not on every round.
+
+The token the tool uses needs to read, besides the repository:
+
+| | |
+|---|---|
+| GitHub, fine-grained token or app | **Pull requests: read** (the pull request, reviews, review threads), **Checks: read** and **Commit statuses: read** (CI), **Actions: read** (job logs). A classic token needs `repo`. |
+| GitLab | `read_api` (or `api`), as a member who can see the project's pipelines, job logs and members. Without the members, no GitLab review comment is passed on. |
 
 ## requirements
 

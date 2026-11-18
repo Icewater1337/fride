@@ -47,6 +47,12 @@ fride git token rm work
 No log, API answer, task record, command line or URL carries a token. The UI
 and the API only say whether one is set.
 
+FrIDE also reads a task's pull request with the task's identity, to show its
+CI and reviews and tell the agent what is wrong with it. For that the token
+needs read access to pull requests, checks, commit statuses and Actions
+(GitHub), or `read_api` (GitLab). See
+[pullRequests](CONFIG.md#pullrequests).
+
 ## Which identity a task gets
 
 When a task is created, the identity can be chosen: the **Git identity**
