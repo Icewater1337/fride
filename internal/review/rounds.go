@@ -140,13 +140,22 @@ func admit(cfg *config.Config, slug string, rs *roundsState, at map[string]Ancho
 	if capped(n, isNew, max) {
 		if !force {
 			escalate(cfg, slug, rs, n-1, max)
-			return n, isNew, fmt.Errorf("%w: %d of %d rounds are done and the change moved on again. "+
-				"Rethink the approach before another round; only the owner can start round %d", ErrRoundCap, n-1, max, n)
+			return n, isNew, fmt.Errorf("%w: %s and the change moved on again. "+
+				"Rethink the approach before another round; only the owner can start round %d", ErrRoundCap, doneOf(n-1, max), n)
 		}
 		settle(cfg, slug, rs, n)
 	}
 	rs.record(n, at, by, capped(n, isNew, max))
 	return n, isNew, nil
+}
+
+// doneOf says how many rounds are done against the cap; past it once the
+// owner started rounds by hand.
+func doneOf(done, max int) string {
+	if done > max {
+		return fmt.Sprintf("%d review rounds are done, past the cap of %d", done, max)
+	}
+	return fmt.Sprintf("%d of %d review rounds are done", done, max)
 }
 
 // escalate opens the blocking thread that tells the owner the cap stopped a
@@ -162,10 +171,10 @@ func escalate(cfg *config.Config, slug string, rs *roundsState, done, max int) {
 			}
 		}
 	}
-	text := fmt.Sprintf("Review round cap: %d of %d review rounds are done (review.maxRounds), and the change moved on "+
-		"again. FrIDE starts no further round on its own. A change that still draws findings after %d rounds usually "+
-		"needs a different approach rather than another fix: read the open findings, decide how to go on, and mark "+
-		"this Satisfied. Run anyway in the AI review section starts one more round.", done, max, done)
+	text := fmt.Sprintf("Review round cap (review.maxRounds): %s, and the change moved on again. FrIDE starts no "+
+		"further round on its own. A change that still draws findings after %d rounds usually needs a different "+
+		"approach rather than another fix: read the open findings, decide how to go on, and mark this Satisfied. "+
+		"Run anyway in the AI review section starts one more round.", doneOf(done, max), done)
 	t, err := addThread(cfg, slug, Thread{Blocking: true}, text)
 	if err == nil {
 		rs.Escalation = t.ID

@@ -3,6 +3,7 @@ package review
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,13 +121,21 @@ func TestRoundCapComesFromConfig(t *testing.T) {
 }
 
 // fakeClaudeIn answers like `claude -p --output-format json`, by model, and
-// keeps the last prompt each model was given in <dir>/<model>.in. Answers
-// are read when called, so setAnswer can change them between passes.
+// keeps the last prompt each model was given in <dir>/<model>.in. A finder
+// with a focus answers from <model>-<focus>.json when there is one and keeps
+// its prompt in <model>-<focus>.in. Answers are read when called, so
+// setAnswer can change them between passes.
 func fakeClaudeIn(t *testing.T) (bin, dir string) {
 	t.Helper()
 	dir = t.TempDir()
-	script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --model ]; then model=$2; fi\n  shift\ndone\n" +
-		"cat > " + dir + "/$model.in\ncat " + dir + "/$model.json\n"
+	var cases strings.Builder
+	for _, f := range focuses {
+		fmt.Fprintf(&cases, "      *'Focus: %s.'*) focus=-%s ;;\n", f.name, f.name)
+	}
+	script := "#!/bin/sh\nfocus=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n  --model) model=$2 ;;\n" +
+		"  --system-prompt)\n    case \"$2\" in\n" + cases.String() + "    esac ;;\n  esac\n  shift\ndone\n" +
+		"cat > " + dir + "/$model$focus.in\n" +
+		"if [ -f " + dir + "/$model$focus.json ]; then cat " + dir + "/$model$focus.json; else cat " + dir + "/$model.json; fi\n"
 	bin = filepath.Join(dir, "claude")
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -146,10 +155,12 @@ func finding(grade, title, hunk, quote string) map[string]any {
 	return map[string]any{"grade": grade, "title": title, "detail": "d", "hunk": hunk, "quote": quote}
 }
 
-// aiCfg is a test config with the task's workspace, where the pass runs.
+// aiCfg is a test config with the task's workspace, where the pass runs, and
+// a single finder: the rounds are tested on their own.
 func aiCfg(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := testCfg(t)
+	cfg.Settings = &settings.Settings{Review: &settings.Review{Finders: 1}}
 	if err := os.MkdirAll(cfg.WorkspaceDir("t1"), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -48,6 +48,14 @@ type AI struct {
 	Round   int `json:"round,omitempty"`
 	Read    int `json:"read,omitempty"`
 	Skipped int `json:"skipped,omitempty"`
+	// Finders are the focuses of the finders that answered and Failed of the
+	// ones that did not, Agree how many had to report a problem for it to be
+	// kept, and NoConsensus the problems fewer of them reported. All empty
+	// with a single finder.
+	Finders     []string `json:"finders,omitempty"`
+	Failed      []string `json:"failed,omitempty"`
+	Agree       int      `json:"agree,omitempty"`
+	NoConsensus int      `json:"noConsensus,omitempty"`
 	// Marks are the reviewer's dismissals and votes, by finding id. They are
 	// kept across runs, so a finding raised again stays dismissed.
 	Marks map[string]FindingMark `json:"marks,omitempty"`
@@ -96,6 +104,11 @@ type Finding struct {
 	// moves to where the problem is now and keeps its id, so its marks hold.
 	Round int `json:"round,omitempty"`
 	Again int `json:"again,omitempty"`
+	// Votes is how many finders reported it, of the Of that answered, and
+	// Focuses which; unset with a single finder.
+	Votes   int      `json:"votes,omitempty"`
+	Of      int      `json:"of,omitempty"`
+	Focuses []string `json:"focuses,omitempty"`
 	// Computed when served: the reviewer's mark, and whether the hunk is gone.
 	Dismissed bool   `json:"dismissed,omitempty"`
 	Vote      string `json:"vote,omitempty"`
@@ -236,6 +249,7 @@ func StartAIWith(cfg *config.Config, slug, bin string, c Changes, o AIOptions) e
 		a.State, a.Started, a.Finished, a.Err = "done", now, now, ""
 		a.Groups, a.Findings, a.Anchors = plan.groups, plan.findings, at
 		a.Unverified, a.PreExisting, a.Read, a.Skipped = 0, 0, 0, plan.skipped
+		a.Finders, a.Failed, a.Agree, a.NoConsensus = nil, nil, 0, 0
 		err := save(cfg, slug, aiFile, a)
 		stateMu.Unlock()
 		release(key)
@@ -257,6 +271,7 @@ func StartAIWith(cfg *config.Config, slug, bin string, c Changes, o AIOptions) e
 		return err
 	}
 	opts := PassOptions{Round: n, MaxRounds: maxRounds(cfg)}
+	opts.Finders, opts.Agree = cfg.Settings.ReviewFinders()
 	go func() {
 		defer release(key)
 		ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
@@ -283,6 +298,7 @@ func StartAIWith(cfg *config.Config, slug, bin string, c Changes, o AIOptions) e
 		} else {
 			a.Groups, a.Findings, a.Unverified, a.PreExisting = res.Groups, res.Findings, res.Unverified, res.PreExisting
 			a.Round, a.Read, a.Skipped = res.Round, res.Read, res.Skipped
+			a.Finders, a.Failed, a.Agree, a.NoConsensus = res.Finders, res.Failed, res.Agree, res.NoConsensus
 			a.Anchors = at
 		}
 		if err := save(cfg, slug, aiFile, a); err != nil {
@@ -301,6 +317,17 @@ type PassOptions struct {
 	Round, MaxRounds int
 	// Earlier is the last stored pass.
 	Earlier AI
+	// Finders is how many finders read the change in parallel, each with its
+	// own focus, and Agree how many of them must report a problem for it to
+	// be kept. Zero is one finder, keeping all it found.
+	Finders, Agree int
+}
+
+// finders is Finders and Agree in range: at least one finder and at most one
+// per focus, and never more agreement asked than there are finders.
+func (o PassOptions) finders() (n, k int) {
+	n = max(1, min(o.Finders, len(focuses)))
+	return n, min(max(1, o.Agree), n)
 }
 
 // ReviewDiff runs one pass over the change c, read in dir, and returns its
@@ -385,6 +412,10 @@ func runPass(ctx context.Context, bin, dir string, p passPlan, o PassOptions) (A
 	out.Groups = append(slices.Clone(p.groups), res.Groups...)
 	out.Findings = foldRepeats(p.findings, res.Findings, o.Round)
 	out.Unverified, out.PreExisting = res.Unverified, res.PreExisting
+	out.Finders, out.Failed, out.NoConsensus = res.Finders, res.Failed, res.NoConsensus
+	if n, k := o.finders(); n > 1 {
+		out.Agree = k
+	}
 	return out, nil
 }
 
@@ -473,6 +504,10 @@ type aiResult struct {
 	Findings    []Finding
 	Unverified  int
 	PreExisting int
+	NoConsensus int
+	// Finders are the focuses of the finders that answered, Failed of the
+	// ones that did not; both empty with a single finder.
+	Finders, Failed []string
 }
 
 // runAI reads hunks: groups them, has them rated and searched for findings,
@@ -505,48 +540,112 @@ func runAI(ctx context.Context, bin, dir string, hunks []hunkRef, o PassOptions,
 		}
 		in.WriteString(render(hs))
 	}
-	var rated struct {
-		Groups []struct {
-			Index        int      `json:"index"`
-			Significance int      `json:"significance"`
-			Criticality  int      `json:"criticality"`
-			Why          string   `json:"why"`
-			Check        []string `json:"check"`
-		} `json:"groups"`
+	// The finders read the same input in parallel, each with its focus, so
+	// N of them take the time of one; the pass's timeout bounds them all.
+	n, k := o.finders()
+	type reply struct {
+		Groups   []rating  `json:"groups"`
 		Findings []Finding `json:"findings"`
 	}
-	if err := ask(ctx, bin, dir, rateModel, rateSystem, rateSchema, in.String(), &rated); err != nil {
-		return res, fmt.Errorf("rating: %w", err)
+	replies, errs := make([]reply, n), make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			errs[i] = ask(ctx, bin, dir, rateModel, focusSystem(i, n), rateSchema, in.String(), &replies[i])
+		})
 	}
-	for _, r := range rated.Groups {
-		if r.Index >= 0 && r.Index < len(res.Groups) {
-			g := &res.Groups[r.Index]
-			g.Significance, g.Criticality = clamp(r.Significance), clamp(r.Criticality)
-			g.Why, g.Check = r.Why, r.Check
+	wg.Wait()
+	var answered []int
+	var firstErr error
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			answered = append(answered, i)
+		case firstErr == nil:
+			firstErr = err
 		}
+		if n > 1 {
+			if err == nil {
+				res.Finders = append(res.Finders, focuses[i].name)
+			} else {
+				res.Failed = append(res.Failed, focuses[i].name)
+			}
+		}
+	}
+	switch {
+	case len(answered) == 0 && n == 1:
+		return res, fmt.Errorf("rating: %w", firstErr)
+	case len(answered) < k:
+		return res, fmt.Errorf("rating: %d of %d finders answered, and %d must agree: %w", len(answered), n, k, firstErr)
+	}
+	for gi := range res.Groups {
+		var rs []rating
+		for _, i := range answered {
+			// A finder that rated a group twice: its last word, as it always was.
+			for _, r := range slices.Backward(replies[i].Groups) {
+				if r.Index == gi {
+					rs = append(rs, r)
+					break
+				}
+			}
+		}
+		if len(rs) == 0 {
+			continue
+		}
+		r := medianRating(rs)
+		g := &res.Groups[gi]
+		g.Significance, g.Criticality = clamp(r.Significance), clamp(r.Criticality)
+		g.Why, g.Check = r.Why, r.Check
 	}
 
 	// A finding has to point at a hunk of this change and quote it exactly,
-	// and the line it quotes has to be one the change touched.
+	// and the line it quotes has to be one the change touched. With several
+	// finders, what they all got wrong is counted once.
+	var votes []vote
+	dropped := map[string]bool{}
+	drop := func(count *int, f Finding) {
+		key := f.Hunk + "\x00" + f.Quote + "\x00" + f.Title
+		if n == 1 || !dropped[key] {
+			*count++
+		}
+		dropped[key] = true
+	}
+	for _, i := range answered {
+		for _, f := range replies[i].Findings {
+			f.Quote = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(f.Quote), "+-"))
+			h, ok := byID[f.Hunk]
+			line, changed := -1, false
+			if ok {
+				line, changed = locate(h, f.Quote)
+			}
+			if line < 0 || (f.Grade != "red" && f.Grade != "yellow" && f.Grade != "gray") {
+				drop(&res.Unverified, f)
+				continue
+			}
+			if !changed {
+				drop(&res.PreExisting, f)
+				continue
+			}
+			f.Repo, f.Path = h.Repo, h.Path
+			f.ID = findingID(f)
+			votes = append(votes, vote{f: f, finder: i, line: line})
+		}
+	}
+
+	// Several finders vote: a problem is kept once k of them report it.
 	var cited []Finding
-	for _, f := range rated.Findings {
-		f.Quote = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(f.Quote), "+-"))
-		h, ok := byID[f.Hunk]
-		changed, found := false, false
-		if ok {
-			changed, found = locate(h, f.Quote)
+	if n == 1 {
+		for _, v := range votes {
+			cited = append(cited, v.f)
 		}
-		if !found || (f.Grade != "red" && f.Grade != "yellow" && f.Grade != "gray") {
-			res.Unverified++
-			continue
+	} else {
+		for _, c := range gather(votes) {
+			if len(c.votes) < k {
+				res.NoConsensus++
+				continue
+			}
+			cited = append(cited, c.agreed(answered))
 		}
-		if !changed {
-			res.PreExisting++
-			continue
-		}
-		f.Repo, f.Path = h.Repo, h.Path
-		f.ID = findingID(f)
-		cited = append(cited, f)
 	}
 	if len(cited) == 0 {
 		return res, nil
@@ -622,22 +721,26 @@ func reconcile(groups []Group, ids []string) []Group {
 	return out
 }
 
-// locate finds the quote in the hunk. found is whether any line holds it;
-// changed whether a line the change added or removed does. A quote found only
-// on a context line is about code the change did not touch: pre-existing.
-func locate(h hunkRef, q string) (changed, found bool) {
+// locate finds the quote in the hunk: the index of the first line that holds
+// it, -1 for none, preferring a line the change added or removed; changed is
+// whether it is one. A quote found only on a context line is about code the
+// change did not touch: pre-existing.
+func locate(h hunkRef, q string) (line int, changed bool) {
+	line = -1
 	if len(q) < 4 {
-		return false, false
+		return line, false
 	}
-	for _, l := range h.Lines {
+	for i, l := range h.Lines {
 		if len(l) > 1 && strings.Contains(l[1:], q) {
-			found = true
 			if l[0] == '+' || l[0] == '-' {
-				return true, true
+				return i, true
+			}
+			if line < 0 {
+				line = i
 			}
 		}
 	}
-	return false, found
+	return line, false
 }
 
 // roundBrief tells the finder which round it is in. From the second round on

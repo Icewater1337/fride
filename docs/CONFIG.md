@@ -130,7 +130,7 @@ backend's compose file.
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
-| `review` | `{ "maxRounds": 3 }`: the cap on a task's review rounds. See [review](#review). |
+| `review` | `{ "maxRounds": 3, "finders": 3, "agree": 2 }`: the cap on a task's review rounds, and how many finders the AI pass runs and must agree. See [review](#review). |
 
 ## repos.&lt;name&gt;
 
@@ -428,12 +428,14 @@ The Review tab's AI pass and the review rounds of a task; see
 [REVIEW.md](REVIEW.md#review-rounds).
 
 ```json
-"review": { "maxRounds": 3 }
+"review": { "maxRounds": 3, "finders": 3, "agree": 2 }
 ```
 
 | field | meaning |
 |---|---|
 | `maxRounds` | The most review→fix rounds of one task. A round is one review of a new version of the change, by the AI pass or the agent reviewer. Past the cap a review of a new version is refused, the owner gets a blocking thread suggesting to rethink the approach, and only they can start another round (*Run anyway*). Default 3; `0` turns the cap off; at most 20. |
+| `finders` | How many finders the AI pass runs in parallel, each with its own focus: correctness, security, tests, resilience, performance, in that order. Default 3, at most 5. Each is a strong model reading the whole change, so the pass costs about one model call per finder more. `1` is a single finder covering everything, with no vote. |
+| `agree` | How many finders must report a problem before it is shown, each finding saying who agreed. Default 2; between 1 and `finders`. `1` shows what any finder found, with the agreement still marked. |
 
 Edits apply from the next reload of config.json.
 

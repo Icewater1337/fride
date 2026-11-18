@@ -200,8 +200,10 @@ Thread   { id, repo, path, hunk, line, quote, blocking, satisfied, outdated,
 AI       { state (running|done|failed), started, finished, err, anchors: {repo: {head, hash}},
            groups: [{title, intent, hunks, significance, criticality, why, check, round}],
            findings: [{id, grade (red|yellow|gray), title, detail, repo, path, hunk,
-                       quote, verdict, round, again, dismissed, vote, stale}],
-           unverified, preExisting, round, read, skipped, stale }
+                       quote, verdict, round, again, votes, of, focuses,
+                       dismissed, vote, stale}],
+           unverified, preExisting, noConsensus, finders, failed, agree,
+           round, read, skipped, stale }
 Round    { n, at, anchors: {repo: {head, hash}}, by: [ai|agent], forced }
 Rounds   { done: [Round], max, next, capped, escalation }
 RevertCheck { repo, state, command, caught, exitCode, output, tests, err, anchor, stale }
@@ -249,7 +251,7 @@ tab's count current. When the change moved on, the review offers a refresh
 
 ## Phase 2: judgement
 
-**AI review pass** (`ai.go`). *Run AI review* in the tab runs three headless
+**AI review pass** (`ai.go`). *Run AI review* in the tab runs headless
 Claude Code turns in the workspace, the way the orchestrator thinks: read-only
 tools (Read, Grep, Glob), `--permission-mode dontAsk`, the prompt on stdin, the
 reply validated against a JSON schema by the CLI, and
@@ -262,11 +264,17 @@ to resume.
    exactly one group.
 2. *opus* rates each group for significance (reading effort, 1–5) and
    criticality (blast radius, 1–5, with a concrete reason), lists what to
-   check, and lists findings graded red, yellow or gray.
-3. Every finding has to name its hunk and quote one of its lines exactly; one
-   that does not is dropped without asking anyone. The rest go to *sonnet*,
-   which has to reproduce each from the code. Only confirmed findings are kept,
-   with the verifier's reason; the tab says how many were left out.
+   check, and lists findings graded red, yellow or gray. Several of these
+   finders run in parallel, each with a focus, and vote: see
+   [Finders that vote](#finders-that-vote).
+3. Every finding has to name its hunk and quote one of its lines exactly, a
+   line the change added or removed; one that does not is dropped without
+   asking anyone. The rest go to *sonnet*, which has to reproduce each from
+   the code. Only confirmed findings are kept, with the verifier's reason; the
+   tab says how many were left out, and why.
+
+From the second review round on the pass reads only what changed since the
+earlier rounds: see [Review rounds](#review-rounds).
 
 The pass is anchored to each repo's head and diff hash. Once either moves it is
 marked stale, and a finding whose hunk is gone is marked on its own (hunk ids
@@ -420,6 +428,42 @@ is about code the change did not touch, and is now dropped and counted as
 the point is a list the reader can trust to be about this change. The
 reviewer skill says the same: a problem in untouched code that the change did
 not cause is out of scope, one line at most.
+
+## Finders that vote
+
+One finder lets through whatever it gets wrong, and a verifier that is shown
+a confident finding tends to agree with it. So the rating step of the AI pass
+runs `review.finders` finders (default 3) in parallel, each told to look
+hardest at one focus (correctness, security, tests, then resilience and
+performance for a fourth and fifth) while it reads the whole change, and a
+problem is kept only when `review.agree` of them (default 2) report it
+independently (`consensus.go`).
+
+- **Same problem** is decided without a model: the same hunk, and the same
+  line of it or quotes of which one contains the other. Deterministic and
+  strict on purpose: a near miss counts as two problems, each of which then
+  needs its own agreement. The other way round, two different problems on
+  the very same line count as one, in the first finder's words. A finder that
+  reports a problem twice has one vote.
+- **The kept finding** has the words of the first finder, in focus order, the
+  median of the finders' grades (the higher of two), and says who agreed:
+  *2 of 3*, *correctness, security*. The group ratings are the median
+  finder's too, reason and checks included, since a reason belongs to the
+  rating it explains.
+- **What is left out is counted**, next to *unverified* and *pre-existing*:
+  problems fewer finders reported (*without agreement*). A quote that several
+  finders made up, or a pre-existing line several of them quoted, counts once.
+- **Verification stays.** What the finders agree on still goes to the
+  verifier, which must reproduce it from the code.
+- **Failures.** A finder that fails is left out, and the tab says so, as long
+  as at least `agree` finders answered; agreement is then counted among those.
+  Fewer, and the pass fails rather than keep findings nobody could second.
+- **Cost.** A pass makes at most 2 + `finders` model calls, the finders at the
+  same time, so N of them take about the time of one; the pass's 15-minute
+  timeout bounds them all, and `finders` is at most 5.
+
+`finders: 1` is the pass as it was: one finder with no focus, no vote, every
+cited finding kept for the verifier.
 
 ## Effort
 
