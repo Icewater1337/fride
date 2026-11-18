@@ -69,6 +69,8 @@ type Settings struct {
 	Companion *Companion `json:"companion,omitempty"`
 	// Git is the git identities a task can be created with (GIT.md).
 	Git *Git `json:"git,omitempty"`
+	// PullRequests is how FrIDE follows the pull requests of task branches.
+	PullRequests *PullRequests `json:"pullRequests,omitempty"`
 
 	mu   sync.Mutex
 	path string
