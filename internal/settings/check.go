@@ -252,7 +252,7 @@ func (s *Settings) checkProfile(pn string, p *Profile, repos map[string]bool) []
 		}
 		tw := "profiles." + pn + w
 		for _, t := range []struct{ field, v string }{
-			{"run", sv.Run}, {"pre", sv.Pre}, {"dir", sv.Dir}, {"url", sv.URL}, {"health", sv.Health},
+			{"run", sv.Run}, {"pre", sv.Pre}, {"stop", sv.Stop}, {"dir", sv.Dir}, {"url", sv.URL}, {"health", sv.Health},
 		} {
 			out = append(out, checkTemplate(tw+"."+t.field, t.v, p, repos, t.field == "dir")...)
 		}

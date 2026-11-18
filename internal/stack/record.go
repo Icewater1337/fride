@@ -46,6 +46,11 @@ type recordedService struct {
 	// what holds the port Down's to kill; a refused service's port belongs to
 	// somebody else.
 	Started bool `json:"started,omitempty"`
+	// Stop is the service's stop command as it was expanded at start, and
+	// Dir where it runs: Down runs what the started stack needs, whatever
+	// the profile says by then.
+	Stop string `json:"stop,omitempty"`
+	Dir  string `json:"dir,omitempty"`
 }
 
 func recordPath(cfg *config.Config, slug string) string {
@@ -75,7 +80,15 @@ func writeRecord(cfg *config.Config, slug string, r *record) error {
 func recordOf(p *Plan) *record {
 	r := &record{K: p.K, Profile: p.ProfileName, Scopes: p.Opts.Scopes, Marked: true}
 	for _, s := range p.Ordered() {
-		r.Services = append(r.Services, recordedService{Name: s.Name, Mode: s.Mode, Port: s.Port})
+		rs := recordedService{Name: s.Name, Mode: s.Mode, Port: s.Port}
+		if s.Mode == ModeSource && s.Spec.Stop != "" {
+			// An unexpandable stop is caught by `config check`; one that still
+			// fails here is left out rather than run half-filled.
+			if stop, err := p.Expand(s.Name, s.Spec.Stop); err == nil {
+				rs.Stop, rs.Dir = stop, s.Dir
+			}
+		}
+		r.Services = append(r.Services, rs)
 	}
 	return r
 }

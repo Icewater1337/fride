@@ -793,3 +793,68 @@ func TestDownStopsAServiceRunInTheIDE(t *testing.T) {
 		t.Errorf("slot %d kept after Down: %v", k, st.Warnings)
 	}
 }
+
+// A service whose launcher started things detached is stopped by its own
+// stop command, expanded for the task's slot, in its directory, before
+// FrIDE signals and reaps.
+func TestDownRunsTheStopCommand(t *testing.T) {
+	needLsof(t)
+	base := freeBase(t)
+	s := &settings.Settings{
+		DefaultProfile: "a",
+		Profiles: map[string]*settings.Profile{"a": {Services: map[string]*settings.Service{
+			"api": {Repo: "backend", Run: "./run", Port: base, Stop: "echo down {{slot}} {{port}} > stopped.txt"},
+		}}},
+	}
+	e := newEnv(t, s, "backend")
+	e.sidecar(t, TaskOpts{Profile: "a"})
+	fakeDocker(t)
+	fakeLauncher(t)
+	if _, err := Up(e.cfg, "t1", UpOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	k := LookupK(e.cfg, "t1")
+	ln := launchOf(e.cfg, "t1", "api")
+	st, err := Down(e.cfg, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(e.cfg.RepoDir("t1", "backend"), "stopped.txt"))
+	if want := fmt.Sprintf("down %d %d\n", k, base+k); err != nil || string(b) != want {
+		t.Fatalf("stop wrote %q (%v), want %q; warnings %v", b, err, want, st.Warnings)
+	}
+	if ln.l.alive() {
+		t.Errorf("the launcher (pid %d) survived Down", ln.l.pid)
+	}
+	if log, _ := os.ReadFile(LogPath(e.cfg, "t1", "api")); !strings.Contains(string(log), "[fride] stop: echo down") {
+		t.Errorf("the service log does not show the stop:\n%s", log)
+	}
+}
+
+// A failing stop command is reported, and the stack is stopped anyway.
+func TestDownReportsAFailingStop(t *testing.T) {
+	needLsof(t)
+	s := &settings.Settings{
+		DefaultProfile: "a",
+		Profiles: map[string]*settings.Profile{"a": {Services: map[string]*settings.Service{
+			"api": {Repo: "backend", Run: "./run", Port: freeBase(t), Stop: "exit 3"},
+		}}},
+	}
+	e := newEnv(t, s, "backend")
+	e.sidecar(t, TaskOpts{Profile: "a"})
+	fakeDocker(t)
+	fakeLauncher(t)
+	if _, err := Up(e.cfg, "t1", UpOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Down(e.cfg, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(st.Warnings, func(w string) bool { return strings.HasPrefix(w, "api: stop: exit status 3") }) {
+		t.Errorf("warnings = %v", st.Warnings)
+	}
+	if LookupK(e.cfg, "t1") != 0 {
+		t.Error("the slot was kept")
+	}
+}
