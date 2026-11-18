@@ -198,6 +198,14 @@ func TestTaskSessionsGetTheIdentity(t *testing.T) {
 	t.Setenv("SHELL", script)
 	t.Setenv("INHERITED_MARKER", "kept")
 	t.Setenv("GIT_CONFIG_COUNT", "")
+	// The script prints what an identity sets. Whatever this test process
+	// inherited under those names (a developer's own GITLAB_TOKEN, say) would
+	// pass through to a task without an identity, rightly, and read below as
+	// the identity leaking into it.
+	for _, k := range []string{"FRIDE_GIT_IDENTITY", "GITLAB_HOST", "GITLAB_TOKEN", "GIT_AUTHOR_EMAIL", "GIT_CONFIG_KEY_0", "GIT_CONFIG_KEY_1"} {
+		t.Setenv(k, "") // restores the original afterwards
+		os.Unsetenv(k)
+	}
 	screen := func(slug string) string {
 		t.Helper()
 		w := do(t, h, "POST", "/api/tasks/"+slug+"/terminals", `{"kind":"shell"}`)
