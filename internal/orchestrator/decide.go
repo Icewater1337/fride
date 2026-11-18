@@ -82,6 +82,11 @@ type taskState struct {
 	stallShown time.Time
 	failedSeen string
 	recoverAt  time.Time
+	// A usage limit with a known reset (recover.go): the failure the pause
+	// was last read from, and when it ends, which is when the agent is told
+	// to continue. Zero when it is not paused. Not counted in recoveries.
+	pausedOn string
+	resumeAt time.Time
 }
 
 // glance is what the brain was shown of one task. A round that would show it
@@ -165,9 +170,11 @@ func (m memory) worthATurn(obs []Observation, now time.Time) bool {
 			if !ts.reportedGone {
 				return true
 			}
-		case ob.Waiting && ob.Failed != nil && ob.Blocked == "" && ts.recoveries < maxRecoveries:
-			// Stopped on an API error: recoverFailed gets it going without
-			// a turn, and a turn would only ask the user whether to.
+		case ob.Waiting && ob.Failed != nil && ob.Blocked == "" &&
+			(ts.recoveries < maxRecoveries || !ts.resumeAt.IsZero()):
+			// Stopped on an API error, or paused until a usage limit resets:
+			// recoverFailed gets it going without a turn, and a turn would
+			// only ask the user whether to.
 			continue
 		case ob.Waiting:
 			if ts.shown != nil && *ts.shown == glanceOf(ob, ts) {
