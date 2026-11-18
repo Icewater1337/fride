@@ -330,8 +330,10 @@ type taskView struct {
 	Workspace string     `json:"workspace"`
 	// Attention: an agent session of this task has stopped and is waiting for
 	// input. Cheap (in-memory), so it is included in the list view too — that is
-	// what lets the top bar flag a task you are not currently looking at.
+	// what lets the task rail flag a task you are not currently looking at.
+	// Waiting is how many of its sessions wait: the rail's unread count.
 	Attention bool `json:"attention"`
+	Waiting   int  `json:"waiting,omitempty"`
 	// Setup is each repo's setup state ("running: npm ci", "done", "failed:
 	// …"). Reported independently of Stack, because at creation time no port
 	// slot exists yet.
@@ -343,9 +345,10 @@ type taskView struct {
 }
 
 func (s *Server) view(t *store.Task, detail bool) *taskView {
+	n := s.terms.Waiting(t.Slug)
 	v := &taskView{Task: t, Agent: agent.Normalize(t.Agent),
 		Workspace: s.cfg.WorkspaceDir(t.Slug),
-		Attention: s.terms.Attention(t.Slug), Stack: stack.Get(s.cfg, t.Slug)}
+		Attention: n > 0, Waiting: n, Stack: stack.Get(s.cfg, t.Slug)}
 	for _, r := range t.Repos {
 		if st := stack.SetupState(s.cfg, t.Slug, r.Name); st != "" {
 			if v.Setup == nil {

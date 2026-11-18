@@ -88,6 +88,26 @@ func TestIdleForAndWaiting(t *testing.T) {
 	}
 }
 
+// The task rail shows this count as the task's unread messages.
+func TestManagerWaitingCountsATasksWaitingSessions(t *testing.T) {
+	m := &Manager{sessions: map[string]*Session{}, released: map[string]map[string]bool{}}
+	for _, s := range []*Session{
+		{ID: "a", Task: "t", Attention: true},
+		{ID: "b", Task: "t", Attention: true},
+		{ID: "c", Task: "t"},
+		{ID: "d", Task: "t", Attention: true, closed: true},
+		{ID: "e", Task: "other", Attention: true},
+	} {
+		m.sessions[s.ID] = s
+	}
+	if n := m.Waiting("t"); n != 2 {
+		t.Fatalf("Waiting = %d, want 2", n)
+	}
+	if !m.Attention("t") || m.Attention("none") {
+		t.Fatal("Attention must be Waiting > 0")
+	}
+}
+
 func TestAgentSessionPicksTheNewestLiveOne(t *testing.T) {
 	m := &Manager{sessions: map[string]*Session{}, released: map[string]map[string]bool{}}
 	old := &Session{ID: "a", Task: "t", Kind: KindAgent, Created: time.Now().Add(-time.Hour)}
