@@ -85,6 +85,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	typed := o.deliverHeld(all)
 	o.relayQuestions(all)
 	o.recoverFailed(all, typed)
+	o.prFeedback(all, typed)
 	o.heartbeat(all, shown)
 	obs := all[:0:0]
 	for _, ob := range all {
@@ -153,6 +154,7 @@ func (o *Orchestrator) dropWatch(slug string, err error) {
 	}
 	o.finish(slug, err)
 	delete(o.st.Asked, slug)
+	delete(o.st.PRSent, slug)
 	if slices.Contains(o.st.Watching, slug) {
 		out := []string{}
 		for _, s := range o.st.Watching {
@@ -471,6 +473,9 @@ func renderRepo(r RepoState) string {
 	default:
 		fmt.Fprintf(&b, "; tracks %s, %d commit(s) unpushed, %d behind (as of its last fetch)",
 			r.Upstream, r.Unpushed, r.Behind)
+	}
+	if r.PR != nil {
+		b.WriteString("; " + r.PR.Summary())
 	}
 	return b.String()
 }

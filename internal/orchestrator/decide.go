@@ -82,6 +82,10 @@ type taskState struct {
 	stallShown time.Time
 	failedSeen string
 	recoverAt  time.Time
+
+	// prRetry is when news of its pull requests may be typed again after
+	// typing it failed (prfeedback.go).
+	prRetry time.Time
 }
 
 // glance is what the brain was shown of one task. A round that would show it

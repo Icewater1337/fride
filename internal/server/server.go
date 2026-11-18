@@ -65,6 +65,8 @@ type Server struct {
 	settingsMu sync.Mutex
 	// gitMu serialises writes of the companion's git identities file.
 	gitMu sync.Mutex
+	// prs follows the pull requests of task branches (prs.go).
+	prs *prState
 }
 
 // localHosts are the only Host/Origin hostnames this server will answer to.
@@ -115,7 +117,7 @@ func (s *Server) allowedOrigin(o string) bool {
 }
 
 func New(cfg *config.Config, st *store.Store, terms *term.Manager, web fs.FS, port int) *Server {
-	s := &Server{cfg: cfg, st: st, terms: terms, web: web, port: port}
+	s := &Server{cfg: cfg, st: st, terms: terms, web: web, port: port, prs: newPRState()}
 	s.orch = orchestrator.New(cfg.StateDir, cfg.WorkspaceRoot, cfg.ClaudeBin, orchHost{s})
 	return s
 }
@@ -342,13 +344,17 @@ type taskView struct {
 	Branches  map[string]string `json:"branches,omitempty"`
 	Dirty     map[string]int    `json:"dirty,omitempty"`
 	Terminals []*term.Session   `json:"terminals,omitempty"`
+	// PRs are its branches' pull requests as last looked up (prs.go). In
+	// the list view too: it costs a map lookup per repository.
+	PRs []prBadge `json:"prs,omitempty"`
 }
 
 func (s *Server) view(t *store.Task, detail bool) *taskView {
 	n := s.terms.Waiting(t.Slug)
 	v := &taskView{Task: t, Agent: agent.Normalize(t.Agent),
 		Workspace: s.cfg.WorkspaceDir(t.Slug),
-		Attention: n > 0, Waiting: n, Stack: stack.Get(s.cfg, t.Slug)}
+		Attention: n > 0, Waiting: n, Stack: stack.Get(s.cfg, t.Slug),
+		PRs: prBadges(s.taskPRs(t))}
 	for _, r := range t.Repos {
 		if st := stack.SetupState(s.cfg, t.Slug, r.Name); st != "" {
 			if v.Setup == nil {
@@ -1599,6 +1605,7 @@ func (s *Server) Listen(port int) error {
 	// Folders may have been deleted while this was not running.
 	workspace.PruneStale(s.cfg)
 	go doctor.Refresh(s.cfg)
+	go s.watchPRs()
 	log.Printf("fride listening on http://%s", addr)
 	return srv.ListenAndServe()
 }

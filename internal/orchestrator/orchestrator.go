@@ -106,6 +106,9 @@ type state struct {
 	// Asked is, per task, the agent's question last passed on to the threads
 	// following it (ask.go).
 	Asked map[string]asked `json:"asked,omitempty"`
+	// PRSent is, per task, what its agent has been told about its pull
+	// requests (prfeedback.go), so that a restart does not tell it again.
+	PRSent map[string]map[string]prSent `json:"prSent,omitempty"`
 }
 
 // origin is who a brain turn is for. It decides whether the turn's actions

@@ -257,6 +257,11 @@ func (h orchHost) GitState(slug string) []orchestrator.RepoState {
 		for _, c := range st.Changed {
 			rs.Changes = append(rs.Changes, strings.TrimSpace(c.Status)+" "+c.Path)
 		}
+		for _, pr := range h.s.taskPRs(t) {
+			if pr.Repo == st.Repo {
+				rs.PR = &pr
+			}
+		}
 		out = append(out, rs)
 	}
 	return out
