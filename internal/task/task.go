@@ -2,22 +2,26 @@
 // and the orchestrator all come through Create, so a task is built and checked
 // the same way whichever of them asked — two copies of this logic once had the
 // same data-loss bug, each. `fride task rm` and the board's delete come through
-// Remove for the same reason.
+// Remove for the same reason, and so does a delete from another computer of
+// the fleet or a companion: each keeps a restorable copy in the trash.
 package task
 
 import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/gitid"
+	"github.com/Icewater1337/fride/internal/journal"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
+	"github.com/Icewater1337/fride/internal/trash"
 	"github.com/Icewater1337/fride/internal/workspace"
 )
 
@@ -126,23 +130,47 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 // folder behind, unowned.
 var ErrKept = errors.New("workspace kept")
 
+// ErrNoCopy is wrapped by Remove's error when the restorable copy of the task
+// could not be put in the trash. Nothing was deleted then.
+var ErrNoCopy = errors.New("no restorable copy could be made")
+
+// RemoveOptions says how far Remove goes.
+type RemoveOptions struct {
+	// Force discards uncommitted work. The trash still has it.
+	Force bool
+	// Purge removes the workspace folder outright (workspace.Purge).
+	Purge bool
+	// NoTrash deletes without putting a copy in the trash: what is not
+	// committed is gone for good. It is for the user to choose, after a
+	// delete refused with ErrNoCopy, never a default.
+	NoTrash bool
+}
+
 // Remove takes a task down: its stack, its workspace (purge: the folder
-// outright, see workspace.Purge), its slot, its review state and its record.
+// outright, see workspace.Purge), its slot, its review state, its decision log
+// and its record. First it puts a copy of all that into the trash
+// (trash.Save), and refuses with ErrNoCopy when it cannot, deleting nothing.
 // The results say per repo what became of its worktree and branch, also when
-// a kept repo stops the removal.
-func Remove(cfg *config.Config, st *store.Store, slug string, force, purge bool) ([]workspace.RemoveResult, error) {
+// a kept repo stops the removal; trashID is what `fride task restore` takes,
+// "" when no copy was kept.
+func Remove(cfg *config.Config, st *store.Store, slug string, o RemoveOptions) (res []workspace.RemoveResult, trashID string, err error) {
 	if _, err := stack.Down(cfg, slug); err != nil {
 		log.Printf("task %s: stack down during delete: %v", slug, err)
 	}
-	var res []workspace.RemoveResult
-	var err error
-	if purge {
+	var entry *trash.Entry
+	if !o.NoTrash {
+		t, err := st.Get(slug)
+		if err != nil {
+			return nil, "", err
+		}
+		if entry, err = trash.Save(cfg, t); err != nil {
+			return nil, "", fmt.Errorf("%w: %v — nothing was deleted", ErrNoCopy, err)
+		}
+	}
+	if o.Purge {
 		res, err = workspace.Purge(cfg, slug)
 	} else {
-		res, err = workspace.Remove(cfg, slug, force)
-	}
-	if err != nil {
-		return res, err
+		res, err = workspace.Remove(cfg, slug, o.Force)
 	}
 	var kept []string
 	for _, r := range res {
@@ -150,8 +178,15 @@ func Remove(cfg *config.Config, st *store.Store, slug string, force, purge bool)
 			kept = append(kept, r.Repo+" ("+r.Detail+")")
 		}
 	}
-	if len(kept) > 0 {
-		return res, fmt.Errorf("%w: %s", ErrKept, strings.Join(kept, "; "))
+	if err != nil || len(kept) > 0 {
+		if err == nil {
+			err = fmt.Errorf("%w: %s", ErrKept, strings.Join(kept, "; "))
+		}
+		id, note := settle(cfg, entry, res)
+		if note != "" {
+			err = fmt.Errorf("%w; %s", err, note)
+		}
+		return res, id, err
 	}
 	// The workspace is gone by now: a slot that cannot be freed must not
 	// leave the task in the store with nothing behind it.
@@ -159,5 +194,72 @@ func Remove(cfg *config.Config, st *store.Store, slug string, force, purge bool)
 		log.Printf("task %s: freeing its slot during delete: %v", slug, err)
 	}
 	review.RemoveState(cfg, slug)
-	return res, st.Delete(slug)
+	if entry != nil {
+		// The trash has the decision log now. Left here it would become the
+		// log of the next task to take this id.
+		_ = os.RemoveAll(journal.Dir(cfg, slug))
+		trashID = entry.ID
+	}
+	// Each delete also clears what has been in the trash long enough.
+	if gone, err := trash.Expire(cfg, time.Now()); err != nil {
+		log.Printf("trash: %v", err)
+	} else if len(gone) > 0 {
+		log.Printf("trash: expired %s", strings.Join(gone, ", "))
+	}
+	return res, trashID, st.Delete(slug)
+}
+
+// settle decides what becomes of the copy when a delete stopped part-way and
+// the task stays. When nothing it holds was destroyed, it is dropped. When a
+// removed worktree took uncommitted work with it, the copy is narrowed to
+// those repositories, and the note says how to get them back.
+func settle(cfg *config.Config, e *trash.Entry, res []workspace.RemoveResult) (id, note string) {
+	if e == nil {
+		return "", ""
+	}
+	lost := map[string]bool{}
+	var names []string
+	for _, r := range res {
+		if !r.Removed {
+			continue
+		}
+		for _, er := range e.Repos {
+			if er.Name == r.Repo && er.WIP != "" {
+				lost[r.Repo] = true
+				names = append(names, r.Repo)
+			}
+		}
+	}
+	if len(lost) == 0 {
+		if err := trash.Discard(cfg, e); err != nil {
+			log.Printf("trash: dropping %s after a delete that stopped: %v", e.ID, err)
+		}
+		return "", ""
+	}
+	if err := trash.Narrow(cfg, e, lost); err != nil {
+		// Left whole: it still holds everything, which is the safe side.
+		log.Printf("trash: narrowing %s: %v", e.ID, err)
+	}
+	return e.ID, fmt.Sprintf("the uncommitted work of %s is in the trash: fride task restore %s --as <new-id>",
+		strings.Join(names, ", "), e.ID)
+}
+
+// Restore brings a deleted task back from the trash under its id, or under as
+// (trash.Restore), and finishes it like a task that arrived from elsewhere:
+// this computer's local config, guide and hook, its profile and identity
+// checked, the setup steps started.
+func Restore(cfg *config.Config, st *store.Store, id, as string) (*store.Task, []string, error) {
+	t, notes, err := trash.Restore(cfg, st, id, as, Landing(cfg))
+	if err != nil {
+		return nil, notes, err
+	}
+	repos := make([]string, 0, len(t.Repos))
+	for _, r := range t.Repos {
+		repos = append(repos, r.Name)
+	}
+	notes = append(notes, arrived(cfg, st, t.Slug, repos)...)
+	if cur, err := st.Get(t.Slug); err == nil {
+		t = cur
+	}
+	return t, notes, nil
 }

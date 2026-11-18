@@ -177,6 +177,36 @@ or in the UI's Inbox, and answer with `fride in reply <id> "…"`.
 
 The same is `POST /api/inbox` on the local API. See [docs/INBOX.md](docs/INBOX.md).
 
+## Deleting a task, and taking it back
+
+*Delete task* (and `fride task rm`, and a delete from another computer of the
+fleet or a companion) first puts a copy into the trash, where it stays
+restorable for 30 days:
+
+- per repository, everything not committed — modified, deleted and untracked
+  files — as a commit on top of the branch, pinned by
+  `refs/fride/trash/<id>/<repo>` in the repository. The ref also pins the
+  branch's commits, so a branch the delete removed comes back where it stood;
+- the task record, its decision log, its review state, the files at the
+  workspace root and the agent's conversation, under `~/.fride/trash/<id>`.
+
+Ignored files (`.env`, `node_modules`, build output) are not kept; a restored
+workspace copies its local config again, like a new one. *Recently deleted* on
+the board lists the trash and restores a task with one click;
+`fride task restore <id>` does the same. The task comes back on its branch,
+with its uncommitted work as uncommitted changes. A branch that has moved on
+or is checked out elsewhere is never touched: the task continues on
+`<branch>-restored`. When another task has taken the id since, the restore
+refuses (`--as <new-id>` restores it under another), and in the board it
+offers `<id>-restored`.
+
+When the copy cannot be made — an untracked file over 100 MB, a folder in the
+workspace that is not a worktree of its repository — the delete refuses and
+deletes nothing. Deleting anyway, without a copy, is a second, explicit choice:
+*Delete for good* in the board, `--no-trash` on the CLI. Entries expire after
+30 days, when the server starts, once a day while it runs, and on each delete;
+`fride task trash rm <id>` drops one sooner.
+
 ## CLI
 
 Everything the UI does is a subcommand, so the agent inside a workspace can
@@ -195,7 +225,9 @@ fride git ls                              # the git identities, and whether each
 fride git token set <id>                  # the token from stdin, or typed without echo
 fride task profile <task> <profile>       # applies at the next stack up
 fride task service <task> <svc> <shared|task|off|default>
-fride task rm <task> [--force]
+fride task rm <task> [--force] [--no-trash]   # a copy stays restorable for 30 days
+fride task trash [rm <id>]                # recently deleted tasks
+fride task restore <id> [--as <new-id>]   # bring one back
 
 fride stack up [task] [--wait] [--force]  # --wait: block until ready, exit 1 with logs if not
 fride stack status [task]
