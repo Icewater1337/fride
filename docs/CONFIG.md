@@ -130,6 +130,7 @@ backend's compose file.
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
+| `quality` | How often `fride serve` updates the quality record and replays the AI review's eval set. See [quality](#quality). |
 
 ## repos.&lt;name&gt;
 
@@ -420,6 +421,35 @@ sets are in `$FRIDE_HOME/git-identities.companion.json`, and one of yours
 with the same id wins. `fride config check` checks each identity, that ids
 are unique, and that `default` names one of them. Edits apply from the next
 reload of config.json, to tasks created and sessions started after it.
+
+## quality
+
+What became of the tasks' changes after they merged (reverted, followed by
+fixes, the cause of an incident), and the replay of the AI review against the
+ones that went wrong: see [REVIEW.md](REVIEW.md#outcomes-and-evals). Both run
+when asked (`fride quality`, `fride review eval`, the **Reviews** view). This
+section lets `fride serve` run them by itself.
+
+```json
+"quality": { "refreshHours": 24, "evalHours": 168, "evalMax": 5 }
+```
+
+| field | meaning |
+|---|---|
+| `refreshHours` | How often the server fetches each task's base branch and looks for merges, reverts and follow-ups. Default 0: only when asked. A refresh is a `git fetch` per repository and a few `git log`s. |
+| `evalHours` | How often the server replays the eval set. Default 0: only when asked. Each case is three model turns of the AI review, so this spends model calls. |
+| `evalMax` | The most cases one replay takes, the ones replayed longest ago first. Default 5; `fride config check` warns past 50. |
+| `followUpDays` | How soon after a merge a fix commit that rewrites the change's lines counts as a follow-up. Default 14. |
+
+The server looks every ten minutes whether a run is due, counting runs the CLI
+made too, so a scheduled refresh does not repeat one you just ran. Without a
+server, a crontab does the same; its `PATH` has to reach both `fride` and
+`claude` (and set `FRIDE_HOME` there too if you moved it):
+
+```
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+0 7 * * * fride quality >/dev/null && fride review eval --max 5
+```
 
 ## requirements
 

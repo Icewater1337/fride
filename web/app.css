@@ -1101,6 +1101,20 @@ button.xs.on { color: var(--accent-fg); background: var(--accent-soft); }
 .rq-row.turn-agent .rq-turn { color: var(--amber); background: var(--amber-soft); }
 .rq-nums { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); flex: none; }
 
+/* ---------------------------------------------------------------- quality after merge (quality.js) */
+
+.qa .tablewrap { margin: 10px 0; }
+.qa-head { display: flex; align-items: center; gap: 10px; margin: 28px 0 10px; }
+.qa-head .sh { flex: 1; margin: 0; }
+.qa-by { height: 28px; font-size: 12.5px; }
+.qa .qa-total td { font-weight: 600; }
+.qa-changes { margin: 12px 0 4px; }
+.qa-changes > summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+.qa-ttl { font-weight: 550; }
+.qa-out { display: flex; flex-wrap: wrap; gap: 4px; }
+.qa-form { display: flex; flex-direction: column; gap: 8px; }
+.qa-form textarea, .qa-form input { width: 100%; }
+
 /* ---------------------------------------------------------------- tables */
 
 .tablewrap { background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: auto; box-shadow: var(--shadow-sm); }

@@ -171,3 +171,20 @@ func TestCompanionWebhookMustBeLoopback(t *testing.T) {
 		}
 	}
 }
+
+func TestQualityScheduleDefaultsAndChecks(t *testing.T) {
+	var none *Settings
+	if q := none.QualitySchedule(); q.RefreshHours != 0 || q.EvalHours != 0 || q.EvalMax != 5 || q.FollowUpDays != 14 {
+		t.Errorf("without a quality section nothing is scheduled: %+v", q)
+	}
+	s := fixture(t)
+	s.Quality = &Quality{RefreshHours: 24, EvalHours: 168, EvalMax: 3}
+	if q := s.QualitySchedule(); q.EvalMax != 3 || q.FollowUpDays != 14 || q.RefreshHours != 24 {
+		t.Errorf("schedule: %+v", q)
+	}
+	if errs := errorsOf(s.Check()); len(errs) > 0 {
+		t.Errorf("a valid schedule: %v", errs)
+	}
+	s.Quality.EvalHours = -1
+	wantError(t, s, "quality")
+}

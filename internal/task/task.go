@@ -18,6 +18,7 @@ import (
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/gitid"
 	"github.com/Icewater1337/fride/internal/journal"
+	"github.com/Icewater1337/fride/internal/quality"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
@@ -167,6 +168,11 @@ func Remove(cfg *config.Config, st *store.Store, slug string, o RemoveOptions) (
 			return nil, "", fmt.Errorf("%w: %v — nothing was deleted", ErrNoCopy, err)
 		}
 	}
+	// The quality record outlives the task: its changes, which may merge or
+	// be reverted later, and its review votes, which the review state below
+	// takes along. Read now, while the worktrees are still there, and only
+	// once the delete is going ahead.
+	quality.Keep(cfg, st, slug)
 	if o.Purge {
 		res, err = workspace.Purge(cfg, slug)
 	} else {

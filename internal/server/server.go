@@ -157,6 +157,8 @@ func (s *Server) apiRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/env", s.handleEnv)
 	mux.HandleFunc("/api/mem", s.handleMem)
 	mux.HandleFunc("/api/review/queue", s.handleReviewQueue)
+	mux.HandleFunc("/api/quality", s.handleQuality)              // the quality record: quality.go
+	mux.HandleFunc("/api/quality/", s.handleQuality)             // refresh, incidents, evals
 	mux.HandleFunc("/api/git/identities", s.handleGitIdentities) // no tokens, only has_token
 	mux.HandleFunc("/api/trash", s.handleTrash)                  // GET recently deleted tasks
 	mux.HandleFunc("/api/trash/", s.handleTrash)                 // POST /api/trash/<id>/restore
@@ -1612,6 +1614,7 @@ func (s *Server) Listen(port int) error {
 	workspace.PruneStale(s.cfg)
 	go s.expireTrash()
 	go doctor.Refresh(s.cfg)
+	go s.qualityLoop() // config.json's quality schedule; idle without one
 	log.Printf("fride listening on http://%s", addr)
 	return srv.ListenAndServe()
 }
