@@ -1,17 +1,21 @@
-// Package task creates tasks. `fride task new`, the New task dialog and the
-// orchestrator all come through Create, so a task is built and checked the same
-// way whichever of them asked — two copies of this logic once had the same
-// data-loss bug, each.
+// Package task creates and removes tasks. `fride task new`, the New task dialog
+// and the orchestrator all come through Create, so a task is built and checked
+// the same way whichever of them asked — two copies of this logic once had the
+// same data-loss bug, each. `fride task rm` and the board's delete come through
+// Remove for the same reason.
 package task
 
 import (
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/gitid"
+	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/stack"
 	"github.com/Icewater1337/fride/internal/store"
 	"github.com/Icewater1337/fride/internal/workspace"
@@ -114,4 +118,46 @@ func Create(cfg *config.Config, st *store.Store, req Request) (*store.Task, []wo
 	}
 	stack.SetupAsync(cfg, slug, names)
 	return t, created, nil
+}
+
+// ErrKept is wrapped by Remove's error when the workspace kept a repo:
+// uncommitted work without force, or what force does not discard (commits on a
+// detached HEAD). The task is then not forgotten, as that would leave its
+// folder behind, unowned.
+var ErrKept = errors.New("workspace kept")
+
+// Remove takes a task down: its stack, its workspace (purge: the folder
+// outright, see workspace.Purge), its slot, its review state and its record.
+// The results say per repo what became of its worktree and branch, also when
+// a kept repo stops the removal.
+func Remove(cfg *config.Config, st *store.Store, slug string, force, purge bool) ([]workspace.RemoveResult, error) {
+	if _, err := stack.Down(cfg, slug); err != nil {
+		log.Printf("task %s: stack down during delete: %v", slug, err)
+	}
+	var res []workspace.RemoveResult
+	var err error
+	if purge {
+		res, err = workspace.Purge(cfg, slug)
+	} else {
+		res, err = workspace.Remove(cfg, slug, force)
+	}
+	if err != nil {
+		return res, err
+	}
+	var kept []string
+	for _, r := range res {
+		if !r.Removed {
+			kept = append(kept, r.Repo+" ("+r.Detail+")")
+		}
+	}
+	if len(kept) > 0 {
+		return res, fmt.Errorf("%w: %s", ErrKept, strings.Join(kept, "; "))
+	}
+	// The workspace is gone by now: a slot that cannot be freed must not
+	// leave the task in the store with nothing behind it.
+	if err := stack.FreeK(cfg, slug); err != nil {
+		log.Printf("task %s: freeing its slot during delete: %v", slug, err)
+	}
+	review.RemoveState(cfg, slug)
+	return res, st.Delete(slug)
 }

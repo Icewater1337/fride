@@ -862,10 +862,8 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		force := len(args) > 2 && args[2] == "--force"
 		if stack.LookupK(cfg, t.Slug) > 0 {
 			fmt.Println("stopping the stack first...")
-			_, _ = stack.Down(cfg, t.Slug)
 		}
-		res, err := workspace.Remove(cfg, t.Slug, force)
-		check(err)
+		res, err := task.Remove(cfg, st, t.Slug, force, false)
 		kept := 0
 		for _, r := range res {
 			fmt.Printf("  %s: %s\n", r.Repo, r.Detail)
@@ -875,15 +873,13 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		}
 		// Even --force keeps what it must not discard (commits on a detached
 		// HEAD); forgetting the task then would leave its folder orphaned.
-		if kept > 0 && !force {
+		if errors.Is(err, task.ErrKept) && !force {
 			check(fmt.Errorf("workspace kept — %d repo(s) still have work (use --force to discard uncommitted work)", kept))
 		}
-		if kept > 0 {
+		if errors.Is(err, task.ErrKept) {
 			check(fmt.Errorf("workspace kept — %d repo(s) hold what --force does not discard (see above)", kept))
 		}
-		check(stack.FreeK(cfg, t.Slug))
-		review.RemoveState(cfg, t.Slug)
-		check(st.Delete(t.Slug))
+		check(err)
 		fmt.Printf("task %s removed\n", t.Slug)
 
 	default:
