@@ -372,27 +372,47 @@ func GuideFiles() []string { return []string{"CLAUDE.md", "AGENTS.md"} }
 type Transcript struct {
 	Path string
 	Cwd  string
+	// Subagent is a Task subagent's own transcript, under
+	// <session>/subagents, rather than a conversation of its own.
+	Subagent bool
 }
 
 // ClaudeTranscripts lists the transcript files recorded in a workspace or any
 // folder inside it — what has to travel with the workspace for a conversation
 // to be resumable somewhere else.
 func ClaudeTranscripts(home, workspaceDir string) []Transcript {
+	return claudeTranscripts(home, workspaceDir, false)
+}
+
+// claudeTranscripts is ClaudeTranscripts, and with subagents also the
+// transcripts Task subagents write under <session>/subagents: what they
+// edited and ran happened in the same workspace (usage reads them too).
+// ClaudeTranscripts leaves them out because a move installs each transcript
+// at the top of its project folder, where a subagent's would pass for a
+// conversation of its own.
+func claudeTranscripts(home, workspaceDir string, subagents bool) []Transcript {
 	projects := filepath.Join(ClaudeDir(home), "projects")
 	des, err := os.ReadDir(projects)
 	if err != nil {
 		return nil
 	}
 	var out []Transcript
+	add := func(files []string, sub bool) {
+		for _, f := range files {
+			if cwd := transcriptCwd(f); cwd != "" && Under(cwd, workspaceDir) {
+				out = append(out, Transcript{Path: f, Cwd: cwd, Subagent: sub})
+			}
+		}
+	}
 	for _, de := range des {
 		if !de.IsDir() || !ClaudeHolds(de.Name(), workspaceDir) {
 			continue
 		}
 		files, _ := filepath.Glob(filepath.Join(projects, de.Name(), "*.jsonl"))
-		for _, f := range files {
-			if cwd := transcriptCwd(f); cwd != "" && Under(cwd, workspaceDir) {
-				out = append(out, Transcript{Path: f, Cwd: cwd})
-			}
+		add(files, false)
+		if subagents {
+			sub, _ := filepath.Glob(filepath.Join(projects, de.Name(), "*", "subagents", "*.jsonl"))
+			add(sub, true)
 		}
 	}
 	return out
