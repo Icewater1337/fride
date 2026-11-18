@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/Icewater1337/fride/internal/atomicfile"
 )
 
 // Version is the config.json schema version this build reads.
@@ -490,22 +492,7 @@ func (s *Settings) Configured() bool { return len(s.Profiles) > 0 }
 func (s *Settings) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return writeJSON(s.path, s)
-}
-
-func writeJSON(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.WriteJSON(s.path, s, 0o644)
 }
 
 func (s *Settings) Agent() string {
@@ -519,7 +506,7 @@ func (s *Settings) SetAgent(kind string) {
 	s.prefs.LastAgent = kind
 	p := s.prefs
 	s.mu.Unlock()
-	_ = writeJSON(s.prefsPath, p)
+	_ = atomicfile.WriteJSON(s.prefsPath, p, 0o644)
 }
 
 // Profile looks a profile up by name; "" means the default profile.

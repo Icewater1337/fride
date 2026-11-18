@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/atomicfile"
 )
 
 // The two modes. Chat is a conversation: the orchestrator only ever acts when
@@ -277,14 +278,7 @@ func (o *Orchestrator) save() {
 	if n := len(o.st.Messages); n > keepMessages {
 		o.st.Messages = append([]Message(nil), o.st.Messages[n-keepMessages:]...)
 	}
-	b, err := json.MarshalIndent(o.st, "", "  ")
-	if err != nil {
-		return
-	}
-	tmp := o.path + ".tmp"
-	if os.WriteFile(tmp, b, 0o644) == nil {
-		_ = os.Rename(tmp, o.path)
-	}
+	_ = atomicfile.WriteJSON(o.path, o.st, 0o644)
 }
 
 // add appends a message. Called with the lock held.

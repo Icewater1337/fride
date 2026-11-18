@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Icewater1337/fride/internal/atomicfile"
 )
 
 // Git is the git identities a task can be created with (docs/GIT.md). An
@@ -118,7 +120,7 @@ func SaveManagedGit(stateDir string, ids []GitIdentity) error {
 	if ids == nil {
 		ids = []GitIdentity{}
 	}
-	return writeJSON(filepath.Join(stateDir, ManagedGitFile), managedGit{Identities: ids})
+	return atomicfile.WriteJSON(filepath.Join(stateDir, ManagedGitFile), managedGit{Identities: ids}, 0o644)
 }
 
 // stateDir is the folder config.json is in; "" for a Settings that was

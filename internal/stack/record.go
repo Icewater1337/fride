@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/infra"
 )
@@ -66,19 +67,7 @@ func readRecord(cfg *config.Config, slug string) *record {
 }
 
 func writeRecord(cfg *config.Config, slug string, r *record) error {
-	path := recordPath(cfg, slug)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.WriteJSON(recordPath(cfg, slug), r, 0o644)
 }
 
 // recordOf describes what starting the plan starts. The compose project is
