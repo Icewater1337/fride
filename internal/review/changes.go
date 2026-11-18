@@ -365,6 +365,24 @@ func indentSensitive(p string) bool {
 	return indentSensitiveExt[path.Ext(base)] || base == "makefile" || base == "gnumakefile"
 }
 
+// padFreeExt lists the languages where a space just inside brackets or
+// around ',' and ';' never changes meaning (see padRune). Everything else
+// keeps every whitespace run: in shell "[ -f x ]", "{ a; }" and "{a,b}"
+// depend on it, in YAML "key: [a]" is not "key:[a]", in Markdown "[a] (b)"
+// is not a link, in CSS "a [x]" is not "a[x]", and JS and Ruby are left out
+// for regex literals and "foo [1]". One place to extend.
+var padFreeExt = map[string]bool{
+	".go": true, ".c": true, ".h": true, ".cc": true, ".cpp": true, ".cxx": true, ".hh": true, ".hpp": true, ".hxx": true,
+	".java": true, ".cs": true, ".rs": true, ".py": true, ".pyi": true, ".pyw": true, ".json": true,
+}
+
+// wsRules is what whitespace in one file's lines means to squashLine.
+type wsRules struct{ indent, padFree bool }
+
+func wsRulesFor(p string) wsRules {
+	return wsRules{indentSensitive(p), padFreeExt[strings.ToLower(path.Ext(p))]}
+}
+
 // whitespaceOnly reports a hunk whose removed and added lines are the same
 // once whitespace is ignored, taken in order. A hunk that only adds or only
 // removes blank lines counts too. Whitespace inside a quoted string is never
@@ -372,7 +390,7 @@ func indentSensitive(p string) bool {
 // file (see indentSensitive). Anything else, even a single moved character,
 // is left for the reader.
 func whitespaceOnly(p string, lines []string) bool {
-	sens := indentSensitive(p)
+	sens := wsRulesFor(p)
 	var minus, plus strings.Builder
 	changed := false
 	for _, l := range lines {
@@ -399,21 +417,23 @@ func whitespaceOnly(p string, lines []string) bool {
 	return changed && minus.String() == plus.String()
 }
 
-// squashLine drops the whitespace of one line except inside quotes and
-// between two word characters (see wordRune), where a run becomes one space:
-// "rm -rf /a /b" is not "rm -rf /a/b", nor "if notx" "if not x". Next to
-// punctuation it is dropped, so "f( a, b )" keys as "f(a,b)". A blank line
-// squashes to "". With indent set, the leading whitespace is kept.
+// squashLine keys one line for comparison: a run of whitespace becomes one
+// space, so "rm -rf /a /b" is not "rm -rf /a/b", "rm -f * .bak" is not
+// "rm -f *.bak" and "cmd 2 >&1" is not "cmd 2>&1". In a padFree file the
+// padding just inside brackets and around ',' and ';' is dropped, so
+// "f( a, b )" keys as "f(a,b)". Quoted text is kept as it is. Leading and
+// trailing whitespace is dropped, the leading part kept with indent set; a
+// blank line squashes to "".
 // shortcut: quotes are tracked per line, so an apostrophe in a comment only
 // makes the check stricter and a multi-line string is not seen; upgrade with
 // a real lexer if that bites.
-func squashLine(s string, indent bool) string {
+func squashLine(s string, ws wsRules) string {
 	rest := strings.TrimLeftFunc(s, unicode.IsSpace)
 	if rest == "" {
 		return ""
 	}
 	var b strings.Builder
-	if indent {
+	if ws.indent {
 		b.WriteString(s[:len(s)-len(rest)])
 	}
 	var q, last rune
@@ -433,7 +453,7 @@ func squashLine(s string, indent bool) string {
 			space = true
 			continue
 		default:
-			if space && wordRune(last) && wordRune(r) {
+			if space && !(ws.padFree && padRune(last, r)) {
 				b.WriteByte(' ')
 			}
 			if r == '"' || r == '\'' || r == '`' {
@@ -446,14 +466,13 @@ func squashLine(s string, indent bool) string {
 	return b.String()
 }
 
-// wordRune reports a character that can sit on either side of whitespace
-// that matters: letters, digits, '_', the characters of a shell word or
-// path ('-', '/', '.', '~', '$'), ':' (YAML's "key: value" is not
-// "key:value") and quotes ('echo "a" b' is not 'echo "a"b'). In doubt a
-// character counts as a word: a hunk wrongly shown costs a glance, one
-// wrongly folded hides a change.
-func wordRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("_-/.~$:\"'`", r)
+// padRune reports whitespace between before and after that is padding: just
+// inside a bracket, or around ',' and ';'. A space before an opening bracket
+// is not padding, since in C "#define F (x)" is not "#define F(x)". In doubt
+// whitespace counts: a hunk wrongly shown costs a glance, one wrongly folded
+// hides a change.
+func padRune(before, after rune) bool {
+	return strings.ContainsRune("([{,;", before) || strings.ContainsRune(")]},;", after)
 }
 
 // untrackedFile builds the review of a file git does not know yet: all added.

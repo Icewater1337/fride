@@ -47,7 +47,7 @@ type lineAt struct {
 func detectMoves(files []File) {
 	removed := map[string][]lineAt{}
 	for fi := range files {
-		sens := indentSensitive(files[fi].Path)
+		sens := wsRulesFor(files[fi].Path)
 		for hi := range files[fi].Hunks {
 			h := &files[fi].Hunks[hi]
 			old, _ := lineNumbers(h)
@@ -72,7 +72,7 @@ func detectMoves(files []File) {
 	}
 	var cands []cand
 	for fi := range files {
-		sens := indentSensitive(files[fi].Path)
+		sens := wsRulesFor(files[fi].Path)
 		for hi := range files[fi].Hunks {
 			h := &files[fi].Hunks[hi]
 			for li, l := range h.Lines {
@@ -140,7 +140,7 @@ func detectMoves(files []File) {
 func runLength(files []File, fi, hi, li int, src lineAt) int {
 	add := files[fi].Hunks[hi].Lines
 	del := files[src.file].Hunks[src.hunk].Lines
-	addSens, delSens := indentSensitive(files[fi].Path), indentSensitive(files[src.file].Path)
+	addSens, delSens := wsRulesFor(files[fi].Path), wsRulesFor(files[src.file].Path)
 	n := 0
 	for li+n < len(add) && src.idx+n < len(del) {
 		a, d := add[li+n], del[src.idx+n]

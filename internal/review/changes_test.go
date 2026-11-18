@@ -363,7 +363,7 @@ func TestWhitespaceOnly(t *testing.T) {
 		{"lowercase makefile", "makefile", []string{"-\tgo test", "+  go test"}, false},
 		{"gnumakefile", "GNUmakefile", []string{"-\tgo test", "+  go test"}, false},
 		{"pyw dedent", "app.pyw", []string{"-        grant(user)", "+    grant(user)"}, false},
-		{"python inner spacing", "a.py", []string{"-x=1", "+x = 1"}, true},
+		{"python inner spacing", "a.py", []string{"-x=1", "+x = 1"}, false},
 		{"string literal", "a.go", []string{`-s := "a b"`, `+s := "a  b"`}, false},
 		{"go reindent", "a.go", []string{"-\tx := 1", "+    x := 1"}, true},
 		{"trailing in python", "a.py", []string{"-x = 1", "+x = 1  "}, true},
@@ -376,6 +376,16 @@ func TestWhitespaceOnly(t *testing.T) {
 		{"blank line added", "a.go", []string{"+", "+x := 1"}, false},
 		{"only blank lines", "a.go", []string{"+", "+  "}, true},
 		{"spacing around punctuation", "a.go", []string{"-f(a,b)", "+f( a, b )"}, true},
+		{"glob split", "run.sh", []string{`-rm -rf "$DIR"/*`, `+rm -rf "$DIR"/ *`}, false},
+		{"glob before ext", "run.sh", []string{"-rm -f *.bak", "+rm -f * .bak"}, false},
+		{"redirect fd", "run.sh", []string{"-cmd 2>&1", "+cmd 2 >&1"}, false},
+		{"c comment opener", "a.c", []string{"-x = a /*p;", "+x = a / *p;"}, false},
+		{"shell assignment", "run.sh", []string{"-FOO=bar cmd", "+FOO = bar cmd"}, false},
+		{"shell test brackets", "run.sh", []string{"-[ -f x ]", "+[-f x]"}, false},
+		{"shell brace expansion", "run.sh", []string{"-cp {a,b}", "+cp {a, b}"}, false},
+		{"yaml flow after colon", "c.yml", []string{"-key: [a]", "+key:[a]"}, false},
+		{"c function-like macro", "a.h", []string{"-#define F(x) x", "+#define F (x) x"}, false},
+		{"c padding", "a.c", []string{"-for (i = 0;i < n;i++) { f(a,b); }", "+for (i = 0; i < n; i++) { f( a, b ); }"}, true},
 	}
 	for _, c := range cases {
 		if got := whitespaceOnly(c.path, c.lines); got != c.want {

@@ -344,8 +344,10 @@ blocking comment came back from the agent. Opening one shows only what is left.
 What was built instead finds runs of at least three lines (and 20
 alphanumerics, git's `--color-moved` floor) that one place of a repo lost and
 another gained. Lines compare as the whitespace-only check does: indentation in
-an indentation-sensitive file, spaces inside a string and the space between two
-words count, other whitespace does not. Moved lines are tinted and say where they came from or went; a hunk that only moves code folds as a move. A block
+an indentation-sensitive file and spaces inside a string count, any other run
+of whitespace counts as one space, and only in a few languages (Go, C, C++,
+Java, C#, Rust, Python, JSON) the padding just inside brackets and around `,`
+and `;` does not count. Moved lines are tinted and say where they came from or went; a hunk that only moves code folds as a move. A block
 re-indented in place is not a move. A removed line is the source of at most
 one move (longest runs first), so a further copy of the block is new code: it
 is not folded and goes into the AI pass. Tree-sitter would need a C toolchain and a
