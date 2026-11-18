@@ -130,7 +130,7 @@ backend's compose file.
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
-| `review` | `{ "maxRounds": 3, "finders": 3, "agree": 2 }`: the cap on a task's review rounds, and how many finders the AI pass runs and must agree. See [review](#review). |
+| `review` | `{ "maxRounds": 3, "finders": 3, "agree": 2, "approvals": {...} }`: the cap on a task's review rounds, how many finders the AI pass runs and must agree, and how many human approvals each review tier needs before a task can be Done. See [review](#review). |
 | `quality` | How often `fride serve` updates the quality record and replays the AI review's eval set. See [quality](#quality). |
 | `pullRequests` | `{ "watch": true, "feedback": true }`: follow the pull requests of task branches, and tell agents what is wrong with theirs. On unless turned off. See [pullRequests](#pullrequests). |
 
@@ -142,6 +142,7 @@ backend's compose file.
 | `ide` | The JetBrains launcher this repo opens in: `idea`, `pycharm`, `webstorm`, `goland` and so on. Empty means FrIDE detects it from the build files. |
 | `setup` | Steps that prepare a fresh worktree, such as dependency installs or code generation. They run in the background when a task is created. They run again before a service from this repo starts, if a step's `creates` path is missing. |
 | `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. |
+| `review` | `{ "tiers": [...] }`: which review tier a change to this repo's paths falls in, and so how many human approvals it needs before the task can be Done. See [below](#reposnamereview). |
 
 A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 
@@ -150,6 +151,52 @@ A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 - `fallback` runs when `run` fails, for example `npm ci` refusing an out-of-sync lockfile, then `npm install`.
 
 A service waits for its repo's setup to finish before it starts. A setup that fails is reported on the board and by `stack up --wait`.
+
+### repos.&lt;name&gt;.review
+
+A change's review tier is set by the paths it touches: by default `auto` needs
+no human approval, `normal` one, `risky` two (see [REVIEW.md](REVIEW.md#review-tiers-and-approvals)
+and [`review.approvals`](#review)). FrIDE has generic defaults: docs are auto;
+auth, secrets, payments, migrations, CI/CD and infrastructure are risky;
+everything else is normal. Rules here come first and override them:
+
+```json
+"repos": {
+  "api": {
+    "review": {
+      "tiers": [
+        { "tier": "auto", "paths": ["internal/experiments/**"], "why": "flag-guarded: runs only behind the experiments flag" },
+        { "tier": "normal", "paths": ["deploy/local/"], "why": "the local dev stack, not production" },
+        { "tier": "risky", "paths": ["internal/ledger/", "*.proto"] }
+      ],
+      "approvals": { "risky": 3 }
+    }
+  }
+}
+```
+
+| field | meaning |
+|---|---|
+| `tiers[].tier` | `auto`, `normal` or `risky`. |
+| `tiers[].paths` | Patterns, as in `.gitignore`: one without a slash matches a name at any depth (`*.md`), one with a slash matches from the repo root (`docs/**`, `/Makefile`); `*` stays within a folder, `**` crosses folders, `{a,b}` is either. Every pattern also covers what is below it, so `flags` and `flags/` both mean the whole folder. Case matters. |
+| `tiers[].why` | Shown to the reviewer next to each file the rule placed. |
+| `approvals` | [`review.approvals`](#review) for this repository: `{ "auto": 0, "normal": 1, "risky": 2 }`, each tier left out keeping the global count. A task whose repos differ needs the most any of its repos needs. |
+
+The first rule a path matches decides. The order is: a change to the repo's
+own rules file (always risky), these rules, the repo's own
+`.fride/review.json`, FrIDE's defaults. `.fride/review.json` has the same
+shape (`{ "tiers": [...] }`), is committed with the repo so the team shares
+it, and is read as it is at the merge-base, so a change cannot lower its own
+tier. One that does not parse makes the repo risky until it is fixed, and so
+does one that sets `approvals`: how many people must approve is this setup's
+decision, made in config.json, not something a branch carries in.
+
+Nothing is flag-guarded by default: FrIDE cannot see from a path whether code
+runs behind a flag. List such paths as `auto`, with a `why`. Where no person
+approves (a companion closes tasks, agents merge their own work), set the
+counts to zero: `"approvals": { "normal": 0, "risky": 0 }` here for one repo,
+or in [`review`](#review) for all. `fride config check` reports an unknown
+tier, a rule without paths, an empty pattern, and a count outside 0 to 5.
 
 ## profiles.&lt;name&gt;
 
@@ -426,11 +473,13 @@ reload of config.json, to tasks created and sessions started after it.
 
 ## review
 
-The Review tab's AI pass and the review rounds of a task; see
-[REVIEW.md](REVIEW.md#review-rounds).
+The Review tab's AI pass, the review rounds of a task, and the approvals its
+change needs; see [REVIEW.md](REVIEW.md#review-rounds) and
+[review tiers](REVIEW.md#review-tiers-and-approvals).
 
 ```json
-"review": { "maxRounds": 3, "finders": 3, "agree": 2 }
+"review": { "maxRounds": 3, "finders": 3, "agree": 2,
+            "approvals": { "auto": 0, "normal": 1, "risky": 2 } }
 ```
 
 | field | meaning |
@@ -438,6 +487,7 @@ The Review tab's AI pass and the review rounds of a task; see
 | `maxRounds` | The most review→fix rounds of one task. A round is one review of a new version of the change, by the AI pass or the agent reviewer. Past the cap a review of a new version is refused, the owner gets a blocking thread suggesting to rethink the approach, and only they can start another round (*Run anyway*). Default 3; `0` turns the cap off; at most 20. |
 | `finders` | How many finders the AI pass runs in parallel, each with its own focus: correctness, security, tests, resilience, performance, in that order. Default 3, at most 5. Each is a strong model reading the whole change, so the pass costs about one model call per finder more. `1` is a single finder covering everything, with no vote. |
 | `agree` | How many finders must report a problem before it is shown, each finding saying who agreed. Default 2; between 1 and `finders`. `1` shows what any finder found, with the agreement still marked. |
+| `approvals` | How many human approvals, given in the Review tab, each review tier needs before the task can be Done: `{ "auto": 0, "normal": 1, "risky": 2 }`, which are the defaults. A tier left out keeps its default. Each count is between 0 and 5. All zeros turns the gate off: tiers are still worked out and shown, and Done never waits for an approval. Set that where something other than a person closes tasks (a companion's close, the orchestrator). `repos.<name>.review.approvals` overrides it for one repository. |
 
 Edits apply from the next reload of config.json.
 

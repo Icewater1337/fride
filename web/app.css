@@ -1031,6 +1031,24 @@ button.chip:hover { color: var(--fg); background: var(--bg3); }
 .rv-risk .i { width: 12px; height: 12px; }
 .rv-risk.lvl-medium { color: var(--amber); background: var(--amber-soft); }
 .rv-risk.lvl-high { color: var(--red); background: var(--red-soft); }
+/* review tiers and approvals */
+.rv-gatechip { cursor: pointer; color: var(--amber); background: var(--amber-soft); }
+.rv-gatechip.tier-risky { color: var(--red); background: var(--red-soft); }
+.rv-gatechip.ready { color: var(--green); background: var(--green-soft); }
+.rv-gatecard { grid-column: 1 / -1; font-size: 12.5px; }
+.rv-gatecard.waiting { border-color: var(--amber); }
+.rv-gline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.rv-grepos { margin-bottom: 4px; }
+.rv-gwhy { margin: 4px 0 6px; padding-left: 18px; }
+.rv-gwhy li { margin: 1px 0; overflow-wrap: anywhere; }
+.rv-gwhy a { color: var(--accent-fg); text-decoration: none; font-family: var(--mono); font-size: 11.5px; }
+.rv-gwhy a:hover { text-decoration: underline; }
+.rv-appr { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 3px 0; }
+.rv-appr.void b { color: var(--dim); text-decoration: line-through; }
+.rv-gacc { margin: 6px 0 2px; overflow-wrap: anywhere; }
+.rv-gbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.rv-gother { display: inline-flex; gap: 6px; align-items: center; }
+.rv-gother input { width: 220px; height: 28px; }
 .rv-layer { display: flex; align-items: baseline; gap: 8px; margin: 16px 2px 8px; font-size: 13px; }
 .rv-layer .n { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 600; color: var(--accent-fg); background: var(--accent-soft); align-self: center; }

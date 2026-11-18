@@ -194,6 +194,30 @@ func TestFleetEndToEnd(t *testing.T) {
 		t.Fatalf("after the move alpha's board = %v", board)
 	}
 
+	// The change on beta, approved from alpha. Through the node proxy, only a
+	// browser's request counts: alpha says so, since beta never sees the Origin.
+	var gate struct {
+		Version map[string]any `json:"version"`
+		Have    int            `json:"have"`
+	}
+	call(alpha, "GET", "/api/node/beta/tasks/proj-7-travel/changes/gate", nil, &gate)
+	call(alpha, "POST", "/api/node/beta/tasks/proj-7-travel/changes/approve", map[string]any{"version": gate.Version}, &gate)
+	if gate.Have != 0 {
+		t.Fatalf("an approval from no browser counted through the proxy")
+	}
+	ab, _ := json.Marshal(map[string]any{"version": gate.Version})
+	areq, _ := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d/api/node/beta/tasks/proj-7-travel/changes/approve", alpha.port), bytes.NewReader(ab))
+	areq.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", alpha.port))
+	ares, err := http.DefaultClient.Do(areq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = json.NewDecoder(ares.Body).Decode(&gate)
+	ares.Body.Close()
+	if ares.StatusCode != 201 || gate.Have != 1 {
+		t.Fatalf("a browser's approval through the proxy: %s, have %d%s", ares.Status, gate.Have, logs())
+	}
+
 	// A shell on beta, opened through alpha's server.
 	var sess struct {
 		ID string `json:"id"`

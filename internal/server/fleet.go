@@ -346,6 +346,12 @@ func (s *Server) handleNodeProxy(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Header.Del("Origin")
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Referer")
+			// Said for the Origin removed above: the other node counts a
+			// review approval only from a person's browser (review.go).
+			pr.Out.Header.Del(fromBrowser)
+			if pr.In.Header.Get("Origin") != "" {
+				pr.Out.Header.Set(fromBrowser, "1")
+			}
 		},
 		Transport:     s.fleet.stream.Transport,
 		FlushInterval: -1,

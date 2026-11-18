@@ -157,9 +157,13 @@ func cmdIncident(cfg *config.Config, args []string) {
 	fmt.Printf("incident recorded on %s %s (%s); it is in the eval set now\n", c.ID, c.Ref(), c.Slug)
 }
 
-// cmdReview is `fride review …`; for now only the eval replay.
+// cmdReview is `fride review …`: the gate (review_cli.go) and the eval replay.
 func cmdReview(cfg *config.Config, st *store.Store, args []string) {
-	usage := "usage: fride review eval [--max N] [--json] | review eval cases [--json] | review eval runs [--json]"
+	usage := "usage: fride review gate [task] [--json] | review eval [--max N] [--json] | review eval cases [--json] | review eval runs [--json]"
+	if len(args) > 0 && args[0] == "gate" {
+		cmdReviewGate(cfg, st, args[1:])
+		return
+	}
 	if len(args) == 0 || args[0] != "eval" {
 		check(errors.New(usage))
 	}

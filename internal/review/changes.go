@@ -48,7 +48,12 @@ type File struct {
 	Noise    string `json:"noise,omitempty"`
 	NoiseWhy string `json:"noiseWhy,omitempty"`
 	// Layer is where the file sits in the tour: see Layers.
-	Layer     string `json:"layer"`
+	Layer string `json:"layer"`
+	// Tier is the review tier its path puts it in, TierWhy the rule's reason
+	// and TierRule whose rule it was: see tier.go.
+	Tier      string `json:"tier,omitempty"`
+	TierWhy   string `json:"tierWhy,omitempty"`
+	TierRule  string `json:"tierRule,omitempty"`
 	Hunks     []Hunk `json:"hunks"`
 	Truncated bool   `json:"truncated,omitempty"`
 	// Withheld marks a file that holds credentials (.env, keys): its lines are

@@ -101,6 +101,10 @@ type Repo struct {
 	// ("npm ci && npm test"). The Review tab's revert check runs it with the
 	// change reverted, to see whether the tests notice.
 	Test string `json:"test,omitempty"`
+	// Review says how much human review a change to this repo needs: its
+	// tier rules come before the repo's own .fride/review.json and FrIDE's
+	// defaults (docs/REVIEW.md).
+	Review *RepoReview `json:"review,omitempty"`
 }
 
 // Step is one setup command.
