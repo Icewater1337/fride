@@ -17,7 +17,10 @@
   prHourlyLimit: 0,
   prConcurrentLimit: 20,
   labels: ["dependencies"],
-  dependencyDashboard: true,
+  // The object form is what Renovate's schema wants now. Written by hand:
+  // Renovate's own config migration rewrites the file and drops every
+  // comment in it.
+  dependencyDashboard: { enabled: true },
   osvVulnerabilityAlerts: true,
   vulnerabilityAlerts: {
     labels: ["dependencies", "security"],
