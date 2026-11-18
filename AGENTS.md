@@ -50,7 +50,10 @@ internal/gitid           git identities: token store, a task's environment, the
 internal/task            task creation, shared by the CLI, the server and the orchestrator
 internal/agent           agent CLIs: flags, detection, transcripts
 internal/jsonl           reading JSONL that survives long lines and reports errors
-internal/orchestrator    the supervising agent above the task agents, and its inbox
+internal/forge           a task branch's pull request through gh / glab: state, CI with
+                         log tails, conflicts, reviews; the watcher that polls them
+internal/orchestrator    the supervising agent above the task agents, and its inbox;
+                         prfeedback.go types PR news (CI, reviews, conflicts) into agents
 internal/term            PTY sessions (agent and shell tabs)
 internal/store           tasks.json, flock'd (the CLI and the server share it)
 internal/journal         decision log, rationale document, ledger, idea pages

@@ -130,6 +130,7 @@ backend's compose file.
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
+| `pullRequests` | `{ "watch": true, "feedback": true }`: follow the pull requests of task branches, and tell agents what is wrong with theirs. On unless turned off. See [pullRequests](#pullrequests). |
 
 ## repos.&lt;name&gt;
 
@@ -420,6 +421,68 @@ sets are in `$FRIDE_HOME/git-identities.companion.json`, and one of yours
 with the same id wins. `fride config check` checks each identity, that ids
 are unique, and that `default` names one of them. Edits apply from the next
 reload of config.json, to tasks created and sessions started after it.
+
+## pullRequests
+
+Once a task's branch has a pull request (a merge request, on GitLab), FrIDE
+follows it: its state, its CI, whether it conflicts with its base, and the
+reviews and review threads still open. Each card on the board shows its
+task's pull requests, coloured by what they need; a task whose pull requests
+have all merged (and none is open) is shown under Done, until you drop it
+there to close it. The orchestrator's prompt carries the same facts.
+
+For a task the orchestrator supervises, or an inbox thread follows, FrIDE
+also types what is wrong into the task's agent, without a model call:
+
+- **CI failed**, once every check of the head commit has finished: each
+  failed check with its link and the last 20 lines of its log (GitHub
+  Actions and GitLab CI; terminal escapes stripped; for GitHub, the lines
+  up to the step's error rather than the runner's cleanup after it);
+- **changes requested**, one message per review;
+- **an unresolved review thread**, one message per thread, with its
+  comments; again when a reviewer answers in it, not when the pull
+  request's author does;
+- **a merge conflict** with the base ("rebase onto it"), but not for a pull
+  request stacked on another open one, whose conflicts its parent's merge
+  settles.
+
+Each is a message of its own, typed only while the agent sits at its prompt
+(not working, not on a dialog, not just told something, no instruction held
+for it), one per look; the next waits until it is back at its prompt. Each
+is told once, and one condition at most 3 times (three failing commits in a
+row, three rounds on one thread): then the threads following the task are
+told FrIDE has stopped, instead. CI that passes, and a pull request that is
+mergeable again, start over. Whoever follows the task hears of every
+message typed. What was told is kept in the orchestrator's state, so a
+restart repeats nothing.
+
+```json
+"pullRequests": { "watch": true, "feedback": false }
+```
+
+| field | meaning |
+|---|---|
+| `watch` | Look the pull requests up and show them. Default `true`. `false` turns all of this off. |
+| `feedback` | Type what is wrong into the agents. Default `true`; nothing is typed while `watch` is off. |
+
+FrIDE asks through `gh` (GitHub) and `glab` (GitLab), run in the task's
+worktree with the task's [git identity](GIT.md), so it asks as the account
+the agent pushes as; a task without one uses the tools' own login. Which
+tool is told by the host of the worktree's `origin`, as identities are
+chosen: the identity for that host names it, else `github.com` is GitHub and
+`gitlab.com` or a `gitlab.*` host is GitLab. Only branches that have been
+pushed are asked about. An open pull request is looked up every 45 seconds,
+its review threads every 2 minutes, a pushed branch without one every 2
+minutes, a merged one every 10; a failing lookup waits longer each time.
+Without the tool, without a login, or on any other host, nothing is shown
+and nothing typed; a failure is logged once, not on every round.
+
+The token the tool uses needs to read, besides the repository:
+
+| | |
+|---|---|
+| GitHub, fine-grained token or app | **Pull requests: read** (the pull request, reviews, review threads), **Checks: read** and **Commit statuses: read** (CI), **Actions: read** (job logs). A classic token needs `repo`. |
+| GitLab | `read_api` (or `api`), as a member who can see the project's pipelines and job logs. |
 
 ## requirements
 
