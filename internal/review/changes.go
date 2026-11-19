@@ -105,6 +105,9 @@ type RepoChanges struct {
 	Head      string `json:"head,omitempty"`
 	Files     []File `json:"files"`
 	Err       string `json:"err,omitempty"`
+	// status is `git status --porcelain` while Err is set: with no diff to
+	// hash, it and Head are what repoHash can tell versions apart by.
+	status string
 }
 
 // lineBudget is shared by every file of every repo in one request, so the cap
@@ -120,13 +123,24 @@ func newBudget() *lineBudget { return &lineBudget{left: maxTotalLines} }
 // Against the merge-base rather than the base tip, as workspace.Stats counts:
 // the base may have moved on since the worktree was made, and its new commits
 // would otherwise show up as the agent deleting them.
-func Diff(dir, repo, base string, budget *lineBudget) RepoChanges {
-	rc := RepoChanges{Repo: repo, Base: base, Files: []File{}}
+//
+// base "" is no base at all (see baseOf): an error, never an empty change.
+func Diff(dir, repo, base string, budget *lineBudget) (rc RepoChanges) {
+	rc = RepoChanges{Repo: repo, Base: base, Files: []File{}}
+	defer func() {
+		if rc.Err != "" {
+			rc.status, _ = gitRaw(dir, "status", "--porcelain", "-z", "--untracked-files=all")
+		}
+	}()
 	if b, err := git(dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 		rc.Branch = b
 	}
 	if h, err := git(dir, "rev-parse", "HEAD"); err == nil {
 		rc.Head = h
+	}
+	if base == "" {
+		rc.Err = "no base to compare against: the branch would be its own base, and no default base was found"
+		return rc
 	}
 	mb, err := git(dir, "merge-base", base, "HEAD")
 	if err != nil || mb == "" {

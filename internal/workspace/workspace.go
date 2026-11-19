@@ -116,6 +116,14 @@ func DefaultBase(mainCheckout string) string {
 	return "HEAD"
 }
 
+// OwnBranch reports whether base names the branch itself (or its origin
+// copy, which `fride pr` pushes to HEAD): a diff against it is empty once the
+// work is committed, so it is never a review base. "HEAD" is the same thing.
+func OwnBranch(base, branch string) bool {
+	base = strings.TrimPrefix(strings.TrimPrefix(base, "refs/heads/"), "refs/remotes/")
+	return base == "HEAD" || base == branch || base == "origin/"+branch
+}
+
 // BranchName is the fallback branch for a task that names none. It is only a
 // default: the branch is what gets pushed and reviewed, so the user chooses it.
 func BranchName(slug string) string { return "worktree-" + slug }
@@ -309,16 +317,20 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 		start := base
 		_, localErr := git(repo.Main, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 		_, remoteErr := git(repo.Main, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+		// The base stays what the branch is compared against even when the
+		// branch is continued: the review gate diffs against merge-base(base,
+		// HEAD), and the branch as its own base would show only uncommitted work.
+		if OwnBranch(c.BaseRef, branch) {
+			c.BaseRef = DefaultBase(repo.Main)
+		}
 		switch {
 		case localErr == nil:
-			// Continue the existing branch where it stands, ignoring base.
+			// Continue the existing branch where it stands; base is not its start.
 			addArgs = []string{"worktree", "add", dest, branch}
-			c.Notes = append(c.Notes, "branch "+branch+" already existed — continuing it (base ref ignored)")
-			c.BaseRef = branch
+			c.Notes = append(c.Notes, "branch "+branch+" already existed — continuing it, reviewed against "+c.BaseRef)
 		case remoteErr == nil:
 			addArgs = []string{"worktree", "add", "--track", "-b", branch, dest, "origin/" + branch}
-			c.Notes = append(c.Notes, "branch "+branch+" existed on origin — checked out and tracking it")
-			c.BaseRef = "origin/" + branch
+			c.Notes = append(c.Notes, "branch "+branch+" existed on origin — checked out and tracking it, reviewed against "+c.BaseRef)
 			start = "refs/remotes/origin/" + branch
 		default:
 			addArgs = []string{"worktree", "add", "--no-track", "-b", branch, dest, base}
