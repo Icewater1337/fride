@@ -786,6 +786,11 @@ func anchors(c Changes) map[string]Anchor {
 
 func repoHash(rc RepoChanges) string {
 	var b strings.Builder
+	// An unreadable change has no files, so every one would hash alike and an
+	// approval given then would stay current while the code moves on.
+	if rc.Err != "" {
+		b.WriteString(rc.Err + "\x00" + rc.Head + "\x00" + rc.status + "\x00")
+	}
 	for _, f := range rc.Files {
 		b.WriteString(f.Path + "@" + f.Hash + "\x00")
 	}

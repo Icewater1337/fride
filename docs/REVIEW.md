@@ -442,7 +442,11 @@ whether code runs behind a flag, so flag-guarded code is auto only where a
 repository's rules say so. A rules file that does not parse, or names a tier
 that does not exist, makes its repository risky until it is fixed, since its
 rules may have raised a tier; a config.json rule with an unknown tier counts as
-risky; a repository whose change cannot be read is at least normal.
+risky. A repository whose change cannot be read (its base cannot be resolved,
+say) is risky and takes no approval: the task is not Done until it can be read.
+A task that continues an existing branch is reviewed against the base it was
+created with, else the repository's default base, never against the branch
+itself or its `origin/` copy; with no other base it cannot be read.
 
 The tier is separate from the [risk score](#phase-3-scale): the score weighs
 the evidence, the tier only the paths, so a team can agree on it as rules. The

@@ -80,6 +80,10 @@ type Gate struct {
 	// You is who an approval from this computer is recorded as, unless the
 	// reviewer names someone else.
 	You string `json:"you,omitempty"`
+	// Unreadable names a repo whose change could not be read, and why. Until
+	// it can be, nobody can have read it: no approval is taken and the gate
+	// is not ready, however many approvals it has.
+	Unreadable string `json:"unreadable,omitempty"`
 }
 
 const (
@@ -202,12 +206,18 @@ const maxNonHuman = 5
 // ErrMoved refuses an approval of a version that is no longer the change.
 var ErrMoved = errors.New("the change moved on since the page was drawn: refresh, read what changed, then approve")
 
+// ErrUnreadable refuses an approval while a repo's change cannot be read.
+var ErrUnreadable = errors.New("a repository's change cannot be read, so it cannot be approved")
+
 // ApproveCurrent records an approval of a.Version, which must be the change
 // as it is now: approving what the agent has since rewritten would vouch for
 // code nobody read. An approval that names nobody is recorded as the person
 // FrIDE knows on this computer (PersonOf). It returns the gate after it.
 func ApproveCurrent(cfg *config.Config, t *store.Task, a Approval) (Gate, error) {
 	g := GateFor(cfg, t)
+	if g.Unreadable != "" {
+		return g, fmt.Errorf("%w: %s", ErrUnreadable, g.Unreadable)
+	}
 	if !sameVersion(a.Version, g.Version) {
 		return g, ErrMoved
 	}
@@ -261,6 +271,9 @@ func gate(repos []RepoChanges, tiers []RepoTier, kept Kept) Gate {
 	}
 	for _, rc := range repos {
 		g.Version[rc.Repo] = Anchor{Head: rc.Head, Hash: repoHash(rc)}
+		if rc.Err != "" && g.Unreadable == "" {
+			g.Unreadable = rc.Repo + " (" + rc.Err + ")"
+		}
 		for _, f := range rc.Files {
 			if f.Tier != g.Tier {
 				continue
@@ -289,7 +302,7 @@ func gate(repos []RepoChanges, tiers []RepoTier, kept Kept) Gate {
 		}
 		g.Approvals = append(g.Approvals, a)
 	}
-	g.Ready = g.Have >= g.Need
+	g.Ready = g.Have >= g.Need && g.Unreadable == ""
 	return g
 }
 
@@ -307,10 +320,7 @@ func Specs(cfg *config.Config, t *store.Task) []RepoSpec {
 			continue
 		}
 		dir := cfg.RepoDir(t.Slug, tr.Name)
-		base := tr.BaseRef
-		if base == "" {
-			base = workspace.DefaultBase(dir)
-		}
+		base := baseOf(cfg, tr, dir)
 		var rv *settings.RepoReview
 		if cfg.Settings != nil {
 			rv = cfg.Settings.Repo(tr.Name).Review
@@ -319,6 +329,29 @@ func Specs(cfg *config.Config, t *store.Task) []RepoSpec {
 			Approvals: cfg.Settings.ApprovalsFor(tr.Name)})
 	}
 	return repos
+}
+
+// baseOf is what a task's repo is reviewed against. A task that continued an
+// existing branch was once stored with that branch (or origin/<branch>) as its
+// base, which diffs the branch against itself: such a base, like none, is the
+// repo's default base. The default comes from the main checkout, since in a
+// repo without a remote the worktree's own branch is its default. "" is no
+// base at all, which Diff reports as an error: never an empty change.
+func baseOf(cfg *config.Config, tr store.TaskRepo, dir string) string {
+	cur, _ := git(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	own := func(b string) bool { return workspace.OwnBranch(b, tr.Branch) || workspace.OwnBranch(b, cur) }
+	base := tr.BaseRef
+	if base == "" || own(base) {
+		main := dir
+		if r, ok := cfg.Repo(tr.Name); ok {
+			main = r.Main
+		}
+		base = workspace.DefaultBase(main)
+	}
+	if own(base) {
+		return ""
+	}
+	return base
 }
 
 // KeptFor is LoadKept, with the accountable person worked out for a task
@@ -365,7 +398,9 @@ func checkApprovals(cfg *config.Config, slug string) error {
 		if t.Slug != slug {
 			continue
 		}
-		if g := GateFor(cfg, t); !g.Ready {
+		if g := GateFor(cfg, t); g.Unreadable != "" {
+			return errors.New(g.Missing())
+		} else if !g.Ready {
 			return fmt.Errorf("%s: a person approves it in the Review tab first", g.Missing())
 		}
 	}
@@ -376,6 +411,9 @@ func checkApprovals(cfg *config.Config, slug string) error {
 func (g Gate) Missing() string {
 	if g.Ready {
 		return ""
+	}
+	if g.Unreadable != "" {
+		return "the change of " + g.Unreadable + " cannot be read, and no approval counts until it can"
 	}
 	why := ""
 	switch {
