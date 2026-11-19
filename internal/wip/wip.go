@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -33,8 +34,23 @@ func git(dir string, env []string, args ...string) (string, error) {
 // "" when there is nothing uncommitted. It touches neither the worktree, nor
 // its index, nor its branch: a throwaway index builds the tree. The commit is
 // referenced by nothing, so the caller points a ref at it before a gc could
-// take it.
+// take it. A git repository of its own inside the worktree is refused: `add
+// -A` would record only its commit pointer (a gitlink), not its files or
+// history, and the caller would then lose it.
 func Commit(wt, head, message string) (string, error) {
+	others, err := git(wt, nil, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return "", err
+	}
+	for _, f := range strings.Split(others, "\x00") {
+		// git lists a nested repository as one entry, its folder with a trailing slash.
+		if !strings.HasSuffix(f, "/") {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(wt, f, ".git")); err == nil {
+			return "", fmt.Errorf("%s is a git repository of its own, which cannot be kept — move it out of the workspace first", f)
+		}
+	}
 	// A path, not a file: git treats an existing empty file as a corrupt index.
 	idx, err := os.CreateTemp("", "fride-index-*")
 	if err != nil {
