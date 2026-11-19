@@ -490,3 +490,16 @@ func TestUntrustedThreadCommentsAreLeftOut(t *testing.T) {
 		t.Fatalf("notes = %q, want one about @eve", notes)
 	}
 }
+
+// fride#199: a GitHub App's pull request is "app/name", its replies are
+// "name[bot]"; its own reply leaves the thread to the reviewer.
+func TestThreadSigKnowsAnAppsReplies(t *testing.T) {
+	cs := []forge.Comment{{ID: "1", Author: "reviewer"}, {ID: "2", Author: "fride-app[bot]"}}
+	if s := threadSig(cs, "app/fride-app"); s != "" {
+		t.Fatalf("the app's own reply is news: %q", s)
+	}
+	cs = append(cs, forge.Comment{ID: "3", Author: "reviewer"})
+	if s := threadSig(cs, "app/fride-app"); s != "3" {
+		t.Fatalf("the reviewer's answer: %q", s)
+	}
+}

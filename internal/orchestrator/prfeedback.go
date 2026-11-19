@@ -338,14 +338,15 @@ func prURLOf(key string) string {
 // the pull request's author replying, which leaves it the reviewer's turn
 // and nothing to tell. The thread's first comment counts whoever wrote it: on
 // a pull request opened with the user's own account, the user's comments are
-// the author's too.
+// the author's too. The author is matched as forge matches it, so a GitHub
+// App's "name[bot]" replies are its "app/name" pull request's author's.
 func threadSig(cs []forge.Comment, author string) string {
 	n := len(cs)
 	if n == 0 {
 		return ""
 	}
 	last := cs[n-1]
-	if n > 1 && author != "" && strings.EqualFold(last.Author, author) {
+	if n > 1 && forge.IsAuthor(last.Author, author) {
 		return ""
 	}
 	return last.ID

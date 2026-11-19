@@ -135,9 +135,9 @@ const (
 // trusted is the Trust of someone who may push, or who opened the pull request.
 var trusted = Trust{Trusted: true}
 
-// isAuthor is whether login opened the pull request: the account the task
+// IsAuthor is whether login opened the pull request: the account the task
 // pushes as, normally, whose words are the user's own.
-func isAuthor(login, prAuthor string) bool {
+func IsAuthor(login, prAuthor string) bool {
 	login, prAuthor = account(login), account(prAuthor)
 	return login != "" && prAuthor != "" && strings.EqualFold(login, prAuthor)
 }

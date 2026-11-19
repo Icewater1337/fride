@@ -216,6 +216,80 @@ func TestGitHubMerged(t *testing.T) {
 	}
 }
 
+// fride#202: a thread longer than a page is read as its first comment and its
+// latest ones, so a reviewer's newest reply is the thread's last comment.
+func TestGitHubLongThreadEndsWithItsLatestComment(t *testing.T) {
+	node := func(i int) string {
+		who := "dev"
+		if i%2 == 0 {
+			who = "alice"
+		}
+		return fmt.Sprintf(`{"id": "C_%d", "url": "u%d", "body": "b%d", "authorAssociation": "OWNER", "author": {"login": %q}}`, i, i, i, who)
+	}
+	var last []string
+	for i := 3; i <= 22; i++ { // what comments(last: 20) gives of 22
+		last = append(last, node(i))
+	}
+	out := `{"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [
+	  {"id": "RT_1", "isResolved": false, "path": "a.go", "line": 1,
+	   "head": {"nodes": [` + node(1) + `]},
+	   "comments": {"nodes": [` + strings.Join(last, ",") + `]}}]}}}}}`
+	f := (&fakeRun{t: t}).on("gh api graphql", out)
+	ths, err := Client{Run: f.run}.githubThreads(context.Background(), ghTarget(), "github.com", "acme/backend", 7, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ths) != 1 || len(ths[0].Comments) != 21 {
+		t.Fatalf("threads = %+v", ths)
+	}
+	cs := ths[0].Comments
+	if cs[0].ID != "C_1" || ths[0].URL != "u1" || cs[20].ID != "C_22" || cs[20].Author != "alice" {
+		t.Fatalf("first %+v, last %+v, url %q", cs[0], cs[20], ths[0].URL)
+	}
+	if !strings.Contains(f.calls[0], "comments(last: 20)") {
+		t.Fatalf("query: %s", f.calls[0])
+	}
+}
+
+// A short thread's first comment is among its latest: it is not doubled.
+func TestGitHubShortThreadIsReadOnce(t *testing.T) {
+	out := `{"data": {"repository": {"pullRequest": {"reviewThreads": {"nodes": [
+	  {"id": "RT_1", "isResolved": false,
+	   "head": {"nodes": [{"id": "C_1", "author": {"login": "alice"}}]},
+	   "comments": {"nodes": [{"id": "C_1", "author": {"login": "alice"}}, {"id": "C_2", "author": {"login": "dev"}}]}}]}}}}}`
+	f := (&fakeRun{t: t}).on("gh api graphql", out)
+	ths, err := Client{Run: f.run}.githubThreads(context.Background(), ghTarget(), "github.com", "acme/backend", 7, "dev")
+	if err != nil || len(ths) != 1 || len(ths[0].Comments) != 2 {
+		t.Fatalf("%+v %v", ths, err)
+	}
+}
+
+// fride#203: a busy merge request's discussions span pages; an unresolved
+// comment on the second page is read.
+func TestGitLabDiscussionsAreReadAcrossPages(t *testing.T) {
+	var page1 []string
+	for i := 1; i <= 100; i++ {
+		page1 = append(page1, fmt.Sprintf(`{"id": "s%d", "notes": [{"id": %d, "body": "added 1 commit", "system": true}]}`, i, 1000+i))
+	}
+	f := (&fakeRun{t: t}).
+		on("projects/group%2Fapi/merge_requests?source_branch=feat%2Flogin", glList).
+		on("discussions?per_page=100&page=1", "["+strings.Join(page1, ",")+"]").
+		on("discussions?per_page=100&page=2", `[
+		  {"id": "d2", "notes": [{"id": 2, "body": "Rename it", "author": {"id": 11, "username": "alice"}, "resolvable": true,
+		    "resolved": false, "position": {"new_path": "a.go", "new_line": 3}}]}]`).
+		on("projects/99/merge_requests/5/reviewers", `[]`).
+		on("projects/99/members/all/11", `{"id": 11, "username": "alice", "access_level": 30}`).
+		on("projects/99/merge_requests/5", strings.Replace(glMRJSON, `"head_pipeline": {"id": 77, "status": "failed", "web_url": "https://gitlab.example.com/p/77"}`, `"head_pipeline": null`, 1)).
+		on("source_branch=main&state=opened", `[]`)
+	pr, err := Client{Run: f.run, members: newMemberCache()}.Lookup(context.Background(), glTarget(), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.Threads) != 1 || pr.Threads[0].ID != "d2" || f.count("discussions?") != 2 {
+		t.Fatalf("threads = %+v after %q", pr.Threads, f.calls)
+	}
+}
+
 // An app that opened the pull request is its author in its comments too.
 func TestGitHubTrustOfTheAuthor(t *testing.T) {
 	if tr := githubTrust("NONE", "fride-app[bot]", "app/fride-app"); !tr.Trusted {
