@@ -154,10 +154,10 @@ func (h orchHost) StackDown(slug string) error {
 	return err
 }
 
+// StartAgent opens a new agent tab even beside a running one: new work asked
+// for in the chat gets its own session rather than being typed into the one the
+// user is working in. Whether a turn may do that is the orchestrator's to check.
 func (h orchHost) StartAgent(slug string) error {
-	if sess := h.s.terms.AgentSession(slug); sess != nil {
-		return fmt.Errorf("%s already has an agent session running", slug)
-	}
 	_, err := h.s.startAgent(slug, "")
 	return err
 }
@@ -379,8 +379,8 @@ func (h orchHost) typeLine(slug string, sess *term.Session, dir, id, text string
 // recorded nothing and cannot be resumed; it has nothing to lose either, so it
 // is started afresh.
 func (h orchHost) restartAgent(slug string, sess *term.Session, id string) (*term.Session, error) {
-	// One agent per task: with another agent tab alive, StartAgent/ResumeAgent
-	// would refuse after this one was closed, leaving the task without it (#135).
+	// With another agent tab alive, ResumeAgent would refuse after this one was
+	// closed, leaving the task without it (#135).
 	for _, o := range h.s.terms.ForTask(slug) {
 		if o.Kind == term.KindAgent && o.Alive() && o.ID != sess.ID {
 			return nil, fmt.Errorf("another agent tab of the task is open (%q, %s), so FrIDE did not restart this one; look at the task's tab", o.Title, o.ID)
