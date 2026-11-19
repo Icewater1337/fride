@@ -218,7 +218,8 @@ func tierFiles(rc *RepoChanges, rules []rule, rulesErr error, approvals settings
 		// until they can be read, the repo gets the most review.
 		rt.Tier, rt.Err = settings.TierRisky, "its own review rules could not be read: "+rulesErr.Error()
 	case rc.Err != "":
-		raise(settings.TierNormal)
+		// Whatever it holds is unseen, auth or migrations alike.
+		rt.Tier = settings.TierRisky
 		rt.Err = "its change could not be read: " + rc.Err
 	}
 	rt.Need = approvals.For(rt.Tier)

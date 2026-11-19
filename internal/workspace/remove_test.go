@@ -303,3 +303,23 @@ func TestPurgeKeepsAWorktreeOfAnUndiscoveredRepo(t *testing.T) {
 		t.Errorf("results = %+v", res)
 	}
 }
+
+// #197: continuing an existing branch keeps a real base, never the branch
+// itself, which would diff the task's committed work to nothing.
+func TestCreateOnAnExistingBranchKeepsItsBase(t *testing.T) {
+	cfg, api := setup(t, true)
+	run(t, api, "branch", "feat/x")
+	run(t, api, "push", "-q", "origin", "feat/x:feat/y")
+	run(t, api, "fetch", "-q", "origin")
+	// A local branch with the default base, and an origin-only one picked as its own base.
+	for slug, sp := range map[string][2]string{"t1": {"feat/x", ""}, "t2": {"feat/y", "origin/feat/y"}} {
+		branch := sp[0]
+		out, err := Create(cfg, slug, []RepoSpec{{Name: "api", BaseRef: sp[1]}}, "claude", branch, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out[0].BaseRef != "origin/main" {
+			t.Errorf("%s: base %q, want origin/main", branch, out[0].BaseRef)
+		}
+	}
+}

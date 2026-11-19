@@ -1,6 +1,7 @@
 package review
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -192,7 +193,7 @@ func TestHighestTierWins(t *testing.T) {
 	}
 	// A repo whose change cannot be read is not waved through.
 	bad := RepoChanges{Repo: "x", Err: "cannot resolve the base main"}
-	if g := gate([]RepoChanges{bad}, []RepoTier{tierFiles(&bad, rules, nil, nil)}, Kept{}); g.Ready || g.Tier != "normal" ||
+	if g := gate([]RepoChanges{bad}, []RepoTier{tierFiles(&bad, rules, nil, nil)}, Kept{}); g.Ready || g.Tier != "risky" ||
 		!strings.Contains(g.Missing(), "cannot resolve") {
 		t.Errorf("unreadable change: %+v %q", g, g.Missing())
 	}
@@ -363,6 +364,91 @@ func TestDoneWaitsForApprovals(t *testing.T) {
 	}
 	if err := CheckDone(cfg, "t1"); err != nil {
 		t.Fatalf("two approvals of a risky change: %v", err)
+	}
+}
+
+// #197: a task that continues an existing branch was stored with the branch
+// itself as its base, so its committed work diffed to nothing and went Done
+// unapproved. The gate reviews it against the default base instead, and the
+// rules file the agent committed on the branch does not lower its tier.
+func TestContinuedBranchIsReviewedAgainstItsBase(t *testing.T) {
+	cfg, st, task, dir := gateTask(t)
+	gitT(t, cfg.Repos[0].Main, "switch", "-q", "main") // its default base: main
+	cfg.Settings = &settings.Settings{Repos: map[string]*settings.Repo{"api": {Review: &settings.RepoReview{
+		Tiers: []settings.TierRule{{Tier: "normal", Paths: []string{"auth/**"}}}}}}}
+	write(t, dir, "auth/login.go", "package auth\n\nfunc Login() {}\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "auth")
+
+	for _, base := range []string{"work", "origin/work"} {
+		task.Repos[0].BaseRef = base
+		if _, err := st.Update("t1", func(x *store.Task) error { x.Repos[0].BaseRef = base; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		// What `fride pr` leaves behind: origin/<branch> pushed to HEAD.
+		gitT(t, dir, "update-ref", "refs/remotes/origin/work", "HEAD")
+		g := GateFor(cfg, task)
+		if g.Ready || g.Need != 1 || len(g.Why) != 1 || g.Why[0].Path != "auth/login.go" {
+			t.Fatalf("base %s: committed auth change passed the gate: %+v", base, g)
+		}
+		if err := CheckDone(cfg, "t1"); err == nil {
+			t.Fatalf("base %s: went Done with no approval", base)
+		}
+	}
+
+	// The agent commits a rules file that would wave auth through: the rules
+	// are read at the base, so auth/login.go keeps its tier.
+	write(t, dir, RulesFile, `{"tiers": [{"tier": "auto", "paths": ["**"]}]}`)
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "rules")
+	sp := Specs(cfg, task)[0]
+	rc := Diff(sp.Dir, sp.Name, sp.Base, newBudget())
+	placeRepo(sp, &rc)
+	if f := byPath(rc)["auth/login.go"]; f.Tier != "normal" || f.TierRule != "config.json" {
+		t.Errorf("the branch's own rules file applied to it: %+v", f)
+	}
+
+	// No base other than the branch itself: refused, never an empty change.
+	gitT(t, cfg.Repos[0].Main, "switch", "-q", "work")
+	gitT(t, dir, "update-ref", "-d", "refs/remotes/origin/main")
+	g := GateFor(cfg, task)
+	if g.Ready || g.Tier != "risky" || g.Unreadable == "" {
+		t.Fatalf("no base: %+v", g)
+	}
+	if err := CheckDone(cfg, "t1"); err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Fatalf("no base went Done: %v", err)
+	}
+}
+
+// #201: while a repo's change cannot be read, no approval is taken and the
+// gate is not ready; one given before goes stale once the code moves.
+func TestUnreadableChangeTakesNoApproval(t *testing.T) {
+	cfg, _, task, dir := gateTask(t)
+	write(t, dir, "server.go", "package api\n\nfunc Serve() { listen() }\n")
+	g := GateFor(cfg, task)
+	// An approval from before this fix, given while the base was gone.
+	gitT(t, dir, "branch", "-q", "-D", "main")
+	gitT(t, dir, "update-ref", "-d", "refs/remotes/origin/main")
+	bad := GateFor(cfg, task)
+	if bad.Unreadable == "" || bad.Ready {
+		t.Fatalf("unresolvable base: %+v", bad)
+	}
+	if _, err := ApproveCurrent(cfg, task, Approval{Via: "browser", Human: true, Version: bad.Version}); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("approved an unreadable change: %v", err)
+	}
+	if err := Approve(cfg, "t1", Approval{By: "Jane <jane@example.com>", Human: true, Version: bad.Version}); err != nil {
+		t.Fatal(err)
+	}
+	if g = GateFor(cfg, task); g.Ready || !g.Approvals[0].Current {
+		t.Fatalf("same state, approval current but gate not ready: %+v", g)
+	}
+	write(t, dir, "server.go", "package api\n\nfunc Serve() { listen(); drop() }\n")
+	gitT(t, dir, "commit", "-qam", "more")
+	if g = GateFor(cfg, task); g.Ready || g.Approvals[0].Current {
+		t.Fatalf("the code moved and the approval stayed current: %+v", g)
+	}
+	if err := CheckDone(cfg, "t1"); err == nil {
+		t.Fatal("an unreadable change went Done")
 	}
 }
 
