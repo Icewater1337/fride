@@ -330,6 +330,35 @@ func TestNoCopyRefusesTheDelete(t *testing.T) {
 	}
 }
 
+// A git repository inside a worktree (fride#198) would be kept only as a
+// gitlink, its files and history lost with the worktree: the forced delete
+// refuses, names it, and deletes nothing.
+func TestNestedRepoRefusesTheDelete(t *testing.T) {
+	cfg, st := trashHome(t, "api")
+	tk := newTask(t, cfg, st, "nest", "api")
+	wt := cfg.RepoDir(tk.Slug, "api")
+	sub := filepath.Join(wt, "sub")
+	writeFile(t, filepath.Join(sub, "a"), "hi\n")
+	git(t, sub, "init", "-q")
+	git(t, sub, "add", "a")
+	git(t, sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+
+	_, _, err := Remove(cfg, st, tk.Slug, RemoveOptions{Force: true})
+	if !errors.Is(err, ErrNoCopy) || !strings.Contains(err.Error(), "sub/") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := readFile(t, filepath.Join(sub, "a")); got != "hi\n" {
+		t.Errorf("sub/a = %q", got)
+	}
+	out(t, sub, "rev-parse", "HEAD")
+	if _, err := st.Get(tk.Slug); err != nil {
+		t.Fatal("the task is gone")
+	}
+	if des, _ := os.ReadDir(trash.Dir(cfg)); len(des) != 0 {
+		t.Errorf("the refused save left %d entr(ies) behind", len(des))
+	}
+}
+
 // A delete that stops part-way — one repository holds what even force keeps —
 // leaves the task, and the trash with the uncommitted work of the
 // repositories it did remove. Nothing else stays in the trash.

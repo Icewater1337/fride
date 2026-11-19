@@ -57,3 +57,38 @@ func TestExpireKeepsWhatItCannotRead(t *testing.T) {
 		t.Errorf("List = %v, %v", list, err)
 	}
 }
+
+// A branch <b>/… is not <b> (fride#200): with feat gone and feat/x present,
+// at the task's commit or another, restore must not take feat/x for feat.
+// git cannot hold feat beside feat/x, so the task comes back on
+// feat-restored.
+func TestPlaceBranchIgnoresBranchesBelowIt(t *testing.T) {
+	for _, same := range []bool{true, false} {
+		repo := t.TempDir()
+		g := func(args ...string) string {
+			t.Helper()
+			out, err := git(repo, append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		}
+		g("init", "-q", "-b", "main")
+		g("commit", "-q", "--allow-empty", "-m", "a")
+		head := g("rev-parse", "HEAD")
+		g("commit", "-q", "--allow-empty", "-m", "b")
+		at := "HEAD"
+		if same {
+			at = head
+		}
+		g("branch", "feat/x", at)
+
+		b, created, note, err := placeBranch(repo, Repo{Branch: "feat", Head: head})
+		if err != nil || b != "feat-restored" || !created {
+			t.Fatalf("same=%v: placeBranch = %q %v %q %v", same, b, created, note, err)
+		}
+		if got := g("rev-parse", "refs/heads/feat-restored"); got != head {
+			t.Errorf("same=%v: feat-restored at %s, want %s", same, got, head)
+		}
+	}
+}

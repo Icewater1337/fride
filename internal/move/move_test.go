@@ -331,3 +331,29 @@ func TestExtractRefusesEscapingPaths(t *testing.T) {
 		}
 	}
 }
+
+// A git repository inside the worktree would travel only as a gitlink — its
+// files and history left behind — so the snapshot refuses it and names it.
+func TestSnapshotRefusesNestedRepo(t *testing.T) {
+	root := t.TempDir()
+	src := newComputer(t, root, "a")
+	repo := filepath.Join(root, "a", "repos", "app")
+	os.MkdirAll(repo, 0o755)
+	run(t, repo, "init", "-q", "-b", "main")
+	write(t, filepath.Join(repo, "f.txt"), "1\n")
+	run(t, repo, "add", "-A")
+	run(t, repo, "commit", "-qm", "base")
+	src.cfg.Reload()
+	wt := src.cfg.RepoDir("nest", "app")
+	run(t, repo, "worktree", "add", "-q", "-b", "feat/nest", wt, "main")
+	sub := filepath.Join(wt, "sub")
+	os.MkdirAll(sub, 0o755)
+	run(t, sub, "init", "-q")
+	write(t, filepath.Join(sub, "a"), "hi\n")
+	run(t, sub, "add", "a")
+	run(t, sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+	task := &store.Task{Slug: "nest", Repos: []store.TaskRepo{{Name: "app", BaseRef: "main", Branch: "feat/nest"}}}
+	if _, err := Snapshot(src.cfg, task, "a"); err == nil || !strings.Contains(err.Error(), "sub/") {
+		t.Fatalf("Snapshot = %v, want a refusal naming sub/", err)
+	}
+}

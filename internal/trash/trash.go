@@ -942,11 +942,14 @@ func placeBranch(main string, r Repo) (branch string, created bool, note string,
 		if workspace.ValidateBranch(b) != nil {
 			break
 		}
-		cur, _ := git(main, "for-each-ref", "--format=%(objectname)", "refs/heads/"+b)
+		// The exact ref: for-each-ref would also match refs/heads/<b>/….
+		cur, _ := git(main, "rev-parse", "--verify", "--quiet", "refs/heads/"+b)
 		if cur == "" {
-			// "" as the old value: created only while it does not exist.
-			if _, err := git(main, "update-ref", "-m", "fride: task restored", "refs/heads/"+b, r.Head, ""); err != nil {
-				return "", false, "", err
+			// "" as the old value: created only while it does not exist. It
+			// also fails while a branch <b>/… exists (git cannot have both),
+			// so the next name is tried rather than failing every restore.
+			if _, err = git(main, "update-ref", "-m", "fride: task restored", "refs/heads/"+b, r.Head, ""); err != nil {
+				continue
 			}
 			switch {
 			case n == 0:
@@ -962,6 +965,9 @@ func placeBranch(main string, r Repo) (branch string, created bool, note string,
 			}
 			return b, false, note, nil
 		}
+	}
+	if err != nil {
+		return "", false, "", err
 	}
 	return "", false, "", fmt.Errorf("branch %s has moved on, and no %s-restored name is free", r.Branch, r.Branch)
 }
