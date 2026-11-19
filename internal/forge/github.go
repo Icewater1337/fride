@@ -289,19 +289,32 @@ func githubRepo(prURL string) (host, repo string) {
 }
 
 // threadsQuery reads a pull request's review threads, the newest hundred,
-// with the first comments of each.
+// with the first comment of each (what was asked) and the latest twenty:
+// the last one is the thread's signature, so it must be the real last one
+// however long the thread is.
 const threadsQuery = `query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       reviewThreads(last: 100) {
         nodes {
           id isResolved isOutdated path line
-          comments(first: 20) { nodes { id url body authorAssociation author { login } } }
+          head: comments(first: 1) { nodes { ...c } }
+          comments(last: 20) { nodes { ...c } }
         }
       }
     }
   }
-}`
+}
+fragment c on PullRequestReviewComment { id url body authorAssociation author { login } }`
+
+type ghComment struct {
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Body   string `json:"body"`
+	Author ghUser `json:"author"`
+	// AuthorAssociation is the author's role in the repository (Trust).
+	AuthorAssociation string `json:"authorAssociation"`
+}
 
 type ghThreads struct {
 	Data struct {
@@ -314,16 +327,11 @@ type ghThreads struct {
 						IsOutdated bool   `json:"isOutdated"`
 						Path       string `json:"path"`
 						Line       int    `json:"line"`
-						Comments   struct {
-							Nodes []struct {
-								ID     string `json:"id"`
-								URL    string `json:"url"`
-								Body   string `json:"body"`
-								Author ghUser `json:"author"`
-								// AuthorAssociation is the author's role
-								// in the repository (Trust).
-								AuthorAssociation string `json:"authorAssociation"`
-							} `json:"nodes"`
+						Head       struct {
+							Nodes []ghComment `json:"nodes"`
+						} `json:"head"`
+						Comments struct {
+							Nodes []ghComment `json:"nodes"`
 						} `json:"comments"`
 					} `json:"nodes"`
 				} `json:"reviewThreads"`
@@ -349,12 +357,17 @@ func (c Client) githubThreads(ctx context.Context, t Target, host, repo string, 
 	}
 	var threads []Thread
 	for _, n := range r.Data.Repository.PullRequest.ReviewThreads.Nodes {
-		if n.IsResolved || len(n.Comments.Nodes) == 0 {
+		cs := n.Comments.Nodes
+		// The latest twenty are contiguous: the first comment is among them
+		// only as their first, else it goes in front.
+		if len(n.Head.Nodes) > 0 && (len(cs) == 0 || cs[0].ID != n.Head.Nodes[0].ID) {
+			cs = append([]ghComment{n.Head.Nodes[0]}, cs...)
+		}
+		if n.IsResolved || len(cs) == 0 {
 			continue
 		}
-		th := Thread{ID: n.ID, Path: n.Path, Line: n.Line, Outdated: n.IsOutdated,
-			URL: n.Comments.Nodes[0].URL}
-		for _, c := range n.Comments.Nodes {
+		th := Thread{ID: n.ID, Path: n.Path, Line: n.Line, Outdated: n.IsOutdated, URL: cs[0].URL}
+		for _, c := range cs {
 			th.Comments = append(th.Comments, Comment{ID: c.ID, Author: c.Author.Login, Body: c.Body,
 				Trust: githubTrust(c.AuthorAssociation, c.Author.Login, prAuthor)})
 		}
@@ -369,7 +382,7 @@ func (c Client) githubThreads(ctx context.Context, t Target, host, repo string, 
 // rest are anyone at all. A role that is missing is not known, and not
 // trusted.
 func githubTrust(association, login, prAuthor string) Trust {
-	if isAuthor(login, prAuthor) {
+	if IsAuthor(login, prAuthor) {
 		return trusted
 	}
 	switch association {

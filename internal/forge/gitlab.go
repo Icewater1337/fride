@@ -224,8 +224,21 @@ func (c Client) gitlab(ctx context.Context, t Target, prev *PR, reviews bool) (*
 
 	switch {
 	case reviews || prev == nil || !prev.ThreadsRead:
+		// GitLab lists discussions oldest first, a system note each, so the
+		// newest, the ones that matter, are on the last page: read them all.
+		// shortcut: stops at 50 pages (5,000 discussions), against a server
+		// that ignores page; raise it if a merge request ever has more.
 		var ds []glDiscussion
-		if err := api(proj+"/merge_requests/"+strconv.Itoa(m.IID)+"/discussions?per_page=100", &ds); err != nil {
+		var err error
+		for page := 1; page <= 50; page++ {
+			var p []glDiscussion
+			err = api(proj+"/merge_requests/"+strconv.Itoa(m.IID)+"/discussions?per_page=100&page="+strconv.Itoa(page), &p)
+			ds = append(ds, p...)
+			if err != nil || len(p) < 100 {
+				break
+			}
+		}
+		if err != nil {
 			errs = append(errs, err.Error())
 			if prev != nil {
 				pr.Threads, pr.ThreadsRead = prev.Threads, prev.ThreadsRead
@@ -293,7 +306,7 @@ func (m glMR) pr() *PR {
 // member at all is answered with a 404; any other failure is reported, and
 // not trusted either.
 func (c Client) gitlabTrust(ctx context.Context, t Target, proj string, u glUser, mrAuthor string) (Trust, error) {
-	if isAuthor(u.Username, mrAuthor) {
+	if IsAuthor(u.Username, mrAuthor) {
 		return trusted, nil
 	}
 	if u.ID == 0 {
