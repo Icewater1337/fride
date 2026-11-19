@@ -599,7 +599,19 @@ func (o *Orchestrator) apply(r Reply, tr turn) {
 	// sessions are still drawing their screens, so an instruction for them is
 	// held until they are ready rather than typed into the start-up.
 	started := map[string]bool{}
+	// notStarted are the tasks whose agent this reply failed to open. An
+	// instruction meant for that agent must not land in the session that was
+	// already running there, which is usually the user's.
+	notStarted := map[string]bool{}
 	for _, a := range r.Actions {
+		if a.Kind == ActSendToAgent && notStarted[a.Task] {
+			o.mu.Lock()
+			o.addTo(RoleError, a.Task, describe(a)+" — not sent: its new agent did not start",
+				tr.threads()...)
+			o.save()
+			o.mu.Unlock()
+			continue
+		}
 		// In "ask" autonomy the loop may look, but not touch. Actions it wanted
 		// are recorded as proposals and the user is asked — the chat is the
 		// approval channel, so answering "go ahead" is what runs them. Outside
@@ -642,6 +654,9 @@ func (o *Orchestrator) apply(r Reply, tr turn) {
 			// sender follows the task, to hear what becomes of it (#118).
 			if tr.thread != 0 && errors.Is(err, ErrNotSeen) {
 				o.link(tr.thread, slug)
+			}
+			if a.Kind == ActStartAgent || a.Kind == ActResumeAgent {
+				notStarted[a.Task] = true
 			}
 			o.addTo(RoleError, a.Task, describe(a)+" — "+err.Error(), tr.threads()...)
 		} else {
@@ -830,6 +845,18 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 		return err
 
 	case ActStartAgent:
+		// A second session beside a running one is for work the user asks for
+		// in the chat. The loop and the inbox start one only where none runs:
+		// unattended, a second agent in the same worktrees is a mistake nobody
+		// is there to see. A look that fails counts as one running.
+		if tr.origin != fromUser {
+			o.mu.Lock()
+			cursor := o.mem.tasks[a.Task].cursor
+			o.mu.Unlock()
+			if ob, err := o.host.Observe(a.Task, cursor); err != nil || ob.Running {
+				return fmt.Errorf("%s already has an agent session running", a.Task)
+			}
+		}
 		return o.host.StartAgent(a.Task)
 	case ActResumeAgent:
 		if err := o.host.ResumeAgent(a.Task, a.Conversation); err != nil {

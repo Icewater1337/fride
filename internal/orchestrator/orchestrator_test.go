@@ -31,6 +31,7 @@ type fakeHost struct {
 	git       map[string][]RepoState
 	sendErr   error
 	resumeErr error
+	startErr  error
 	notes     []Note
 	// onCreate, when set, runs inside CreateTask, before the lock: a tick
 	// landing while apply is busy.
@@ -84,6 +85,9 @@ func (f *fakeHost) StackDown(string) error { return nil }
 func (f *fakeHost) StartAgent(slug string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.startErr != nil {
+		return f.startErr
+	}
 	f.started = append(f.started, slug)
 	return nil
 }
@@ -489,6 +493,54 @@ func TestAFailedResumeIsReportedAndChangesNothing(t *testing.T) {
 	defer o.mu.Unlock()
 	if o.mem.tasks["t1"].cursor != "old-uuid" {
 		t.Fatal("a resume that did not happen must not move the read cursor")
+	}
+}
+
+// New work asked for in the chat gets its own session: the one already running
+// in the task is the user's, and the instruction waits for the new agent.
+// Unattended turns still start one only where none runs, and an instruction
+// whose new agent failed to start never falls back to the running one.
+func TestNewWorkFromTheChatOpensASecondSession(t *testing.T) {
+	work := []Action{
+		{Kind: ActStartAgent, Task: "t1"},
+		{Kind: ActSendToAgent, Task: "t1", Text: "set the depth back to 0"},
+	}
+
+	h := newFakeHost()
+	h.obs["t1"] = Observation{Running: true, Waiting: true}
+	o := newTestOrch(t, h)
+	o.apply(Reply{Actions: work}, user)
+	if _, sent, started := h.counts(); started != 1 || sent != 0 {
+		t.Fatalf("started %d, sent %d: want a new agent and nothing typed into the running one", started, sent)
+	}
+	o.mu.Lock()
+	held := o.st.Held["t1"].Text
+	o.mu.Unlock()
+	if held != "set the depth back to 0" {
+		t.Fatalf("held = %q", held)
+	}
+
+	h = newFakeHost()
+	h.obs["t1"] = Observation{Running: true, Waiting: true}
+	o = newTestOrch(t, h)
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+		t.Fatal(err)
+	}
+	o.apply(Reply{Actions: work[:1]}, loop)
+	if _, _, started := h.counts(); started != 0 {
+		t.Fatal("the loop opened a second agent beside a running one")
+	}
+
+	h = newFakeHost()
+	h.obs["t1"] = Observation{Running: true, Waiting: true}
+	h.startErr = errGone{}
+	o = newTestOrch(t, h)
+	o.apply(Reply{Actions: work}, user)
+	if _, sent, _ := h.counts(); sent != 0 {
+		t.Fatalf("typed into the running session after the new one failed: %v", h.sent)
+	}
+	if !strings.Contains(lastText(o), "not sent") {
+		t.Fatalf("the dropped instruction is not in the trail: %q", lastText(o))
 	}
 }
 

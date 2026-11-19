@@ -208,9 +208,9 @@ type Host interface {
 	SetStatus(slug, status string) error
 	StackUp(slug string) error
 	StackDown(slug string) error
-	// StartAgent opens a FRESH agent session in the task's workspace. It begins
-	// with no memory of what came before, which for a half-done task is a real
-	// loss — see ResumeAgent.
+	// StartAgent opens a FRESH agent session in the task's workspace, beside any
+	// that is already running. It begins with no memory of what came before,
+	// which for a half-done task is a real loss — see ResumeAgent.
 	StartAgent(slug string) error
 	// ResumeAgent reopens a recorded conversation, so the work carries on with
 	// everything the agent already knew. An empty id means the most recent one
