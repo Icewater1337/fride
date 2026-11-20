@@ -333,8 +333,15 @@ func TestExtractRefusesEscapingPaths(t *testing.T) {
 }
 
 // A git repository inside the worktree would travel only as a gitlink — its
-// files and history left behind — so the snapshot refuses it and names it.
+// files and history left behind — so the snapshot refuses it and names it:
+// untracked (fride#198), staged or committed (fride#209).
 func TestSnapshotRefusesNestedRepo(t *testing.T) {
+	for _, state := range []string{"untracked", "staged", "committed"} {
+		t.Run(state, func(t *testing.T) { snapshotRefusesNestedRepo(t, state) })
+	}
+}
+
+func snapshotRefusesNestedRepo(t *testing.T, state string) {
 	root := t.TempDir()
 	src := newComputer(t, root, "a")
 	repo := filepath.Join(root, "a", "repos", "app")
@@ -352,6 +359,12 @@ func TestSnapshotRefusesNestedRepo(t *testing.T) {
 	write(t, filepath.Join(sub, "a"), "hi\n")
 	run(t, sub, "add", "a")
 	run(t, sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+	if state != "untracked" {
+		run(t, wt, "add", "sub")
+	}
+	if state == "committed" {
+		run(t, wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "nest")
+	}
 	task := &store.Task{Slug: "nest", Repos: []store.TaskRepo{{Name: "app", BaseRef: "main", Branch: "feat/nest"}}}
 	if _, err := Snapshot(src.cfg, task, "a"); err == nil || !strings.Contains(err.Error(), "sub/") {
 		t.Fatalf("Snapshot = %v, want a refusal naming sub/", err)

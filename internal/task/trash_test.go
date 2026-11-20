@@ -330,10 +330,17 @@ func TestNoCopyRefusesTheDelete(t *testing.T) {
 	}
 }
 
-// A git repository inside a worktree (fride#198) would be kept only as a
-// gitlink, its files and history lost with the worktree: the forced delete
-// refuses, names it, and deletes nothing.
+// A git repository inside a worktree would be kept only as a gitlink, its
+// files and history lost with the worktree: the forced delete refuses, names
+// it, and deletes nothing — untracked (fride#198), staged or committed
+// (fride#209).
 func TestNestedRepoRefusesTheDelete(t *testing.T) {
+	for _, state := range []string{"untracked", "staged", "committed"} {
+		t.Run(state, func(t *testing.T) { nestedRepoRefusesTheDelete(t, state) })
+	}
+}
+
+func nestedRepoRefusesTheDelete(t *testing.T, state string) {
 	cfg, st := trashHome(t, "api")
 	tk := newTask(t, cfg, st, "nest", "api")
 	wt := cfg.RepoDir(tk.Slug, "api")
@@ -342,6 +349,12 @@ func TestNestedRepoRefusesTheDelete(t *testing.T) {
 	git(t, sub, "init", "-q")
 	git(t, sub, "add", "a")
 	git(t, sub, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+	if state != "untracked" {
+		git(t, wt, "add", "sub")
+	}
+	if state == "committed" {
+		git(t, wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "nest")
+	}
 
 	_, _, err := Remove(cfg, st, tk.Slug, RemoveOptions{Force: true})
 	if !errors.Is(err, ErrNoCopy) || !strings.Contains(err.Error(), "sub/") {
