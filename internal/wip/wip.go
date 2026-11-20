@@ -36,7 +36,8 @@ func git(dir string, env []string, args ...string) (string, error) {
 // referenced by nothing, so the caller points a ref at it before a gc could
 // take it. A git repository of its own inside the worktree is refused: `add
 // -A` would record only its commit pointer (a gitlink), not its files or
-// history, and the caller would then lose it.
+// history, and the caller would then lose it — untracked, staged or
+// committed alike; a submodule declared in .gitmodules is kept as a gitlink.
 func Commit(wt, head, message string) (string, error) {
 	others, err := git(wt, nil, "ls-files", "-z", "--others", "--exclude-standard")
 	if err != nil {
@@ -66,6 +67,9 @@ func Commit(wt, head, message string) (string, error) {
 	if _, err := git(wt, env, "add", "-A"); err != nil {
 		return "", err
 	}
+	if err := refuseGitlinks(wt, env, head); err != nil {
+		return "", err
+	}
 	tree, err := git(wt, env, "write-tree")
 	if err != nil {
 		return "", err
@@ -80,6 +84,39 @@ func Commit(wt, head, message string) (string, error) {
 	env = append(env, "GIT_AUTHOR_NAME=FrIDE", "GIT_AUTHOR_EMAIL=fride@localhost",
 		"GIT_COMMITTER_NAME=FrIDE", "GIT_COMMITTER_EMAIL=fride@localhost")
 	return git(wt, env, "commit-tree", tree, "-p", head, "-m", message)
+}
+
+// refuseGitlinks refuses a nested repository that is staged or committed
+// (fride#209): `--others` no longer lists it, but the throwaway index, or the
+// task branch's head, records it as a gitlink whose commit the outer repository
+// does not hold. A submodule declared in .gitmodules is cloned again from its
+// URL, so it passes as before.
+func refuseGitlinks(wt string, env []string, head string) error {
+	declared := map[string]bool{}
+	// No .gitmodules (or an unreadable one) declares nothing: every gitlink is refused.
+	if out, err := git(wt, nil, "config", "-z", "-f", filepath.Join(wt, ".gitmodules"), "--get-regexp", `^submodule\..*\.path$`); err == nil {
+		for _, kv := range strings.Split(out, "\x00") {
+			if _, v, ok := strings.Cut(kv, "\n"); ok {
+				declared[strings.Trim(v, "/")] = true
+			}
+		}
+	}
+	staged, err := git(wt, env, "ls-files", "-s", "-z")
+	if err != nil {
+		return err
+	}
+	committed, err := git(wt, nil, "ls-tree", "-r", "-z", head)
+	if err != nil {
+		return err
+	}
+	// Both list "<mode> …\t<path>" per entry.
+	for _, e := range strings.Split(staged+"\x00"+committed, "\x00") {
+		meta, path, ok := strings.Cut(e, "\t")
+		if ok && strings.HasPrefix(meta, "160000 ") && !declared[path] {
+			return fmt.Errorf("%s/ is a git repository of its own, which cannot be kept — move it out of the workspace first", path)
+		}
+	}
+	return nil
 }
 
 // Apply re-creates uncommitted work in a worktree checked out at the commit's
