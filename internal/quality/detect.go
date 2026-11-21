@@ -529,8 +529,11 @@ func (s *scanner) touched(c *Change, k string) ([]Line, []string) {
 	if len(added) == 0 {
 		return nil, nil
 	}
+	// A merge commit (a revert or fix merged with --no-ff) shows a combined
+	// diff, empty for a clean merge: its first-parent diff is what it brought
+	// into the mainline. Ordinary commits print the same either way.
 	patch, err := gitRaw(context.Background(), s.dir, nil, "-c", "core.quotepath=off", "show", "-U0",
-		"--no-show-signature", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
+		"--diff-merges=first-parent", "--no-show-signature", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
 		"--format=", k)
 	if err != nil {
 		return nil, nil

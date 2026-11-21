@@ -454,3 +454,54 @@ func TestPatchHeadersInsideAHunkAreLines(t *testing.T) {
 		t.Errorf("a removed SQL comment was read as a header: %+v", d)
 	}
 }
+
+// A revert or fix that lands as a merge commit is evidence by what it
+// brought into the mainline, so its case targets those lines, not the whole
+// change.
+func TestARevertOrFixMergedWithAMergeCommitCarriesItsDiff(t *testing.T) {
+	f := newFx(t)
+	f.task("login", "feat/login", map[string]string{"auth.go": authGo,
+		"session.go": "package api\n\n// NewSession starts a session.\nfunc NewSession() *Session { return &Session{} }\n"})
+	f.task("limiter", "feat/limiter", map[string]string{"limiter.go": "package api\n\n// Limiter caps requests per client.\nfunc Allow(client string) bool {\n\treturn requestsPerMinute(client) < defaultRequestLimit\n}\n"})
+	f.refresh()
+	f.mergePR("feat/login", 12)
+	f.mergePR("feat/limiter", 13)
+
+	// mergeBranch merges branch like GitHub, the request's description in the body.
+	mergeBranch := func(branch string, n int, body string) string {
+		f.sync()
+		gitT(t, f.forge, nil, "merge", "-q", "--no-ff", "-m",
+			"Merge pull request #"+strconv.Itoa(n)+" from owner/"+branch+"\n\n"+body, branch)
+		return f.push()
+	}
+	f.sync()
+	gitT(t, f.forge, nil, "switch", "-q", "-c", "fix/token")
+	write(t, f.forge, "auth.go", strings.Replace(authGo, "token == expectedSessionToken", "subtle.ConstantTimeCompare(token, expectedSessionToken)", 1))
+	gitT(t, f.forge, nil, "commit", "-qam", "compare in constant time")
+	fix := mergeBranch("fix/token", 14, "Fix regression from #12")
+
+	f.sync()
+	gitT(t, f.forge, nil, "switch", "-q", "-c", "revert/limiter")
+	gitT(t, f.forge, nil, "rm", "-q", "limiter.go")
+	gitT(t, f.forge, nil, "commit", "-qm", "drop the limiter")
+	revert := mergeBranch("revert/limiter", 15, "Reverts #13")
+
+	f.refresh()
+	c := f.change("login")
+	if len(c.FollowUps) != 1 || c.FollowUps[0].Commit != fix {
+		t.Fatalf("the merge commit follows up #12: %+v", c.FollowUps)
+	}
+	if !hasLine(c.FollowUps[0].Lines, "return token == expectedSessionToken") || !slices.Equal(c.FollowUps[0].Paths, []string{"auth.go"}) {
+		t.Errorf("the merge's first-parent diff is the evidence: %+v", c.FollowUps[0])
+	}
+	if tg := targetsOf(c.FollowUps); len(tg) != 1 || tg[0].Path != "auth.go" || !slices.Equal(tg[0].Lines, []string{"return token == expectedSessionToken"}) {
+		t.Errorf("the case targets the rewritten line, not session.go: %+v", tg)
+	}
+	c = f.change("limiter")
+	if len(c.Reverted) != 1 || c.Reverted[0].Commit != revert {
+		t.Fatalf("the merge commit reverts #13: %+v", c.Reverted)
+	}
+	if !hasLine(c.Reverted[0].Lines, "return requestsPerMinute(client) < defaultRequestLimit") || !slices.Equal(c.Reverted[0].Paths, []string{"limiter.go"}) {
+		t.Errorf("the revert's lines come from the merge's first-parent diff: %+v", c.Reverted[0])
+	}
+}
