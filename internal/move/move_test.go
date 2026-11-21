@@ -370,3 +370,27 @@ func snapshotRefusesNestedRepo(t *testing.T, state string) {
 		t.Fatalf("Snapshot = %v, want a refusal naming sub/", err)
 	}
 }
+
+// A gitlink the repository's history already carries, undeclared and checked
+// out as an empty folder, holds nothing to lose: the snapshot passes (fride#212).
+func TestSnapshotPassesInheritedGitlink(t *testing.T) {
+	root := t.TempDir()
+	src := newComputer(t, root, "a")
+	repo := filepath.Join(root, "a", "repos", "app")
+	lib := filepath.Join(repo, "lib")
+	os.MkdirAll(lib, 0o755)
+	run(t, repo, "init", "-q", "-b", "main")
+	run(t, lib, "init", "-q")
+	run(t, lib, "commit", "-q", "--allow-empty", "-m", "l")
+	write(t, filepath.Join(repo, "f.txt"), "1\n")
+	run(t, repo, "add", "f.txt", "lib")
+	run(t, repo, "commit", "-qm", "base")
+	src.cfg.Reload()
+	wt := src.cfg.RepoDir("inh", "app")
+	run(t, repo, "worktree", "add", "-q", "-b", "feat/inh", wt, "main")
+	write(t, filepath.Join(wt, "f.txt"), "2\n")
+	task := &store.Task{Slug: "inh", Repos: []store.TaskRepo{{Name: "app", BaseRef: "main", Branch: "feat/inh"}}}
+	if _, err := Snapshot(src.cfg, task, "a"); err != nil {
+		t.Fatalf("Snapshot = %v", err)
+	}
+}

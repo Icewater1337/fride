@@ -4,11 +4,14 @@
 package wip
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func git(dir string, env []string, args ...string) (string, error) {
@@ -90,10 +93,13 @@ func Commit(wt, head, message string) (string, error) {
 // (fride#209): `--others` no longer lists it, but the throwaway index, or the
 // task branch's head, records it as a gitlink whose commit the outer repository
 // does not hold. A submodule declared in .gitmodules is cloned again from its
-// URL, so it passes as before.
+// URL, so it passes as before. An undeclared gitlink whose folder holds no
+// .git passes too (fride#212): one inherited from the base checks out as an
+// empty folder, and a nested repo whose folder was deleted has nothing left to
+// keep — refusing them blocked every delete and move of such a task.
 func refuseGitlinks(wt string, env []string, head string) error {
 	declared := map[string]bool{}
-	// No .gitmodules (or an unreadable one) declares nothing: every gitlink is refused.
+	// No .gitmodules (or an unreadable one) declares nothing.
 	if out, err := git(wt, nil, "config", "-z", "-f", filepath.Join(wt, ".gitmodules"), "--get-regexp", `^submodule\..*\.path$`); err == nil {
 		for _, kv := range strings.Split(out, "\x00") {
 			if _, v, ok := strings.Cut(kv, "\n"); ok {
@@ -112,7 +118,11 @@ func refuseGitlinks(wt string, env []string, head string) error {
 	// Both list "<mode> …\t<path>" per entry.
 	for _, e := range strings.Split(staged+"\x00"+committed, "\x00") {
 		meta, path, ok := strings.Cut(e, "\t")
-		if ok && strings.HasPrefix(meta, "160000 ") && !declared[path] {
+		if !ok || !strings.HasPrefix(meta, "160000 ") || declared[path] {
+			continue
+		}
+		// Only a folder known to have no .git passes; one that cannot be read is refused.
+		if _, err := os.Lstat(filepath.Join(wt, path, ".git")); !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			return fmt.Errorf("%s/ is a git repository of its own, which cannot be kept — move it out of the workspace first", path)
 		}
 	}
