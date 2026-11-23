@@ -424,7 +424,7 @@ func WriteGuide(cfg *config.Config, slug string, names []string, agentKind, bran
 This folder is a FrIDE task workspace. Each subdirectory is a git worktree of
 one repository, all on the branch ` + "`" + branch + "`" + `: ` + strings.Join(names, ", ") + `.
 
-` + stackSection(cfg, slug) + `
+` + stackSection(cfg, slug) + commitSection + `
 ## Keep the decision log current
 
 This task produces a design-rationale document at the end, assembled from
@@ -538,6 +538,24 @@ approval, ` + "`fride pr`" + ` says so, and the task waits for them.
 `
 }
 
+const commitHeading = "## Commit and push as you go"
+
+// commitSection makes the agent commit and push small steps to the task
+// branch while it works: the machine it runs on can go away (a node shut
+// down, fridolin#761), and the work then continues elsewhere from the
+// pushed branch, losing only what was not pushed.
+const commitSection = `
+` + commitHeading + `
+
+This machine may go away mid-task; the work then continues on another one from
+what this branch has on its remote. So commit each small, self-contained step
+as soon as it builds (a function and its test, one fix, one doc update) and
+push the branch right after (` + "`git push -u origin HEAD`" + `). Never sit on
+hours of uncommitted or unpushed work: a shutdown should cost minutes at most.
+Pushing a branch is not opening a pull request; that still goes through
+` + "`fride pr`" + ` below.
+`
+
 const stackHeading = "## Running the stack"
 
 // stackSection tells the agent which tool owns this workspace's stack. Without
@@ -581,6 +599,9 @@ func EnsureGuide(cfg *config.Config, slug, agentKind string) error {
 	var add string
 	if !strings.Contains(string(b), stackHeading) {
 		add += "\n" + stackSection(cfg, slug)
+	}
+	if !strings.Contains(string(b), commitHeading) {
+		add += commitSection
 	}
 	if !strings.Contains(string(b), prHeading) {
 		add += prSection(cfg)

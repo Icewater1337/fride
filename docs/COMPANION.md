@@ -401,6 +401,13 @@ to run `/auto-mode-setup` ("Teach auto mode about your environment?"), which
 comes after auto mode refused a few actions and waits for a keypress: their
 `--settings` carries `"skillOverrides":{"auto-mode-setup":"off"}`.
 
+Every task's workspace guide (`CLAUDE.md` or `AGENTS.md`) tells its agent to
+commit each small, self-contained step and push the branch right after, and the
+orchestrator holds agents to it: the computer a companion runs on can go away
+mid-task, and fridolin then continues the work on another one from the pushed
+branch (fridolin#761), so a shutdown loses only what was not pushed. Guides of
+older workspaces get the section the next time an agent starts in them.
+
 ## Moving a task with files
 
 `fride task export <task> <file>` writes the task as one file (a gzip'd tar):

@@ -18,7 +18,7 @@ func TestWriteGuideTellsTheAgentHowToRunTheStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.WorkspaceDir("t1"), "CLAUDE.md"))
-	for _, want := range []string{stackHeading, "fride stack up t1 --wait", "never by running"} {
+	for _, want := range []string{stackHeading, "fride stack up t1 --wait", "never by running", commitHeading, "git push -u origin HEAD"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("guide lacks %q", want)
 		}
@@ -48,6 +48,9 @@ func TestEnsureGuideAppendsTheStackSectionOnce(t *testing.T) {
 	}
 	if n := strings.Count(got, stackHeading); n != 1 {
 		t.Errorf("stack section appears %d times, want 1", n)
+	}
+	if n := strings.Count(got, commitHeading); n != 1 {
+		t.Errorf("commit section appears %d times, want 1", n)
 	}
 	if !strings.Contains(got, "fride stack up old") {
 		t.Errorf("section is not filled in for this slug:\n%s", got)

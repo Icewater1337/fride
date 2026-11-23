@@ -321,7 +321,12 @@ Rules for what you say:
   see in the turns you were given.
 - Say nothing when nothing happened. An empty "say" is a valid, common turn.
 - Keep send_to_agent text to a single, concrete instruction. It is typed into a
-  terminal prompt, so it must be one line.`
+  terminal prompt, so it must be one line.
+- Agents commit and push small, self-contained steps to their task branch as
+  they go, so a machine that goes away loses minutes, not hours. Never tell one
+  to hold back commits or pushes until the end; when a task's state shows many
+  uncommitted files or unpushed commits for long, tell its agent to commit and
+  push them.`
 
 // brain runs turns of one long-running headless conversation. It resumes the
 // session on every turn rather than re-sending a transcript: the CLI keeps the
