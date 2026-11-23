@@ -127,6 +127,7 @@ backend's compose file.
 | `ideas` | The repository a task's idea pages are published to. See [ideas](#ideas). |
 | `memory` | What one more stack needs, checked before a stack starts. See [memory](#memory). |
 | `inbox` | `{ "notify": "<shell command>" }`: how the sender of an inbox message hears back. See [inbox](#inbox). |
+| `panels` | `{ "model": "opus", "confirmRisky": false }`: the orchestrator's own web UI tabs. See [panels](#panels). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
@@ -423,6 +424,20 @@ seconds to finish. It gets:
 News is sent once per turn or look, never for the sender's own messages, and
 never twice: a failing command is logged and not retried. Edits apply from the
 next reload of config.json (**Re-check** in Settings, or a restart).
+
+## panels
+
+The orchestrator can build its own tabs in the web UI: small HTML/JS apps with
+the whole FrIDE API behind them. See [PANELS.md](PANELS.md).
+
+```json
+"panels": { "model": "opus", "confirmRisky": false }
+```
+
+| field | meaning |
+|---|---|
+| `model` | The model of the orchestrator turns that likely build or change a panel: a chat message or panel event that mentions a panel, dashboard, widget, chart, tab or UI. Default `opus`. `sonnet` keeps every turn on the routine model. |
+| `confirmRisky` | Ask before a panel's API call that deletes, moves, restores, resets, stops a stack or drives a terminal goes through. Default `false`: panels act without asking, and every call they make is written to `panels/audit.log` either way. |
 
 ## companion
 

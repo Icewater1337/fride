@@ -1527,3 +1527,16 @@ body.unconfigured #btn-new, body.unconfigured .nav, body.unconfigured #rail { di
   .boardfoot { flex-wrap: wrap; }
   .repo-pick { grid-template-columns: 18px minmax(0, 1fr) 140px; }
 }
+
+/* orchestrator panels (panels.js): tabs in the top bar, a frame per panel */
+.nav-panels { display: contents; }
+.panelbtn .lbl { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+#panel { padding: 0; overflow: hidden; }
+.panel-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.panel-bar h2 { margin: 0; font-size: 15px; }
+.panel-host { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.panel-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
+.inline-frame { width: 100%; height: 280px; border: 1px solid var(--line); border-radius: var(--radius); margin-top: 6px; background: var(--bg); }
+.panel-err { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--red-soft); color: var(--red); border-bottom: 1px solid var(--red-line); font-size: 13px; }
+.panel-err .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

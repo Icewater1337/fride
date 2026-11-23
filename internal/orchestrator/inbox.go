@@ -299,7 +299,16 @@ func (o *Orchestrator) kick() {
 // every attempt of every queued message in a few seconds.
 func (o *Orchestrator) drain() {
 	o.mu.Lock()
-	if o.closed() || o.thinking || len(o.st.Queue) == 0 || time.Now().Before(o.mem.retryAt) {
+	if o.closed() || o.thinking || time.Now().Before(o.mem.retryAt) {
+		o.mu.Unlock()
+		return
+	}
+	if len(o.st.Queue) == 0 {
+		// The inbox first: its senders have nobody else to answer them.
+		if len(o.st.UIQueue) > 0 {
+			o.drainUI()
+			return
+		}
 		o.mu.Unlock()
 		return
 	}

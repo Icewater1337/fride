@@ -15,6 +15,7 @@ import (
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/atomicfile"
+	"github.com/Icewater1337/fride/internal/panels"
 )
 
 // The two modes. Chat is a conversation: the orchestrator only ever acts when
@@ -80,6 +81,8 @@ type Message struct {
 	// is following. A thread's view is the chat filtered to it.
 	Threads []int     `json:"threads,omitempty"`
 	Time    time.Time `json:"time"`
+	// HTML is an inline widget (ui_inline), drawn in a sandboxed frame.
+	HTML string `json:"html,omitempty"`
 }
 
 // state is everything that survives a restart. The conversation itself lives in
@@ -109,6 +112,8 @@ type state struct {
 	// PRSent is, per task, what its agent has been told about its pull
 	// requests (prfeedback.go), so that a restart does not tell it again.
 	PRSent map[string]map[string]prSent `json:"prSent,omitempty"`
+	// UIQueue are panel events waiting for a turn (panels.go).
+	UIQueue []UIEvent `json:"uiQueue,omitempty"`
 }
 
 // origin is who a brain turn is for. It decides whether the turn's actions
@@ -133,6 +138,8 @@ type turn struct {
 	// thread is the inbox thread the turn is reading, and item the message.
 	thread int
 	item   *inboxItem
+	// model is the model the turn runs on; "" is the routine one.
+	model string
 }
 
 // threads is what the turn's own messages are filed under.
@@ -150,6 +157,8 @@ type Orchestrator struct {
 	host  Host
 	brain *brain
 	st    state
+	// panels are the web UI tabs the orchestrator builds (panels.go).
+	panels *panels.Store
 
 	// thinking is held for the whole of a brain turn, and is what stops the
 	// monitor from starting a second one underneath the first.
@@ -185,13 +194,15 @@ type Orchestrator struct {
 // orchestrator can open any task's files and nothing above them.
 func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 	o := &Orchestrator{
-		path:  filepath.Join(stateDir, "orchestrator.json"),
-		host:  host,
-		brain: &brain{bin: claudeBin, dir: workspaceRoot},
-		mem:   memory{tasks: map[string]taskState{}},
-		wake:  make(chan struct{}, 1),
-		notes: make(chan Note, 64),
-		stop:  make(chan struct{}),
+		path: filepath.Join(stateDir, "orchestrator.json"),
+		host: host,
+		brain: &brain{bin: claudeBin, dir: workspaceRoot,
+			addDirs: []string{filepath.Join(stateDir, "panels")}},
+		panels: panels.New(filepath.Join(stateDir, "panels")),
+		mem:    memory{tasks: map[string]taskState{}},
+		wake:   make(chan struct{}, 1),
+		notes:  make(chan Note, 64),
+		stop:   make(chan struct{}),
 	}
 	o.st = state{Mode: ModeChat, Autonomy: AutonomyAuto, Cursors: map[string]string{}}
 	o.load()
@@ -463,9 +474,10 @@ func (o *Orchestrator) Say(text string) error {
 	o.mu.Unlock()
 
 	input := o.prompt("THE USER SAYS:\n"+text+"\n\n", nil)
+	tr := turn{origin: fromUser, model: o.modelFor(text)}
 	go func() {
 		defer o.turns.Done()
-		_ = o.think(context.Background(), gen, input, turn{origin: fromUser}, nil)
+		_ = o.think(context.Background(), gen, input, tr, nil)
 	}()
 	return nil
 }
@@ -492,7 +504,7 @@ func (o *Orchestrator) think(ctx context.Context, gen int, input string, tr turn
 	session := o.st.Session
 	o.mu.Unlock()
 
-	reply, session, err := o.brain.Think(ctx, input, session)
+	reply, session, err := o.brain.ThinkWith(ctx, input, session, tr.model)
 
 	o.mu.Lock()
 	// Whatever happens next, the turn is over, so the queue may move on.
@@ -690,6 +702,9 @@ func reason(a Action) string {
 
 // describe renders an action as the one line the user reads in the trail.
 func describe(a Action) string {
+	if isPanelAct(a.Kind) {
+		return describePanel(a)
+	}
 	switch a.Kind {
 	case ActCreateTask:
 		names := make([]string, 0, len(a.Repos))
@@ -784,6 +799,9 @@ func (o *Orchestrator) create(a Action, tr turn) (string, error) {
 }
 
 func (o *Orchestrator) act(a Action, tr turn) error {
+	if isPanelAct(a.Kind) {
+		return o.panelAct(a)
+	}
 	switch a.Kind {
 	case ActSendToAgent:
 		if strings.TrimSpace(a.Text) == "" {

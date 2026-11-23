@@ -18,6 +18,8 @@ type Headless struct {
 	System string // replaces the default system prompt
 	Schema string // the JSON schema of the reply
 	Tools  string // the tools it may use, comma-separated
+	// AddDirs are further folders the tools may read, beyond Dir.
+	AddDirs []string
 	// Resume is the session to continue; "" starts a new one.
 	Resume string
 	// Persist keeps the session to resume later. Without it the turn leaves
@@ -42,6 +44,9 @@ func (h Headless) Run(ctx context.Context, input string, out any) (string, error
 	argv := []string{"-p", "--output-format", "json", "--json-schema", h.Schema,
 		"--tools", h.Tools, "--system-prompt", h.System, "--model", h.Model,
 		"--permission-mode", "dontAsk"}
+	for _, d := range h.AddDirs {
+		argv = append(argv, "--add-dir", d)
+	}
 	if h.Resume != "" {
 		argv = append(argv, "--resume", h.Resume)
 	}

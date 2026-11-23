@@ -78,6 +78,8 @@ type Settings struct {
 	// PR configures `fride pr`: the proof a pull request carries, and the
 	// review it waits for before it is marked ready (REVIEW.md).
 	PR *PR `json:"pr,omitempty"`
+	// Panels configures the tabs the orchestrator builds in the web UI.
+	Panels *Panels `json:"panels,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -348,6 +350,29 @@ func (s *Settings) QualitySchedule() Quality {
 		q.FollowUpDays = 14
 	}
 	return q
+}
+
+// Panels configures the orchestrator's web UI panels (docs/PANELS.md).
+type Panels struct {
+	// Model runs the orchestrator turns that likely build or change a panel.
+	// Default "opus"; "sonnet" keeps every turn on the routine model.
+	Model string `json:"model,omitempty"`
+	// ConfirmRisky makes the UI ask before a panel's API call that deletes,
+	// moves or drives a terminal goes through. Default false.
+	ConfirmRisky bool `json:"confirmRisky,omitempty"`
+}
+
+// PanelModel is the model for panel turns.
+func (s *Settings) PanelModel() string {
+	if s == nil || s.Panels == nil || strings.TrimSpace(s.Panels.Model) == "" {
+		return "opus"
+	}
+	return strings.TrimSpace(s.Panels.Model)
+}
+
+// PanelConfirmRisky reports whether risky panel API calls need a confirm.
+func (s *Settings) PanelConfirmRisky() bool {
+	return s != nil && s.Panels != nil && s.Panels.ConfirmRisky
 }
 
 // Inbox configures the orchestrator's inbox.

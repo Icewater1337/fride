@@ -56,6 +56,7 @@ internal/agent           agent CLIs: flags, detection, transcripts
 internal/jsonl           reading JSONL that survives long lines and reports errors
 internal/forge           a task branch's pull request through gh / glab: state, CI with
                          log tails, conflicts, reviews; the watcher that polls them
+internal/panels          the orchestrator's web UI panels: sources, versions, state
 internal/orchestrator    the supervising agent above the task agents, and its inbox;
                          prfeedback.go types PR news (CI, reviews, conflicts) into agents
 internal/term            PTY sessions (agent and shell tabs)
@@ -68,10 +69,12 @@ internal/review          the Review tab (changes vs merge-base, viewed marks, fo
 internal/quality         what became of the tasks' changes after merge (reverts, follow-ups,
                          incidents), the metric, and the eval set the AI review is replayed on
 internal/server          HTTP + WebSocket
-web/                     the UI, no build step (xterm.js vendored); review.js is the Review tab
+web/                     the UI, no build step (xterm.js, Chart.js vendored); review.js is the
+                         Review tab, panels.js the orchestrator's panels, panel-kit.js their bridge
 docs/CONFIG.md           config.json reference
 docs/FLEET.md            fleet mode
 docs/INBOX.md            messages from outside: `fride in`, /api/inbox
+docs/PANELS.md           the orchestrator's own web UI tabs: bridge, API, safety
 docs/COMPANION.md        companion mode: pairing, /api/companion, webhook, export/import
 docs/GIT.md              git identities: who a task commits and pushes as, tokens
 docs/REVIEW.md           the Review tab: design, the MVP and phases 2 and 3, data model, API;

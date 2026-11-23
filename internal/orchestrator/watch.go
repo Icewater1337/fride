@@ -303,6 +303,8 @@ func (o *Orchestrator) prompt(lead string, obs []Observation) string {
 		}
 	}
 
+	b.WriteString(o.renderPanels())
+
 	if len(obs) > 0 {
 		b.WriteString("\nOBSERVATIONS:\n")
 		for _, ob := range obs {
