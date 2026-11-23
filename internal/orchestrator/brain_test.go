@@ -20,3 +20,17 @@ func TestPromptSendsAgentsBackToFinishTheirBrief(t *testing.T) {
 		}
 	}
 }
+
+// fridolin#761: a node can go away mid-task, and the work continues
+// elsewhere from the pushed branch, so the orchestrator keeps agents
+// committing and pushing small steps.
+func TestPromptKeepsAgentsCommittingAndPushingSmallSteps(t *testing.T) {
+	for _, want := range []string{
+		"commit and push small, self-contained steps",
+		"Never tell one\n  to hold back commits or pushes",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Errorf("system prompt lacks %q", want)
+		}
+	}
+}
