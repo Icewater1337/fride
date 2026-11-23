@@ -338,7 +338,10 @@ Claude Code's own transcripts.
 The orchestrator is a headless Claude Code session with **no** shell and no
 write tools. It reads the workspaces (Read, Grep, Glob) and acts only through
 a closed set of actions (create a task, send one line to an agent, start a
-stack…) that FrIDE validates, rate-limits and logs in the chat.
+stack…) that FrIDE validates, rate-limits and logs in the chat. One of those
+actions builds its own tabs in the web UI, small HTML/JS apps with the whole
+FrIDE API behind them: a task board, a review queue. See
+[docs/PANELS.md](docs/PANELS.md).
 
 Once a task's branch has a pull request, FrIDE follows it with `gh` or
 `glab`: the board shows its CI, conflicts and reviews, and for the tasks the

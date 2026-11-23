@@ -93,6 +93,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "forbidden: cross-origin request", http.StatusForbidden)
 			return
 		}
+		s.auditPanel(r)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -129,6 +130,8 @@ func (s *Server) Routes() *http.ServeMux {
 	s.apiRoutes(mux)
 	mux.HandleFunc("/api/orchestrator", s.handleOrchestrator)
 	mux.HandleFunc("/api/orchestrator/", s.handleOrchestrator)
+	mux.HandleFunc("/api/panels", s.handlePanels)
+	mux.HandleFunc("/api/panels/", s.handlePanels)
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInbox)
 	s.localFleetRoutes(mux)

@@ -644,6 +644,28 @@ func (s *Server) handleOrchestrator(w http.ResponseWriter, r *http.Request) {
 		// 202: the message is accepted, the answer arrives on the next poll.
 		writeJSON(w, 202, s.orch.Snapshot())
 
+	case action == "ui-event" && r.Method == http.MethodPost:
+		// From a panel's fride.ask. Queued, never 409: a panel's button has
+		// nobody to press it again once the turn in progress is over.
+		var req struct {
+			Panel string          `json:"panel"`
+			Text  string          `json:"text"`
+			Data  json.RawMessage `json:"data"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		if string(req.Data) == "null" {
+			req.Data = nil
+		}
+		if err := s.orch.UIEvent(req.Panel, req.Text, req.Data); err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 202, map[string]bool{"queued": true})
+
 	case action == "mode" && r.Method == http.MethodPut:
 		var req struct {
 			Mode     string   `json:"mode"`

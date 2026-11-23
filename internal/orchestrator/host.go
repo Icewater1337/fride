@@ -235,6 +235,9 @@ type Host interface {
 	// Notify tells whoever sent an inbox message that its thread has news.
 	// What that means — a command, nothing at all — is the host's to decide.
 	Notify(Note) error
+	// PanelModel is the model for turns that build panels; "" keeps those on
+	// the routine one.
+	PanelModel() string
 }
 
 // Note is one round of news for an inbox thread: the thread as it stands now,

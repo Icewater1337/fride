@@ -54,6 +54,8 @@ func (f *fakeHost) Repos() []RepoInfo {
 
 func (f *fakeHost) Profiles() []string { return []string{"local"} }
 
+func (f *fakeHost) PanelModel() string { return "opus" }
+
 func (f *fakeHost) GitIdentities() []GitIdentity {
 	return []GitIdentity{{ID: "work", Label: "Work GitLab", Host: "gitlab.example.com"}}
 }

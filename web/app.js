@@ -299,6 +299,7 @@ function showView(name) {
   $('#nav-instances').classList.toggle('active', name === 'instances');
   $('#nav-settings').classList.toggle('active', name === 'settings');
   $('#nav-computers').classList.toggle('active', name === 'computers');
+  if (name !== 'panel' && typeof leavePanel === 'function') leavePanel();
 }
 
 /* ------------------------------------------------------------------ agents */
@@ -3076,6 +3077,7 @@ function renderOrchLog(v) {
   // trail is not yanked away by the next scheduled look.
   const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 60;
   orch.lastSeen = key;
+  unmountFrames(host);
   host.innerHTML = '';
   if (!msgs.length && !v.thinking) {
     const empty = el('div', 'orch-empty');
@@ -3105,6 +3107,8 @@ function orchMessage(m, opts = {}) {
     ? new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''));
   row.appendChild(head);
   row.appendChild(el('div', 'orch-text', m.text));
+  // An inline widget (ui_inline) runs sandboxed like a panel (panels.js).
+  if (m.html) mountPanel(row, 'inline-' + m.id, m.html, 'inline-frame');
   return row;
 }
 

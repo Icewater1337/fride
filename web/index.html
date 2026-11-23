@@ -18,6 +18,7 @@
   <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></symbol>
   <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
@@ -69,6 +70,7 @@
     <button id="nav-board" class="navbtn active" title="Board"><svg class="i"><use href="#i-board"/></svg><span class="lbl">Board</span></button>
     <button id="nav-orch" class="navbtn" title="Orchestrator"><svg class="i"><use href="#i-bot"/></svg><span class="lbl">Orchestrator</span></button>
     <button id="nav-inbox" class="navbtn" title="Inbox"><svg class="i"><use href="#i-inbox"/></svg><span class="lbl">Inbox</span></button>
+    <span id="nav-panels" class="nav-panels"></span>
     <button id="nav-reviews" class="navbtn" title="Reviews: what is left to review in every task, and whose turn it is"><svg class="i"><use href="#i-diff"/></svg><span class="lbl">Reviews</span></button>
     <button id="nav-computers" class="navbtn hidden" title="Computers"><svg class="i"><use href="#i-monitor"/></svg><span class="lbl">Computers</span></button>
     <button id="nav-instances" class="navbtn" title="Port slots"><svg class="i"><use href="#i-server"/></svg><span class="lbl">Slots</span></button>
@@ -145,6 +147,17 @@
       <span class="hint">Drag a card between columns to change its status. Moving a task to
         <strong>Done</strong> stops its stack; hiding one only takes it off the board.</span>
     </div>
+  </section>
+
+  <!-- ------------------------------------------- an orchestrator panel (panels.js) -->
+  <section id="panel" class="view">
+    <div class="panel-bar">
+      <h2 id="panel-title"></h2>
+      <span id="panel-meta" class="orch-meta"></span>
+      <div class="spacer"></div>
+      <button id="panel-menu" class="iconbtn" title="Panel actions" aria-label="Panel actions"><svg class="i"><use href="#i-dots"/></svg></button>
+    </div>
+    <div id="panel-host" class="panel-host"></div>
   </section>
 
   <!-- ---------------------------------------------------------- orchestrator -->
@@ -634,5 +647,6 @@
 <script src="/app.js"></script>
 <script src="/review.js"></script>
 <script src="/quality.js"></script>
+<script src="/panels.js"></script>
 </body>
 </html>
