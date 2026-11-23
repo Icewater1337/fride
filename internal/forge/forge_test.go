@@ -110,13 +110,19 @@ func ghTarget() Target {
 func TestGitHubLookup(t *testing.T) {
 	f := (&fakeRun{t: t}).
 		on("gh pr list --head feat/login --state all", ghList).
-		on("gh pr list --head main --state open", `[]`).
+		on("gh pr list --head main --state open", `[{"url": "https://github.com/acme/backend/pull/3"}]`).
 		on("actions/jobs/20/logs", "2026-01-01T11:00:01.000Z go test ./...\n2026-01-01T11:00:02.000Z --- FAIL: TestLogin\n"+
 			"2026-01-01T11:00:02.100Z ##[error]Process completed with exit code 1.\n2026-01-01T11:00:03Z Post job cleanup.\n").
-		on("gh api graphql", ghThreadsOut)
+		on("gh api graphql", ghThreadsOut).
+		on("gh api --hostname github.com repos/acme/backend", `{"default_branch": "main"}`)
 	pr, err := Client{Run: f.run}.Lookup(context.Background(), ghTarget(), nil, true)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// fride#219: against the default branch, nothing is stacked, whatever
+	// open pull request has a head named main.
+	if f.count("--head main") != 0 {
+		t.Errorf("looked for a parent of a pull request against the default branch: %q", f.calls)
 	}
 	if pr.Number != 7 || pr.State != Open || pr.HeadSHA != "abc123" || pr.Author != "dev" {
 		t.Fatalf("picked %+v, want the open #7", pr)
@@ -188,21 +194,45 @@ func TestGitHubNoPR(t *testing.T) {
 func TestGitHubStacked(t *testing.T) {
 	list := `[{"number": 8, "url": "https://github.com/acme/backend/pull/8", "state": "OPEN",
 	  "headRefName": "feat/login", "baseRefName": "feat/base", "mergeable": "CONFLICTING"}]`
+	repoMeta := `{"default_branch": "main"}`
+	// A fork's branch of the same name is no parent (fride#219); the
+	// repository's own is.
 	f := (&fakeRun{t: t}).
-		on("--head feat/base --state open", `[{"url": "https://github.com/acme/backend/pull/5"}]`).
+		on("--head feat/base --state open", `[{"url": "https://github.com/acme/backend/pull/6", "isCrossRepository": true},
+		  {"url": "https://github.com/acme/backend/pull/5", "isCrossRepository": false}]`).
 		on("gh pr list --head feat/login", list).
-		on("graphql", `{}`)
+		on("graphql", `{}`).
+		on("repos/acme/backend", repoMeta)
 	pr, err := Client{Run: f.run}.Lookup(context.Background(), ghTarget(), nil, true)
 	if err != nil || pr.Parent != "https://github.com/acme/backend/pull/5" {
 		t.Fatalf("got %+v, %v", pr, err)
 	}
 	f = (&fakeRun{t: t}).
+		on("--head feat/base --state open", `[{"url": "https://github.com/acme/backend/pull/6", "isCrossRepository": true}]`).
+		on("gh pr list --head feat/login", list).
+		on("graphql", `{}`).
+		on("repos/acme/backend", repoMeta)
+	pr, err = Client{Run: f.run}.Lookup(context.Background(), ghTarget(), nil, true)
+	if err != nil || pr.Parent != "" || pr.Mergeable != Conflicting {
+		t.Fatalf("got %+v, %v; want a fork's head not to count", pr, err)
+	}
+	f = (&fakeRun{t: t}).
 		fail("--head feat/base --state open", errors.New("HTTP 502")).
 		on("gh pr list --head feat/login", list).
-		on("graphql", `{}`)
+		on("graphql", `{}`).
+		on("repos/acme/backend", repoMeta)
 	pr, err = Client{Run: f.run}.Lookup(context.Background(), ghTarget(), nil, true)
 	if err == nil || pr == nil || pr.Mergeable != "" {
 		t.Fatalf("got %+v, %v; want the conflict left unknown, with the error", pr, err)
+	}
+	// The default branch not known: no parent, so the conflict is passed on.
+	f = (&fakeRun{t: t}).
+		on("gh pr list --head feat/login", list).
+		on("graphql", `{}`).
+		fail("repos/acme/backend", errors.New("HTTP 502"))
+	pr, err = Client{Run: f.run}.Lookup(context.Background(), ghTarget(), nil, true)
+	if err == nil || pr == nil || pr.Mergeable != Conflicting || pr.Parent != "" || f.count("--head feat/base") != 0 {
+		t.Fatalf("got %+v, %v after %q; want the conflict passed on", pr, err, f.calls)
 	}
 }
 
@@ -280,7 +310,9 @@ func TestGitLabDiscussionsAreReadAcrossPages(t *testing.T) {
 		on("projects/99/merge_requests/5/reviewers", `[]`).
 		on("projects/99/members/all/11", `{"id": 11, "username": "alice", "access_level": 30}`).
 		on("projects/99/merge_requests/5", strings.Replace(glMRJSON, `"head_pipeline": {"id": 77, "status": "failed", "web_url": "https://gitlab.example.com/p/77"}`, `"head_pipeline": null`, 1)).
-		on("source_branch=main&state=opened", `[]`)
+		on("source_branch=main&state=opened", `[{"iid": 3, "project_id": 99, "source_project_id": 99, "target_project_id": 99,
+		  "web_url": "https://gitlab.example.com/group/api/-/merge_requests/3"}]`).
+		on("glab api --hostname gitlab.example.com projects/99", `{"default_branch": "main"}`)
 	pr, err := Client{Run: f.run, members: newMemberCache()}.Lookup(context.Background(), glTarget(), nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +380,9 @@ func TestGitLabLookup(t *testing.T) {
 		  {"id": 502, "name": "flaky", "stage": "test", "allow_failure": true}]`).
 		on("projects/99/jobs/501/trace", "section_start:1:step_script\r\x1b[0K\x1b[32;1m$ make test\x1b[0;m\n"+
 			"FAIL TestLogin\n\x1b[31;1mERROR: Job failed: exit code 1\x1b[0;m\nsection_end:2:step_script\r\x1b[0K\n").
-		on("source_branch=main&state=opened", `[]`)
+		on("source_branch=main&state=opened", `[{"iid": 3, "project_id": 99, "source_project_id": 99, "target_project_id": 99,
+		  "web_url": "https://gitlab.example.com/group/api/-/merge_requests/3"}]`).
+		on("glab api --hostname gitlab.example.com projects/99", `{"default_branch": "main"}`)
 	pr, err := Client{Run: f.run, members: newMemberCache()}.Lookup(context.Background(), glTarget(), nil, true)
 	if err != nil {
 		t.Fatal(err)
@@ -359,6 +393,9 @@ func TestGitLabLookup(t *testing.T) {
 	if pr.CI != CIFailed || len(pr.Failed) != 1 || pr.Failed[0].Name != "test / unit" ||
 		pr.Failed[0].Log != "$ make test\nFAIL TestLogin\nERROR: Job failed: exit code 1" {
 		t.Fatalf("failed = %+v", pr.Failed)
+	}
+	if f.count("source_branch=main&state=opened") != 0 {
+		t.Errorf("looked for a parent of a merge request against the default branch: %q", f.calls)
 	}
 	if pr.Mergeable != Conflicting || pr.Parent != "" || pr.Review != ChangesRequested || len(pr.Changes) != 1 ||
 		pr.Changes[0].Author != "alice" || !pr.Changes[0].Trusted {
@@ -617,5 +654,30 @@ func TestSummary(t *testing.T) {
 		"1 unresolved review thread(s) — https://github.com/acme/backend/pull/7"
 	if got := pr.Summary(); got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+}
+
+// fride#219: a merge request from a fork's branch named like the base is no
+// parent; one from the project's own branch is.
+func TestGitLabStacked(t *testing.T) {
+	mr := strings.Replace(glMRJSON, `"target_branch": "main"`, `"target_branch": "feat/base"`, 1)
+	mr = strings.Replace(mr, `"detailed_merge_status": "requested_changes"`, `"detailed_merge_status": "conflict"`, 1)
+	mr = strings.Replace(mr, `"head_pipeline": {"id": 77, "status": "failed", "web_url": "https://gitlab.example.com/p/77"}`, `"head_pipeline": null`, 1)
+	fork := `{"iid": 6, "source_project_id": 123, "target_project_id": 99, "web_url": "https://gitlab.example.com/group/api/-/merge_requests/6"}`
+	own := `{"iid": 2, "source_project_id": 99, "target_project_id": 99, "web_url": "https://gitlab.example.com/group/api/-/merge_requests/2"}`
+	for _, c := range []struct{ parents, want string }{
+		{"[" + fork + "]", ""},
+		{"[" + fork + "," + own + "]", "https://gitlab.example.com/group/api/-/merge_requests/2"},
+	} {
+		f := (&fakeRun{t: t}).
+			on("projects/group%2Fapi/merge_requests?source_branch=feat%2Flogin", glList).
+			on("source_branch=feat%2Fbase&state=opened", c.parents).
+			on("discussions", `[]`).
+			on("projects/99/merge_requests/5", mr).
+			on("glab api --hostname gitlab.example.com projects/99", `{"default_branch": "main"}`)
+		pr, err := Client{Run: f.run, members: newMemberCache()}.Lookup(context.Background(), glTarget(), nil, true)
+		if err != nil || pr.Mergeable != Conflicting || pr.Parent != c.want {
+			t.Fatalf("got %+v, %v; want parent %q", pr, err, c.want)
+		}
 	}
 }

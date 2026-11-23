@@ -19,6 +19,8 @@ import (
 type glMR struct {
 	IID            int     `json:"iid"`
 	ProjectID      int     `json:"project_id"`
+	SourceProject  int     `json:"source_project_id"`
+	TargetProject  int     `json:"target_project_id"`
 	WebURL         string  `json:"web_url"`
 	Title          string  `json:"title"`
 	State          string  `json:"state"`
@@ -211,14 +213,31 @@ func (c Client) gitlab(ctx context.Context, t Target, prev *PR, reviews bool) (*
 	}
 
 	if pr.Mergeable == Conflicting && pr.Base != "" {
-		var parents []glMR
-		err := api(proj+"/merge_requests?source_branch="+url.QueryEscape(pr.Base)+"&state=opened&per_page=1", &parents)
+		// As on GitHub: a merge request against the default branch is never
+		// stacked, and only one from this project's own branch is a parent,
+		// not one from a fork's branch of that name (fride#219).
+		var meta struct {
+			DefaultBranch string `json:"default_branch"`
+		}
+		err := api(proj, &meta)
 		switch {
-		case err != nil:
-			pr.Mergeable = ""
-			errs = append(errs, err.Error())
-		case len(parents) > 0:
-			pr.Parent = parents[0].WebURL
+		case err != nil || meta.DefaultBranch == "":
+			// Not knowing the default branch: the conflict is passed on.
+			if err != nil {
+				errs = append(errs, err.Error())
+			}
+		case pr.Base != meta.DefaultBranch:
+			var parents []glMR
+			if err := api(proj+"/merge_requests?source_branch="+url.QueryEscape(pr.Base)+"&state=opened&per_page=20", &parents); err != nil {
+				pr.Mergeable = ""
+				errs = append(errs, err.Error())
+			}
+			for _, p := range parents {
+				if p.SourceProject == p.TargetProject {
+					pr.Parent = p.WebURL
+					break
+				}
+			}
 		}
 	}
 

@@ -111,23 +111,49 @@ func (c Client) github(ctx context.Context, t Target, prev *PR, reviews bool) (*
 
 	if pr.Mergeable == Conflicting && pr.Base != "" {
 		// Stacked on another open pull request? Then the conflict is with a
-		// branch still moving, and not the agent's to fix yet.
-		out, err := c.Run(ctx, t.Dir, t.Env, "gh", "pr", "list", "--head", pr.Base, "--state", "open",
-			"--limit", "1", "--json", "url")
-		var parents []struct {
-			URL string `json:"url"`
+		// branch still moving, and not the agent's to fix yet. Only a pull
+		// request against a branch other than the default one can be stacked,
+		// and only on a head in this repository: a fork's main or a release
+		// PR from main is no parent (fride#219).
+		var meta struct {
+			DefaultBranch string `json:"default_branch"`
 		}
-		if err == nil {
-			err = json.Unmarshal(out, &parents)
+		err := fmt.Errorf("cannot tell the repository from %s", pr.URL)
+		if repo != "" {
+			var out []byte
+			if out, err = c.Run(ctx, t.Dir, t.Env, "gh", "api", "--hostname", host, "repos/"+repo); err == nil {
+				err = json.Unmarshal(out, &meta)
+			}
 		}
 		switch {
-		case err != nil:
-			// Not knowing is not "not stacked": the conflict is left unknown
-			// until the next look can tell.
-			pr.Mergeable = ""
-			errs = append(errs, err.Error())
-		case len(parents) > 0:
-			pr.Parent = parents[0].URL
+		case err != nil || meta.DefaultBranch == "":
+			// Not knowing the default branch: the conflict is passed on, as
+			// the agent being told once too often costs less than never.
+			if err != nil {
+				errs = append(errs, err.Error())
+			}
+		case pr.Base != meta.DefaultBranch:
+			out, err := c.Run(ctx, t.Dir, t.Env, "gh", "pr", "list", "--head", pr.Base, "--state", "open",
+				"--limit", "20", "--json", "url,isCrossRepository")
+			var parents []struct {
+				URL   string `json:"url"`
+				Cross bool   `json:"isCrossRepository"`
+			}
+			if err == nil {
+				err = json.Unmarshal(out, &parents)
+			}
+			if err != nil {
+				// Not knowing is not "not stacked": the conflict is left
+				// unknown until the next look can tell.
+				pr.Mergeable = ""
+				errs = append(errs, err.Error())
+			}
+			for _, p := range parents {
+				if !p.Cross {
+					pr.Parent = p.URL
+					break
+				}
+			}
 		}
 	}
 
