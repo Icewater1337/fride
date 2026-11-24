@@ -220,6 +220,16 @@ function rvDraw(d, keepScroll) {
   rvDrawTree(d);
   main.innerHTML = '';
   main.appendChild(el('div', 'rv-size'));
+  // Threads about the change as a whole (the review round cap's, say) belong
+  // to no file. Under a file they never showed, so nothing could mark them
+  // Satisfied, and they still kept the task out of Done: they come first.
+  const general = (d.threads || []).filter(t => !t.path);
+  if (general.length) {
+    const box = el('div', 'rv-general');
+    box.appendChild(el('div', 'rv-general-h', 'About the whole change'));
+    for (const t of general) box.appendChild(rvThreadBox(t));
+    main.appendChild(box);
+  }
   main.appendChild(el('div', 'rv-summary'));
   rvDrawSummary(d);
   const hide = $('#rv-hide-viewed').checked;
@@ -748,6 +758,9 @@ function rvThreadChanged(t) {
     rv.open.set(key, true);
     box.replaceWith(rvFile(x.r, x.f));
   }
+  // One on no file is drawn at the top of the change (rvDraw), not in a file.
+  const general = !t.path && $(`#rv-main .rv-general [data-thread="${t.id}"]`);
+  if (general) general.replaceWith(rvThreadBox(list[i >= 0 ? i : list.length - 1]));
   rvDrawTree(rv.data);
   rvDrawSummary(rv.data);
   loadReview(pin(), false).catch(() => {});
@@ -1365,8 +1378,9 @@ function rvThreads(d) {
     row.title = 'Go to the comment';
     row.addEventListener('click', () => {
       if (t.path) { rvGo(t.repo + '/' + t.path, true, t.hunk, t.id); return; }
-      const card = $('#rv-main [data-card="ai"]');
-      if (card) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      // One on no file is drawn at the top of the change (rvDraw).
+      const box = $(`#rv-main .rv-general [data-thread="${t.id}"]`);
+      if (box) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
     list.appendChild(row);
   }
