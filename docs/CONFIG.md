@@ -146,6 +146,7 @@ backend's compose file.
 | `setup` | Steps that prepare a fresh worktree, such as dependency installs or code generation. They run in the background when a task is created. They run again before a service from this repo starts, if a step's `creates` path is missing. |
 | `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. `fride proof` and `fride pr` run it in the task's worktree before a pull request (see [pr](#pr)). |
 | `build` | A shell command that builds this repo in a task's worktree: `go build ./...`, `npm run build`, `./gradlew assemble`. `fride proof` and `fride pr` run it before `test`. What it writes must be git-ignored: a build that changes the tree it proves fails the proof. |
+| `checks` | Build and test commands for parts of a repository, such as the components of a monorepo: `fride proof` and `fride pr` run only the checks whose paths the change touches. See [below](#reposnamechecks). |
 | `review` | `{ "tiers": [...] }`: which review tier a change to this repo's paths falls in, and so how many human approvals it needs before the task can be Done. See [below](#reposnamereview). |
 
 A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
@@ -155,6 +156,36 @@ A setup step is `{ "run": "...", "creates": "path", "fallback": "..." }`:
 - `fallback` runs when `run` fails, for example `npm ci` refusing an out-of-sync lockfile, then `npm install`.
 
 A service waits for its repo's setup to finish before it starts. A setup that fails is reported on the board and by `stack up --wait`.
+
+### repos.&lt;name&gt;.checks
+
+In a monorepo, one repository holds parts with builds and tests of their own,
+and a change usually touches one or two of them. With `checks`, the proof runs
+only the checks whose paths the change touches, instead of everything:
+
+```json
+"repos": {
+  "mono": {
+    "checks": [
+      { "name": "backend", "paths": ["services/api/", "shared/schema/"],
+        "build": "cd services/api && ./gradlew assemble", "test": "cd services/api && ./gradlew test" },
+      { "name": "web", "paths": ["apps/web/"], "test": "cd apps/web && npm ci && npm test" },
+      { "name": "docs", "paths": ["*.md", "docs/"] }
+    ]
+  }
+}
+```
+
+| field | meaning |
+|---|---|
+| `checks[].name` | The check's label in the proof ("web test"). |
+| `checks[].paths` | Patterns as in [review tiers](#reposnamereview): `.gitignore` style, from the repo root when they hold a slash. A check runs when any changed file matches. Put shared code under every check that depends on it. |
+| `checks[].build`, `checks[].test` | Run in the repository's root, build first. A check with neither marks paths that need nothing run. |
+
+The changed files are those between the merge-base and the tree being proven,
+a rename counting both of its paths. A changed file that no check covers runs
+the repository's own `build` and `test`. Without those it fails the proof and
+says which files: a change is never proven with part of it untested.
 
 ### repos.&lt;name&gt;.review
 

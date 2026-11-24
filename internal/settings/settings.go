@@ -114,6 +114,11 @@ type Repo struct {
 	// build"). `fride proof` runs it before Test. What it writes has to be
 	// git-ignored: a build that changes the tree it proves proves nothing.
 	Build string `json:"build,omitempty"`
+	// Checks are build and test commands for parts of a repository (the
+	// components of a monorepo): `fride proof` runs a check only when the
+	// change touches its paths. Build and Test then cover the changed files no
+	// check does; without them, such a file fails the proof.
+	Checks []RepoCheck `json:"checks,omitempty"`
 	// Review says how much human review a change to this repo needs: its
 	// tier rules come before the repo's own .fride/review.json and FrIDE's
 	// defaults (docs/REVIEW.md).
@@ -363,6 +368,19 @@ type Panels struct {
 	// ConfirmRisky makes the UI ask before a panel's API call that deletes,
 	// moves or drives a terminal goes through. Default false.
 	ConfirmRisky bool `json:"confirmRisky,omitempty"`
+}
+
+// RepoCheck is the build and test of one part of a repository.
+type RepoCheck struct {
+	// Name labels the check in the proof ("frontend").
+	Name string `json:"name,omitempty"`
+	// Paths are patterns as in review tiers (.gitignore style, from the repo
+	// root when they hold a slash).
+	Paths []string `json:"paths"`
+	// Build and Test run in the repository's root, Build first. A check with
+	// neither marks paths that need nothing run (docs, say).
+	Build string `json:"build,omitempty"`
+	Test  string `json:"test,omitempty"`
 }
 
 // Orchestrator configures the tasks the orchestrator creates.

@@ -8,12 +8,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/procgroup"
+	"github.com/Icewater1337/fride/internal/settings"
 )
 
 // Proof is what a task's change was shown to do before a pull request: each
@@ -61,7 +63,10 @@ type ProofRepo struct {
 
 // Check is one command of a proof.
 type Check struct {
-	Kind     string  `json:"kind"` // build, test
+	Kind string `json:"kind"` // build, test
+	// Part is the name of the repository's check it ran for (repos.<name>.checks),
+	// empty for the repository's own build and test.
+	Part     string  `json:"part,omitempty"`
 	Command  string  `json:"command"`
 	ExitCode int     `json:"exitCode"`
 	OK       bool    `json:"ok"`
@@ -77,6 +82,60 @@ type Check struct {
 type Target struct {
 	RepoSpec
 	Build, Test string
+	// Checks are the commands for parts of the repository, run for the
+	// changed files their paths cover (checksFor).
+	Checks []settings.RepoCheck
+}
+
+// step is one command a repository's proof runs.
+type step struct{ kind, command, part string }
+
+// checksFor picks what a repository's proof runs for the files its change
+// touches. Without checks it is the repository's build and test. With them,
+// each check whose paths cover a changed file, in order, and the repository's
+// build and test for the files none covers. Files that nothing covers come
+// back as uncovered: proving a change without testing part of it would pass
+// it on a technicality.
+func checksFor(t Target, files []string) (steps []step, uncovered []string) {
+	if len(t.Checks) == 0 {
+		return []step{{"build", t.Build, ""}, {"test", t.Test, ""}}, nil
+	}
+	covered := make([]bool, len(files))
+	for _, c := range t.Checks {
+		re := globsRE(c.Paths)
+		if re == nil {
+			continue
+		}
+		hit := false
+		for i, f := range files {
+			if re.MatchString(f) {
+				covered[i], hit = true, true
+			}
+		}
+		if hit {
+			part := c.Name
+			if part == "" {
+				part = strings.Join(c.Paths, ", ")
+			}
+			steps = append(steps, step{"build", c.Build, part}, step{"test", c.Test, part})
+		}
+	}
+	for i, f := range files {
+		if !covered[i] {
+			uncovered = append(uncovered, f)
+		}
+	}
+	if len(uncovered) > 0 && (t.Build != "" || t.Test != "") {
+		// A check may run the very commands of the repository's own: once is
+		// enough.
+		for _, fb := range []step{{"build", t.Build, ""}, {"test", t.Test, ""}} {
+			if !slices.ContainsFunc(steps, func(s step) bool { return s.kind == fb.kind && s.command == fb.command }) {
+				steps = append(steps, fb)
+			}
+		}
+		uncovered = nil
+	}
+	return steps, uncovered
 }
 
 const proofFile = "proof.json"
@@ -152,18 +211,39 @@ func TakeProof(ctx context.Context, targets []Target, progress io.Writer) Proof 
 			continue
 		}
 		changed++
-		if t.Build == "" && t.Test == "" {
+		if len(t.Checks) == 0 && t.Build == "" && t.Test == "" {
 			r.Err = fmt.Sprintf("no build or test command: set repos.%s.build and repos.%s.test in config.json", t.Name, t.Name)
 			fmt.Fprintf(progress, "%s: %s\n", t.Name, r.Err)
 			p.Repos = append(p.Repos, r)
 			continue
 		}
-		for _, c := range []struct{ kind, command string }{{"build", t.Build}, {"test", t.Test}} {
+		baseTree, _ := git(t.Dir, "rev-parse", mb+"^{tree}")
+		files, err := changedFiles(t.Dir, baseTree, tree)
+		if err != nil {
+			r.Err = "cannot list the changed files: " + err.Error()
+			p.Repos = append(p.Repos, r)
+			continue
+		}
+		steps, uncovered := checksFor(t, files)
+		if len(uncovered) > 0 {
+			r.Err = fmt.Sprintf("no check covers %s: add these paths to a check in repos.%s.checks "+
+				"(a check without commands marks paths that need none), or set repos.%s.build and .test for the rest",
+				listSome(uncovered, 5), t.Name, t.Name)
+			fmt.Fprintf(progress, "%s: %s\n", t.Name, r.Err)
+			p.Repos = append(p.Repos, r)
+			continue
+		}
+		for _, c := range steps {
 			if c.command == "" {
 				continue
 			}
-			fmt.Fprintf(progress, "%s %s: %s\n", t.Name, c.kind, c.command)
+			label := c.kind
+			if c.part != "" {
+				label = c.part + " " + c.kind
+			}
+			fmt.Fprintf(progress, "%s %s: %s\n", t.Name, label, c.command)
 			ch := runCheck(ctx, t.Dir, c.kind, c.command)
+			ch.Part = c.part
 			r.Checks = append(r.Checks, ch)
 			fmt.Fprintf(progress, "  %s\n", ch.verdict())
 			if !ch.OK {
@@ -193,6 +273,31 @@ func TakeProof(ctx context.Context, targets []Target, progress io.Writer) Proof 
 		p.Err = "no repository of this task has changed: there is nothing to prove"
 	}
 	return p
+}
+
+// changedFiles are the paths that differ between two trees of a repository,
+// renames as both of their paths: a check covers what a file left as much as
+// where it went.
+func changedFiles(dir, from, to string) ([]string, error) {
+	out, err := git(dir, "diff-tree", "-r", "--name-status", "--no-renames", from, to)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, l := range strings.Split(out, "\n") {
+		if _, path, ok := strings.Cut(l, "\t"); ok && path != "" {
+			files = append(files, path)
+		}
+	}
+	return files, nil
+}
+
+// listSome names the first few of a list, and how many more there are.
+func listSome(items []string, n int) string {
+	if len(items) <= n {
+		return strings.Join(items, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(items[:n], ", "), len(items)-n)
 }
 
 // passed reports whether a repository's part of the proof holds.
@@ -234,6 +339,14 @@ func runCheck(ctx context.Context, dir, kind, command string) Check {
 		c.OK = true
 	}
 	return c
+}
+
+// label is the check's kind, with the part of the repository it is for.
+func (c Check) label() string {
+	if c.Part == "" {
+		return c.Kind
+	}
+	return c.Part + " " + c.Kind
 }
 
 func (c Check) verdict() string {
@@ -410,7 +523,7 @@ func (p Proof) Markdown() string {
 					res = "**failed**: " + cell(c.Err)
 				}
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s in %s |\n", r.Repo, version, c.Kind, code(c.Command), res, seconds(c.Seconds))
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s in %s |\n", r.Repo, version, c.label(), code(c.Command), res, seconds(c.Seconds))
 		}
 		if r.Err != "" && len(r.Checks) > 0 {
 			fmt.Fprintf(&b, "| %s | %s | | | %s |\n", r.Repo, version, cell(r.Err))
@@ -425,7 +538,7 @@ func (p Proof) Markdown() string {
 			out = tail(out, maxProofChars)
 			fence := fenceFor(out)
 			fmt.Fprintf(&b, "\n<details><summary>%s %s output (the end of it)</summary>\n\n%s\n%s\n%s\n\n</details>\n",
-				r.Repo, c.Kind, fence, strings.TrimRight(out, "\n"), fence)
+				r.Repo, c.label(), fence, strings.TrimRight(out, "\n"), fence)
 		}
 	}
 	b.WriteString(proofEnd + "\n")

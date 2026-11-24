@@ -470,3 +470,67 @@ func TestBaseBranchDropsTheRemote(t *testing.T) {
 		}
 	}
 }
+
+// In a repository with checks (a monorepo), the proof runs only the checks
+// whose paths the change touches, labelled with their part. A changed file
+// that no check covers falls to the repository's own commands, and without
+// them fails the proof rather than passing untested.
+func TestProofRunsTheChecksOfTheChangedParts(t *testing.T) {
+	dir := repo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "web/app.js", "ok()\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "web: start")
+	ctx := context.Background()
+	checks := []settings.RepoCheck{
+		{Name: "backend", Paths: []string{"server.go", "internal/"}, Test: "echo backend tested"},
+		{Name: "web", Paths: []string{"web/"}, Build: "echo web built", Test: "echo web tested"},
+		{Name: "docs", Paths: []string{"*.md"}},
+	}
+	tg := Target{RepoSpec: RepoSpec{Name: "api", Dir: dir, Base: "main"}, Checks: checks}
+
+	p := TakeProof(ctx, []Target{tg}, nil)
+	var ran []string
+	for _, c := range p.Repos[0].Checks {
+		ran = append(ran, c.label())
+	}
+	if !p.OK || strings.Join(ran, ",") != "web build,web test" {
+		t.Fatalf("a change to web/ should run only web's checks, ran %v: %+v", ran, p.Repos[0])
+	}
+	if md := p.Markdown(); !strings.Contains(md, "web test") {
+		t.Errorf("the proof does not say which part was tested:\n%s", md)
+	}
+
+	write(t, dir, "notes.md", "why\n")
+	write(t, dir, "Makefile", "all:\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "notes and a Makefile")
+	p = TakeProof(ctx, []Target{tg}, nil)
+	if p.OK || !strings.Contains(p.Repos[0].Err, "no check covers Makefile") {
+		t.Fatalf("a file no check covers passed the proof: %+v", p.Repos[0])
+	}
+
+	tg.Test = "echo the rest tested"
+	p = TakeProof(ctx, []Target{tg}, nil)
+	ran = nil
+	for _, c := range p.Repos[0].Checks {
+		ran = append(ran, c.label())
+	}
+	if !p.OK || strings.Join(ran, ",") != "web build,web test,test" {
+		t.Fatalf("the repository's own test should cover what no check does, ran %v: %+v", ran, p.Repos[0])
+	}
+}
+
+// A check that runs the repository's own commands is not run a second time as
+// the fallback for files no check covers.
+func TestChecksForRunsACommandOnce(t *testing.T) {
+	tg := Target{Build: "make", Test: "make test", Checks: []settings.RepoCheck{
+		{Name: "core", Paths: []string{"core/"}, Build: "make", Test: "make test"},
+	}}
+	steps, uncovered := checksFor(tg, []string{"core/a.go", "README"})
+	if len(uncovered) != 0 || len(steps) != 2 {
+		t.Fatalf("want core's build and test once, got %+v (uncovered %v)", steps, uncovered)
+	}
+}
