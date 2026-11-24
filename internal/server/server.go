@@ -495,6 +495,12 @@ func (s *Server) launchAgent(slug string, kind agent.Kind, title string, o agent
 	// section now, before the agent reads the file. Best effort.
 	_ = workspace.EnsureGuide(s.cfg, slug, string(kind))
 	_ = workspace.InstallSkills(s.cfg, slug)
+	// A secret rotated in the main checkout reaches the workspace before the
+	// agent's next test run needs it. File names only in the log: these files
+	// hold secrets.
+	if refreshed := workspace.RefreshCopies(s.cfg, slug); len(refreshed) > 0 {
+		log.Printf("task %s: refreshed %s from the main checkout", slug, strings.Join(refreshed, ", "))
+	}
 	if o.Dangerous {
 		title += " !"
 	}

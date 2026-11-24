@@ -628,6 +628,32 @@ func EnsureGuide(cfg *config.Config, slug, agentKind string) error {
 // to `git ls-files --others --ignored`. Rather than half-implement that, a glob
 // is reported as a note instead of being silently skipped.
 func copyIncludes(cfg *config.Config, name, mainCheckout, dest string) (copied []string, notes []string) {
+	lines, notes := copyCandidates(cfg, name, mainCheckout)
+	rec := readCopied(filepath.Dir(dest))
+	for _, line := range lines {
+		src := filepath.Join(mainCheckout, line)
+		fi, err := os.Lstat(src)
+		if err == nil {
+			err = copyFile(src, filepath.Join(dest, line), fi)
+		}
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("failed to copy %q: %v", line, err))
+			continue
+		}
+		// What was copied, so RefreshCopies can tell a file nobody touched
+		// since from one edited in the workspace.
+		if sum, err := fingerprint(src); err == nil {
+			rec[name+"/"+line] = sum
+		}
+		copied = append(copied, line)
+	}
+	_ = writeCopied(filepath.Dir(dest), rec)
+	return copied, notes
+}
+
+// copyCandidates are the files of a repository's copy list that a workspace
+// gets: present in the main checkout, plain files, and not tracked by git.
+func copyCandidates(cfg *config.Config, name, mainCheckout string) (lines []string, notes []string) {
 	entries, overridden := cfg.Settings.EffectiveCopy(name, mainCheckout)
 	if overridden {
 		notes = append(notes, "copy list from config.json (repos."+name+".copy)")
@@ -656,13 +682,9 @@ func copyIncludes(cfg *config.Config, name, mainCheckout, dest string) (copied [
 			notes = append(notes, fmt.Sprintf("%q is tracked — git already provides it", line))
 			continue
 		}
-		if err := copyFile(src, filepath.Join(dest, line), fi); err != nil {
-			notes = append(notes, fmt.Sprintf("failed to copy %q: %v", line, err))
-			continue
-		}
-		copied = append(copied, line)
+		lines = append(lines, line)
 	}
-	return copied, notes
+	return lines, notes
 }
 
 func copyFile(src, dst string, fi os.FileInfo) error {
