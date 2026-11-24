@@ -495,6 +495,10 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 	services := []recordedService(nil)
 	if rec != nil {
 		rec.settleMarks(cfg, slug)
+		// In the slot and profile the stack was started with, not the task's now.
+		if plan, err := resolveWith(cfg, slug, rec.K, rec.opts()); err == nil && rec.K > 0 {
+			rec.fillStops(plan)
+		}
 		services = rec.Services
 	} else if plan, err := Resolve(cfg, slug, k); err == nil {
 		// Started by a FrIDE that kept no record: the profile as it is now is

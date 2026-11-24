@@ -153,6 +153,24 @@ func (r *record) settleMarks(cfg *config.Config, slug string) {
 	r.Marked = true
 }
 
+// fillStops gives a recorded service without a stop command the one its profile
+// has now, for the same service in the same mode on the same port, so in the
+// same slot. A record written before the profile had a stop command, or by a
+// FrIDE that did not record one, would otherwise leave a launcher's detached
+// services running when the stack stops, and its slot was released under them.
+// The record itself still says what to stop; this only says how.
+func (r *record) fillStops(p *Plan) {
+	for i, s := range r.Services {
+		now := p.Services[s.Name]
+		if s.Stop != "" || s.Mode != ModeSource || now == nil || now.Mode != s.Mode || now.Port != s.Port || now.Spec.Stop == "" {
+			continue
+		}
+		if stop, err := p.Expand(s.Name, now.Spec.Stop); err == nil {
+			r.Services[i].Stop, r.Services[i].Dir = stop, now.Dir
+		}
+	}
+}
+
 // keepMarks carries over what an earlier start of the task started: a server
 // its build forked outlives its launcher, and is still Down's to stop. A mark
 // is for one port; a service that moved has nothing of ours on its new one.
