@@ -83,6 +83,8 @@ type Message struct {
 	Time    time.Time `json:"time"`
 	// HTML is an inline widget (ui_inline), drawn in a sandboxed frame.
 	HTML string `json:"html,omitempty"`
+	// Images are the screenshots attached to a user message (attachments.go).
+	Images []string `json:"images,omitempty"`
 }
 
 // state is everything that survives a restart. The conversation itself lives in
@@ -159,6 +161,8 @@ type Orchestrator struct {
 	st    state
 	// panels are the web UI tabs the orchestrator builds (panels.go).
 	panels *panels.Store
+	// attachDir holds the screenshots attached to the chat (attachments.go).
+	attachDir string
 
 	// thinking is held for the whole of a brain turn, and is what stops the
 	// monitor from starting a second one underneath the first.
@@ -197,12 +201,13 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 		path: filepath.Join(stateDir, "orchestrator.json"),
 		host: host,
 		brain: &brain{bin: claudeBin, dir: workspaceRoot,
-			addDirs: []string{filepath.Join(stateDir, "panels")}},
-		panels: panels.New(filepath.Join(stateDir, "panels")),
-		mem:    memory{tasks: map[string]taskState{}},
-		wake:   make(chan struct{}, 1),
-		notes:  make(chan Note, 64),
-		stop:   make(chan struct{}),
+			addDirs: []string{filepath.Join(stateDir, "panels"), AttachmentsDir(stateDir)}},
+		panels:    panels.New(filepath.Join(stateDir, "panels")),
+		attachDir: AttachmentsDir(stateDir),
+		mem:       memory{tasks: map[string]taskState{}},
+		wake:      make(chan struct{}, 1),
+		notes:     make(chan Note, 64),
+		stop:      make(chan struct{}),
 	}
 	o.st = state{Mode: ModeChat, Autonomy: AutonomyAuto, Cursors: map[string]string{}}
 	o.load()
@@ -444,10 +449,20 @@ func (o *Orchestrator) Reset() {
 // fine. Errors that belong to the request itself (nothing to say, a turn
 // already running) are still returned here; anything the turn hits lands in the
 // chat, where it is legible afterwards.
-func (o *Orchestrator) Say(text string) error {
+//
+// images are attachments already saved (SaveAttachment), by name; a message may
+// be only a screenshot.
+func (o *Orchestrator) Say(text string, images ...string) error {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(images) == 0 {
 		return fmt.Errorf("say something")
+	}
+	for _, n := range images {
+		if p := o.AttachmentPath(n); p == "" {
+			return fmt.Errorf("no attachment %q", n)
+		} else if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("attachment %s: %w", n, err)
+		}
 	}
 	o.mu.Lock()
 	if o.closed() {
@@ -462,6 +477,12 @@ func (o *Orchestrator) Say(text string) error {
 	gen := o.gen
 	o.lastErr = ""
 	o.add(RoleUser, "", text)
+	if len(images) > 0 {
+		if text == "" {
+			o.add(RoleUser, "", "(screenshot)")
+		}
+		o.st.Messages[len(o.st.Messages)-1].Images = images
+	}
 	// The user has spoken, so whatever the orchestrator was blocked on is
 	// answered and every task gets its patience back.
 	o.mem.awaiting = false
@@ -473,7 +494,7 @@ func (o *Orchestrator) Say(text string) error {
 	o.save()
 	o.mu.Unlock()
 
-	input := o.prompt("THE USER SAYS:\n"+text+"\n\n", nil)
+	input := o.prompt("THE USER SAYS:\n"+text+"\n\n"+o.attachedLead(images), nil)
 	tr := turn{origin: fromUser, model: o.modelFor(text)}
 	go func() {
 		defer o.turns.Done()

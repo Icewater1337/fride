@@ -189,12 +189,17 @@
       <div class="workarea orch-main">
         <div id="orch-status" class="orch-status"></div>
         <div id="orch-log" class="orch-log"></div>
-        <div class="orch-compose">
+        <div class="orch-compose" id="orch-compose">
+          <div id="orch-attached" class="orch-attached hidden"></div>
           <textarea id="orch-input" rows="2" spellcheck="false"
             placeholder="Start a task with backend and frontend from main on feat/PROJ-42-search"></textarea>
           <div class="orch-compose-f">
-            <span class="hint"><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
-            <button id="orch-send" class="primary sm"><svg class="i"><use href="#i-send"/></svg>Send</button>
+            <span class="hint"><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · paste or drop screenshots</span>
+            <span class="orch-compose-btns">
+              <input id="orch-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+              <button id="orch-attach" class="ghost sm" title="Attach screenshots"><svg class="i"><use href="#i-plus"/></svg>Image</button>
+              <button id="orch-send" class="primary sm"><svg class="i"><use href="#i-send"/></svg>Send</button>
+            </span>
           </div>
         </div>
       </div>

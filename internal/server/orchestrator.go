@@ -1,14 +1,17 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -300,6 +303,10 @@ func (h orchHost) Send(slug, text string) error {
 				"typed at it; answer it in the task's tab", slug, tool)
 		}
 	}
+	text, err := h.carryAttachments(slug, text)
+	if err != nil {
+		return err
+	}
 	line, err := h.shortLine(slug, text)
 	if err != nil {
 		return err
@@ -311,6 +318,37 @@ func (h orchHost) Send(slug, text string) error {
 		return h.typeLine(slug, sess, dir, id, line)
 	}
 	return sess.SendLine(line)
+}
+
+// carryAttachments copies every chat screenshot the text names into the task's
+// workspace sidecar, next to long instructions, and points the text at the copy.
+// The agent works in its workspace, so it opens the copy without a permission
+// prompt; the chat's own folder is outside it. Only names the orchestrator gave
+// out are copied.
+func (h orchHost) carryAttachments(slug, text string) (string, error) {
+	src := orchestrator.AttachmentsDir(h.s.cfg.StateDir) + string(filepath.Separator)
+	if !strings.Contains(text, src) {
+		return text, nil
+	}
+	dst := filepath.Join(h.s.cfg.WorkspaceDir(slug), ".fride", "attachments")
+	var failed error
+	out := regexp.MustCompile(regexp.QuoteMeta(src)+orchestrator.AttachmentPattern).ReplaceAllStringFunc(text, func(path string) string {
+		b, err := os.ReadFile(h.s.orch.AttachmentPath(filepath.Base(path)))
+		if err == nil {
+			if err = os.MkdirAll(dst, 0o700); err == nil {
+				err = os.WriteFile(filepath.Join(dst, filepath.Base(path)), b, 0o600)
+			}
+		}
+		if err != nil {
+			failed = err
+			return path
+		}
+		return filepath.Join(dst, filepath.Base(path))
+	})
+	if failed != nil {
+		return text, fmt.Errorf("a screenshot could not be given to %s's agent: %w", slug, failed)
+	}
+	return out, nil
 }
 
 // longInstruction is how many characters are still typed at an agent. Longer
@@ -632,17 +670,61 @@ func (s *Server) handleOrchestrator(w http.ResponseWriter, r *http.Request) {
 	case action == "say" && r.Method == http.MethodPost:
 		var req struct {
 			Text string `json:"text"`
+			// Images are screenshots, as data: URLs (or bare base64).
+			Images []string `json:"images"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Room for the images at their limit, base64 adding a third.
+		limit := int64(orchestrator.MaxAttachments*orchestrator.MaxAttachment)*4/3 + 1<<20
+		if err := json.NewDecoder(io.LimitReader(r.Body, limit)).Decode(&req); err != nil {
 			writeErr(w, 400, err)
 			return
 		}
-		if err := s.orch.Say(req.Text); err != nil {
+		if len(req.Images) > orchestrator.MaxAttachments {
+			writeErr(w, 400, fmt.Errorf("at most %d images go with a message", orchestrator.MaxAttachments))
+			return
+		}
+		var names []string
+		// What this request saved goes again when it is refused: nothing will
+		// ever point at it.
+		drop := func() {
+			for _, n := range names {
+				_ = os.Remove(s.orch.AttachmentPath(n))
+			}
+		}
+		for _, img := range req.Images {
+			if _, after, ok := strings.Cut(img, ","); ok && strings.HasPrefix(img, "data:") {
+				img = after
+			}
+			data, err := base64.StdEncoding.DecodeString(img)
+			if err == nil {
+				var name string
+				if name, err = s.orch.SaveAttachment(data); err == nil {
+					names = append(names, name)
+					continue
+				}
+			}
+			drop()
+			writeErr(w, 400, fmt.Errorf("an image could not be attached: %w", err))
+			return
+		}
+		if err := s.orch.Say(req.Text, names...); err != nil {
+			drop()
 			writeErr(w, 409, err)
 			return
 		}
 		// 202: the message is accepted, the answer arrives on the next poll.
 		writeJSON(w, 202, s.orch.Snapshot())
+
+	case strings.HasPrefix(action, "attachments/") && r.Method == http.MethodGet:
+		// A screenshot of the chat, for its thumbnail. Only names the
+		// orchestrator gave out resolve, so the URL cannot reach anything else.
+		p := s.orch.AttachmentPath(strings.TrimPrefix(action, "attachments/"))
+		if p == "" {
+			writeErr(w, 404, fmt.Errorf("no such attachment"))
+			return
+		}
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		http.ServeFile(w, r, p)
 
 	case action == "ui-event" && r.Method == http.MethodPost:
 		// From a panel's fride.ask. Queued, never 409: a panel's button has

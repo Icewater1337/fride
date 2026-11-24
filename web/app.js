@@ -3218,6 +3218,22 @@ function orchMessage(m, opts = {}) {
     ? new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''));
   row.appendChild(head);
   row.appendChild(el('div', 'orch-text', m.text));
+  if ((m.images || []).length) {
+    const imgs = el('div', 'orch-images');
+    for (const name of m.images) {
+      const a = el('a');
+      a.href = '/api/orchestrator/attachments/' + encodeURIComponent(name);
+      a.target = '_blank';
+      a.rel = 'noopener';
+      const im = el('img');
+      im.src = a.href;
+      im.alt = 'Screenshot';
+      im.loading = 'lazy';
+      a.appendChild(im);
+      imgs.appendChild(a);
+    }
+    row.appendChild(imgs);
+  }
   // An inline widget (ui_inline) runs sandboxed like a panel (panels.js).
   if (m.html) mountPanel(row, 'inline-' + m.id, m.html, 'inline-frame');
   return row;
@@ -3225,18 +3241,78 @@ function orchMessage(m, opts = {}) {
 
 async function sendOrch() {
   const box = $('#orch-input'), text = box.value.trim();
-  if (!text) return;
+  if (!text && !orchImages.length) return;
   const btn = $('#orch-send');
   btn.disabled = true;
   try {
-    await api.post('/api/orchestrator/say', { text });
+    await api.post('/api/orchestrator/say', { text, images: orchImages.map(i => i.url) });
     box.value = '';
+    orchImages = [];
+    renderOrchImages();
     growCompose();
     $('#orch-error').textContent = '';
     await loadOrch(false);
   } catch (e) { $('#orch-error').textContent = e.message; }
   btn.disabled = false;
   box.focus();
+}
+
+// Screenshots for the next message: pasted, dropped, or picked. Kept as data:
+// URLs, which is what the thumbnails show and what goes to the server. The
+// server checks what they really are; this only keeps obvious non-images out.
+const ORCH_MAX_IMAGES = 8, ORCH_MAX_BYTES = 10 << 20;
+let orchImages = [];
+
+function addOrchImages(files) {
+  for (const f of files) {
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type)) { toast(`${f.name || 'That file'} is not a PNG, JPEG, GIF or WebP image.`); continue; }
+    if (f.size > ORCH_MAX_BYTES) { toast(`${f.name || 'An image'} is over 10 MB.`); continue; }
+    if (orchImages.length >= ORCH_MAX_IMAGES) { toast(`At most ${ORCH_MAX_IMAGES} images go with a message.`); break; }
+    const r = new FileReader();
+    r.onload = () => { orchImages.push({ url: r.result }); renderOrchImages(); };
+    r.readAsDataURL(f);
+  }
+}
+
+function renderOrchImages() {
+  const host = $('#orch-attached');
+  host.innerHTML = '';
+  host.classList.toggle('hidden', !orchImages.length);
+  orchImages.forEach((img, i) => {
+    const t = el('div', 'orch-thumb');
+    const im = el('img');
+    im.src = img.url;
+    im.alt = `Screenshot ${i + 1}`;
+    t.appendChild(im);
+    const rm = el('button');
+    rm.title = 'Remove';
+    rm.setAttribute('aria-label', `Remove screenshot ${i + 1}`);
+    rm.appendChild(icon('x'));
+    rm.addEventListener('click', () => { orchImages.splice(i, 1); renderOrchImages(); });
+    t.appendChild(rm);
+    host.appendChild(t);
+  });
+}
+
+$('#orch-input').addEventListener('paste', e => {
+  const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return; // plain text pastes as usual
+  e.preventDefault();
+  addOrchImages(files);
+});
+$('#orch-attach').addEventListener('click', () => $('#orch-file').click());
+$('#orch-file').addEventListener('change', e => { addOrchImages([...e.target.files]); e.target.value = ''; });
+{
+  const zone = $('#orch-compose');
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  zone.addEventListener('dragover', e => { if (hasFiles(e)) { e.preventDefault(); zone.classList.add('dropping'); } });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dropping'));
+  zone.addEventListener('drop', e => {
+    zone.classList.remove('dropping');
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    addOrchImages([...e.dataTransfer.files]);
+  });
 }
 
 // The compose box grows with what is typed, up to a limit, then scrolls.
