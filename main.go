@@ -82,6 +82,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   task ls                               list tasks
   task git-identity <task> <id|none>    switch identity; applies to sessions started after
   task profile <task> <name>            switch profile; applies at the next stack up
+  task base <task> <repo> <ref>         what a repo's change is compared with (the proof,
+                                        the Review tab, a new pull request's target), after
+                                        its branch moved onto another base
   task service <task> <svc> <shared|task|off|default>
                                         how a container-backed service is provided
   task status <task> <open|in_progress|done>
@@ -777,6 +780,33 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 			fmt.Println("  note: the stack is running and keeps the profile it started with — " +
 				"fride stack down && fride stack up to apply this")
 		}
+
+	case "base":
+		// A task whose branch is retargeted (rebased onto another branch, its
+		// pull request aimed elsewhere) keeps the base it was created with,
+		// and the proof, the Review tab and a new pull request then compare it
+		// with the wrong branch: what landed there since counts as the task's.
+		if len(args) < 4 {
+			check(fmt.Errorf("usage: fride task base <task> <repo> <ref>   e.g. origin/main"))
+		}
+		t := resolveTask(cfg, st, args[1:2])
+		repo, ref := args[2], args[3]
+		out, err := exec.Command("git", "-C", cfg.RepoDir(t.Slug, repo), "rev-parse", "--verify", "--quiet",
+			"--end-of-options", ref+"^{commit}").Output()
+		if err != nil || len(out) == 0 {
+			check(fmt.Errorf("%s has no ref %q here: fetch it first, or name it as git does (origin/main)", repo, ref))
+		}
+		_, err = st.Update(t.Slug, func(u *store.Task) error {
+			for i := range u.Repos {
+				if u.Repos[i].Name == repo {
+					u.Repos[i].BaseRef = ref
+					return nil
+				}
+			}
+			return fmt.Errorf("task %s has no repository %s", t.Slug, repo)
+		})
+		check(err)
+		fmt.Printf("%s: %s now compares with %s\n", t.Slug, repo, ref)
 
 	case "service":
 		if len(args) < 4 {
