@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -239,7 +241,7 @@ func oneTurn() []agent.Turn { return []agent.Turn{{Role: "assistant", Text: "don
 func TestAskAutonomyProposesRatherThanActs(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAsk, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAsk); err != nil {
 		t.Fatal(err)
 	}
 	reply := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "carry on"}}}
@@ -266,7 +268,7 @@ func TestAskAutonomyProposesRatherThanActs(t *testing.T) {
 func TestUnansweredNudgesStopAndEscalate(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 	reply := Reply{Actions: []Action{{Kind: ActSendToAgent, Task: "t1", Text: "keep going"}}}
@@ -299,7 +301,7 @@ func TestNothingIsTypedAtAnAgentOnAConfirmation(t *testing.T) {
 	h := newFakeHost()
 	h.obs["t1"] = Observation{Running: true, Waiting: true, Blocked: "Bash"}
 	o := newTestOrch(t, h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 	// One look is what records the block.
@@ -448,7 +450,7 @@ func (s *slowHost) CreateTask(n NewTask) (TaskInfo, error) {
 func TestResumingPicksUpWhereTheAgentLeftOff(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 	// A stale cursor from the conversation as it stood before it was closed.
@@ -525,7 +527,7 @@ func TestNewWorkFromTheChatOpensASecondSession(t *testing.T) {
 	h = newFakeHost()
 	h.obs["t1"] = Observation{Running: true, Waiting: true}
 	o = newTestOrch(t, h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 	o.apply(Reply{Actions: work[:1]}, loop)
@@ -546,39 +548,91 @@ func TestNewWorkFromTheChatOpensASecondSession(t *testing.T) {
 	}
 }
 
-func TestModeRejectsUnknownTasksAndEmptySelections(t *testing.T) {
+func TestModeRejectsAnUnknownMode(t *testing.T) {
 	o := newTestOrch(t, newFakeHost())
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"nope"}); err == nil {
-		t.Fatal("supervising a task that does not exist was accepted")
-	}
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, nil); err == nil {
-		t.Fatal("orchestrating nothing was accepted")
-	}
-	if err := o.SetMode("sideways", AutonomyAuto, []string{"t1"}); err == nil {
+	if err := o.SetMode("sideways", AutonomyAuto); err == nil {
 		t.Fatal("an unknown mode was accepted")
 	}
-	if err := o.SetMode(ModeChat, AutonomyAuto, nil); err != nil {
-		t.Fatalf("chat with nothing selected should be fine: %v", err)
+	if err := o.SetMode(ModeOrchestrate, "maybe"); err == nil {
+		t.Fatal("an unknown autonomy was accepted")
 	}
 }
 
-// A task that disappears underneath the loop is dropped rather than reported
-// every fifteen seconds forever.
+// Orchestrate mode supervises exactly the tasks in progress: nobody picks them,
+// and a status change moves a task in or out by the next look.
+func TestOrchestratingSupervisesTheTasksInProgress(t *testing.T) {
+	h := &statusHost{fakeHost: newFakeHost(), status: map[string]string{"t1": "in_progress", "t2": "open"}}
+	o := newTestOrch(t, h)
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
+		t.Fatal(err)
+	}
+	if w := o.Snapshot().Watching; !slices.Equal(w, []string{"t1"}) {
+		t.Fatalf("supervising %v, want the task in progress", w)
+	}
+	h.set("t2", "in_progress")
+	h.set("t1", "done")
+	o.tick(context.Background())
+	if w := o.Snapshot().Watching; !slices.Equal(w, []string{"t2"}) {
+		t.Fatalf("after t1 was done and t2 started, supervising %v", w)
+	}
+	// The orchestrator's own set_status is seen at once.
+	if err := o.act(Action{Kind: ActSetStatus, Task: "t2", Status: "open"}, turn{}); err != nil {
+		t.Fatal(err)
+	}
+	if w := o.Snapshot().Watching; len(w) != 0 {
+		t.Fatalf("a task set back to open is still supervised: %v", w)
+	}
+	if v := o.Snapshot(); v.Mode != ModeOrchestrate {
+		t.Fatalf("with nothing in progress the mode should stay orchestrate, got %q", v.Mode)
+	}
+}
+
+// statusHost is the fake host with statuses that change, as SetStatus sets them.
+type statusHost struct {
+	*fakeHost
+	smu    sync.Mutex
+	status map[string]string
+}
+
+func (h *statusHost) set(slug, s string) { h.smu.Lock(); h.status[slug] = s; h.smu.Unlock() }
+
+func (h *statusHost) Tasks() []TaskInfo {
+	h.smu.Lock()
+	defer h.smu.Unlock()
+	var out []TaskInfo
+	for _, s := range slices.Sorted(maps.Keys(h.status)) {
+		out = append(out, TaskInfo{Slug: s, Name: s, Status: h.status[s], Agent: "claude"})
+	}
+	return out
+}
+
+func (h *statusHost) SetStatus(slug, s string) error {
+	h.set(slug, s)
+	return h.fakeHost.SetStatus(slug, s)
+}
+
+// A task in progress that can no longer be observed is dropped, and stays
+// dropped rather than taken on and reported again on every look.
 func TestDeletedTaskIsDroppedFromSupervision(t *testing.T) {
 	h := newFakeHost()
 	o := newTestOrch(t, h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 	h.obsErr["t1"] = errGone{}
+	o.tick(context.Background())
+	before := len(o.Snapshot().Messages)
 	o.tick(context.Background())
 
 	v := o.Snapshot()
 	if len(v.Watching) != 0 {
 		t.Fatalf("still supervising %v", v.Watching)
 	}
-	if v.Mode != ModeChat {
-		t.Fatalf("with nothing left to supervise the mode should fall back to chat, got %q", v.Mode)
+	if len(v.Messages) != before {
+		t.Fatalf("the dropped task was reported again: %q", lastText(o))
+	}
+	if v.Mode != ModeOrchestrate {
+		t.Fatalf("orchestrate mode should stay on with nothing to supervise, got %q", v.Mode)
 	}
 }
 
@@ -592,7 +646,7 @@ func TestStatePersists(t *testing.T) {
 	dir := t.TempDir()
 	h := newFakeHost()
 	o := New(dir, dir, "/nonexistent-claude", h)
-	if err := o.SetMode(ModeOrchestrate, AutonomyAsk, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAsk); err != nil {
 		t.Fatal(err)
 	}
 	o.mu.Lock()

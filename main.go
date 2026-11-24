@@ -159,7 +159,8 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question
-  orch watch <task>... [--ask]          supervise these; --ask makes it propose
+  orch on [--ask]                       supervise every task in progress; --ask makes
+                                        it propose instead of act
   orch off                              stop supervising, back to chat
                                         (all four talk to a running fride serve)
 

@@ -275,7 +275,7 @@ fride serve --under-fridolin              # companion mode (docs/COMPANION.md)
 fride pair-companion                      # one-time code for the companion's token
 
 fride orch say "start a task with backend and frontend from main on feat/PROJ-42"
-fride orch watch <task>... [--ask]
+fride orch on [--ask]                     # supervise every task in progress; off: back to chat
 
 fride in "fix the empty state of the search page" --from chat [--ref <id>] [--wait]
 fride in ls | in status <id> | in reply <id> "…" | in close <id>
@@ -338,7 +338,9 @@ Claude Code's own transcripts.
 The orchestrator is a headless Claude Code session with **no** shell and no
 write tools. It reads the workspaces (Read, Grep, Glob) and acts only through
 a closed set of actions (create a task, send one line to an agent, start a
-stack…) that FrIDE validates, rate-limits and logs in the chat. One of those
+stack…) that FrIDE validates, rate-limits and logs in the chat. In Orchestrate mode it
+supervises every task in progress, and moves tasks to open or done itself;
+a task the user sets in progress is taken on at the next look. One of those
 actions builds its own tabs in the web UI, small HTML/JS apps with the whole
 FrIDE API behind them: a task board, a review queue. See
 [docs/PANELS.md](docs/PANELS.md).

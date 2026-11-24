@@ -42,6 +42,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	// A look can bring inbox news without a turn: an instruction delivered, a
 	// thread finished because its task was closed.
 	defer o.noteNews()
+	o.syncWatching()
 	o.mu.Lock()
 	// Waiting on the user suppresses acting, not looking. The thing it is
 	// waiting for is often answered somewhere else entirely — a permission
@@ -124,8 +125,8 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	})
 }
 
-// supervised is what a scheduled look shows the brain: the workspaces picked in
-// orchestrate mode, and, in any mode, those an inbox thread is following — a
+// supervised is what a scheduled look shows the brain: in orchestrate mode the
+// tasks in progress (syncWatching), and, in any mode, those an inbox thread is following — a
 // message sent from elsewhere is only useful if what came of it is reported.
 // Called with the lock held.
 func (o *Orchestrator) supervised() []string {
@@ -163,14 +164,15 @@ func (o *Orchestrator) dropWatch(slug string, err error) {
 			}
 		}
 		o.st.Watching = out
-		// In chat mode the selection is only kept for the next switch; the task
-		// leaving it is not news.
+		// Kept out while it is still in progress (syncWatching). Orchestrate
+		// mode stays on with nothing to supervise: the next task to start is
+		// taken on by itself.
+		if o.mem.gone == nil {
+			o.mem.gone = map[string]bool{}
+		}
+		o.mem.gone[slug] = true
 		if o.st.Mode == ModeOrchestrate {
 			o.add(RoleEvent, slug, "stopped supervising "+slug+": "+err.Error())
-			if len(out) == 0 {
-				o.st.Mode = ModeChat
-				o.add(RoleEvent, "", "Nothing left to orchestrate — back to chat.")
-			}
 		}
 	}
 	o.save()
@@ -212,7 +214,7 @@ func (o *Orchestrator) prompt(lead string, obs []Observation) string {
 
 	b.WriteString("MODE: " + mode)
 	if mode == ModeOrchestrate {
-		b.WriteString(" over [" + watching + "], " + autonomyLabel(autonomy))
+		b.WriteString(" over every task in progress: [" + watching + "], " + autonomyLabel(autonomy))
 		if autonomy == AutonomyAsk {
 			b.WriteString("\nYou may not act unprompted in this mode. Describe what you " +
 				"would do and set needsUser=true; the user answering is what runs it.")

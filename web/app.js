@@ -3051,7 +3051,7 @@ const ORCH_MODES = [
   { id: 'chat', label: 'Chat',
     detail: 'It acts only when you say something. Use it to start workspaces.' },
   { id: 'orchestrate', label: 'Orchestrate',
-    detail: 'It also watches the workspaces below on a timer, and keeps them moving.' },
+    detail: 'It also watches every task in progress on a timer, keeps them moving, and moves them to open or done.' },
 ];
 
 const ORCH_AUTONOMY = [
@@ -3064,11 +3064,6 @@ const ORCH_AUTONOMY = [
 const orch = {
   poll: null,
   view: null,
-  // The pending mode/watch choices, which are only sent on Apply — toggling a
-  // checkbox must not silently put an agent in charge of a workspace.
-  mode: 'chat',
-  autonomy: 'auto',
-  watching: new Set(),
   // lastSeen keeps the log from being rebuilt (and scrolled) when nothing has
   // changed, which would otherwise fight with reading it.
   lastSeen: -1,
@@ -3086,91 +3081,47 @@ async function loadOrch(adopt) {
   try { v = await api.get('/api/orchestrator'); }
   catch (e) { $('#orch-error').textContent = e.message; return; }
   orch.view = v;
-  if (adopt) {
-    // The server's setup is the truth on arrival; after that the boxes belong
-    // to whoever is clicking them.
-    orch.mode = v.mode;
-    orch.autonomy = v.autonomy;
-    orch.watching = new Set(v.watching || []);
-    renderOrchPickers();
-  }
-  renderOrchTasks();
+  renderOrchBar(v);
   renderOrchStatus(v);
   renderOrchLog(v);
 }
 
-function renderOrchPickers() {
-  radioGroup($('#orch-mode'), 'orchmode', ORCH_MODES, orch.mode, id => {
-    orch.mode = id; renderOrchTasks();
-  });
-  radioGroup($('#orch-autonomy'), 'orchauto', ORCH_AUTONOMY, orch.autonomy, id => {
-    orch.autonomy = id;
-  });
+// The two choices in the bar take effect on the click: there is nothing to
+// pick besides them, since what is supervised is every task in progress.
+function renderOrchBar(v) {
+  segmented($('#orch-mode'), ORCH_MODES, v.mode, id => setOrchMode({ mode: id, autonomy: v.autonomy }));
+  segmented($('#orch-autonomy'), ORCH_AUTONOMY, v.autonomy, id => setOrchMode({ mode: v.mode, autonomy: id }));
 }
 
-// radioGroup draws the same labelled-radio list the New task dialog uses, so
-// the two read as one control rather than two dialects.
-function radioGroup(host, name, items, selected, onPick) {
+function segmented(host, items, selected, onPick) {
   host.innerHTML = '';
   for (const it of items) {
-    const row = el('label', 'agent-pick');
-    const rb = el('input');
-    rb.type = 'radio'; rb.name = name; rb.value = it.id;
-    rb.checked = it.id === selected;
-    rb.addEventListener('change', () => onPick(it.id));
-    row.appendChild(rb);
-    const nm = el('div');
-    nm.appendChild(document.createTextNode(it.label));
-    nm.appendChild(el('small', null, it.detail));
-    row.appendChild(nm);
-    host.appendChild(row);
+    const b = el('button', it.id === selected ? 'on' : '', it.label);
+    b.title = it.detail;
+    b.setAttribute('aria-pressed', it.id === selected);
+    b.addEventListener('click', () => { if (it.id !== selected) onPick(it.id); });
+    host.appendChild(b);
   }
 }
 
-function renderOrchTasks() {
-  const host = $('#orch-tasks');
-  const tasks = (orch.view && orch.view.tasks) || [];
-  host.innerHTML = '';
-  if (!tasks.length) {
-    host.appendChild(el('div', 'jrmeta',
-      'No open workspaces yet — ask for one in the chat.'));
-    return;
-  }
-  for (const t of tasks) {
-    const row = el('label', 'orch-task');
-    const cb = el('input');
-    cb.type = 'checkbox';
-    cb.checked = orch.watching.has(t.slug);
-    // Only orchestrate mode acts on the selection, so in chat mode the boxes
-    // are shown but inert rather than hidden — the choice survives the switch.
-    cb.disabled = orch.mode !== 'orchestrate';
-    cb.addEventListener('change', () => {
-      if (cb.checked) orch.watching.add(t.slug); else orch.watching.delete(t.slug);
-    });
-    row.appendChild(cb);
-    const nm = el('div');
-    nm.appendChild(document.createTextNode(t.name));
-    const bits = [t.status.replace('_', ' ')];
-    if (t.stackUp) bits.push('stack up' + (t.entry ? ' · ' + String(t.entry).replace(/^https?:\/\//, '') : ''));
-    if (t.attention) bits.push('agent waiting');
-    const sub = el('small', null, bits.join(' · '));
-    if (t.attention) sub.classList.add('attn-text');
-    nm.appendChild(sub);
-    row.appendChild(nm);
-    host.appendChild(row);
-  }
+async function setOrchMode(change) {
+  try {
+    const v = await api.put('/api/orchestrator/mode', change);
+    $('#orch-error').textContent = '';
+    renderOrchBar(v);
+    renderOrchStatus(v);
+    renderOrchLog(v);
+  } catch (e) { $('#orch-error').textContent = e.message; }
 }
 
 function renderOrchStatus(v) {
   const host = $('#orch-status');
   host.innerHTML = '';
-  const on = v.mode === 'orchestrate';
-  const badge = el('span', 'badge' + (on ? ' up' : ''), on ? 'orchestrating' : 'chat');
-  host.appendChild(badge);
-  if (on) {
-    host.appendChild(el('span', 'orch-meta',
-      ((v.watching || []).join(', ') || 'nothing watched') + ' · ' +
-      (v.autonomy === 'ask' ? 'asks before acting' : 'acts on its own')));
+  if (v.mode === 'orchestrate') {
+    const w = v.watching || [];
+    const meta = el('span', 'orch-meta', w.length ? `${w.length} in progress` : 'nothing in progress');
+    meta.title = w.length ? 'Supervising: ' + w.join(', ') : 'It takes on every task that moves to in progress.';
+    host.appendChild(meta);
   }
   if (v.thinking) host.appendChild(el('span', 'orch-meta think', 'thinking…'));
   else if (v.awaiting) host.appendChild(el('span', 'orch-meta wait', 'waiting for your answer'));
@@ -3326,20 +3277,6 @@ $('#orch-send').addEventListener('click', sendOrch);
 $('#orch-input').addEventListener('input', growCompose);
 $('#orch-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendOrch(); }
-});
-
-$('#orch-apply').addEventListener('click', async () => {
-  const b = $('#orch-apply');
-  b.disabled = true;
-  try {
-    await api.put('/api/orchestrator/mode', {
-      mode: orch.mode, autonomy: orch.autonomy, watching: [...orch.watching],
-    });
-    $('#orch-error').textContent = '';
-    await loadOrch(true);
-    toast(orch.mode === 'orchestrate' ? 'Orchestrating the selected workspaces.' : 'Back to chat.', 'ok');
-  } catch (e) { $('#orch-error').textContent = e.message; }
-  b.disabled = false;
 });
 
 $('#orch-reset').addEventListener('click', async () => {

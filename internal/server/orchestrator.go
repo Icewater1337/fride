@@ -750,15 +750,14 @@ func (s *Server) handleOrchestrator(w http.ResponseWriter, r *http.Request) {
 
 	case action == "mode" && r.Method == http.MethodPut:
 		var req struct {
-			Mode     string   `json:"mode"`
-			Autonomy string   `json:"autonomy"`
-			Watching []string `json:"watching"`
+			Mode     string `json:"mode"`
+			Autonomy string `json:"autonomy"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, 400, err)
 			return
 		}
-		if err := s.orch.SetMode(req.Mode, req.Autonomy, req.Watching); err != nil {
+		if err := s.orch.SetMode(req.Mode, req.Autonomy); err != nil {
 			writeErr(w, 400, err)
 			return
 		}
