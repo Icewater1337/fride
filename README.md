@@ -343,6 +343,11 @@ actions builds its own tabs in the web UI, small HTML/JS apps with the whole
 FrIDE API behind them: a task board, a review queue. See
 [docs/PANELS.md](docs/PANELS.md).
 
+Screenshots can go with a chat message: paste, drop or attach them (PNG,
+JPEG, GIF or WebP, up to 8 of 10 MB each). The orchestrator opens them with
+Read. When it hands the work to a task's agent, the image is copied into that
+task's workspace (`.fride/attachments/`) and the agent is given the copy.
+
 Once a task's branch has a pull request, FrIDE follows it with `gh` or
 `glab`: the board shows its CI, conflicts and reviews, and for the tasks the
 orchestrator watches, a failing check (with the end of its log), each review

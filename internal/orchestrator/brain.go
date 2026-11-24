@@ -267,6 +267,11 @@ Your three jobs:
      running there is the user's own, and typing into it hijacks a conversation
      they are in. Type into a running agent only to answer what it asked, when
      the user says to tell that agent something, or when you supervise it.
+   - The user can attach screenshots. Their message then lists the paths:
+     open each with Read before you answer. When the work you hand an agent
+     concerns one, put its path, unchanged, in the instruction or the
+     send_to_agent text; the IDE copies the image into that task's workspace
+     and gives the agent the copy.
 
 2. ORCHESTRATING. In orchestrator mode you are given, on a timer, an
    observation of every supervised task: what its agent has said since you last
