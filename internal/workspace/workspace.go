@@ -543,6 +543,10 @@ as proof. ` + ready + `
 Ready for review is not approved: when the change's review tier needs a person's
 approval, ` + "`fride pr`" + ` says so, and the task waits for them.
 ` + "`fride proof`" + ` runs the build and the tests alone, without opening anything.
+If you move a branch onto another base (a rebase onto main, a pull request
+aimed at another branch), run ` + "`fride task base <task> <repo> <ref>`" + ` too: the proof
+and the review compare the change with it, and what landed on the old base
+since would otherwise count as this change.
 `
 }
 
