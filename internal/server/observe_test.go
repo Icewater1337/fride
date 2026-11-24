@@ -70,3 +70,56 @@ func TestALookCarriesTheQuestionAnAgentAsks(t *testing.T) {
 		t.Fatalf("questions = %+v", q)
 	}
 }
+
+// An agent whose final answer ended its turn is at its prompt even while its
+// terminal keeps repainting (a footer, a status line), so it is never reported
+// as stalled; one inside a tool call is still working (#223).
+func TestALookTrustsTheTranscriptsEndOfTurn(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	s, _, _ := testServer(t)
+	h := orchHost{s}
+	if err := s.st.Add(&store.Task{Slug: "t1", Name: "T1", Status: store.StatusInProgress,
+		Agent: "claude", Created: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.cfg.WorkspaceDir("t1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := s.terms.Start("t1", term.KindAgent, "claude", dir,
+		[]string{"sh", "-c", `while :; do printf '.'; sleep 0.2; done`}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.terms.Close(sess.ID)
+	sess.Claim("r-1")
+	enc := strings.NewReplacer("/", "-", ".", "-", "_", "-").Replace(filepath.Clean(dir))
+	proj := filepath.Join(s.cfg.Home, ".claude", "projects", enc)
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	look := func(stop string) bool {
+		t.Helper()
+		line := `{"type":"assistant","uuid":"a1","message":{"id":"m1","role":"assistant",` +
+			`"stop_reason":"` + stop + `","content":[{"type":"text","text":"The PR is open."}]}}` + "\n" +
+			`{"type":"system","subtype":"turn_duration","uuid":"s1"}` + "\n"
+		if err := os.WriteFile(filepath.Join(proj, "r-1.jsonl"), []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ob, err := h.Observe("t1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ob.Waiting
+	}
+	time.Sleep(4 * time.Second) // past idleAfter: the repaint must keep the PTY busy
+	if sess.Waiting() {
+		t.Fatal("the repainting terminal went quiet; the test proves nothing")
+	}
+	if !look("end_turn") {
+		t.Error("a finished turn was not reported waiting")
+	}
+	if look("tool_use") {
+		t.Error("a turn inside a tool call was reported waiting")
+	}
+}
