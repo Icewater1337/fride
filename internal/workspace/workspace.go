@@ -515,9 +515,16 @@ func prSection(cfg *config.Config) string {
 		"findings, fix them, commit, and run `fride pr` again: it updates the same pull\n" +
 		"request. If it says the review round cap is reached, stop: the change's owner\n" +
 		"decides what comes next, so tell the user instead of trying again."
-	if !cfg.Settings.PRReview() {
+	switch {
+	case !cfg.Settings.PRReview():
 		ready = "It opens the pull request ready; run it again after a change, and it\n" +
 			"updates the same pull request with a new proof."
+	case !cfg.Settings.PRDraft():
+		ready = "It opens the pull request ready for review, and then a review that never\n" +
+			"saw this conversation reads the diff. If it reports findings, fix them,\n" +
+			"commit, and run `fride pr` again: it updates the same pull request. If it\n" +
+			"says the review round cap is reached, stop: the change's owner decides what\n" +
+			"comes next, so tell the user instead of trying again."
 	}
 	return `
 ` + prHeading + `

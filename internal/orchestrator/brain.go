@@ -293,8 +293,9 @@ Your three jobs:
      does not settle.
    - A pull request needs proof. Agents open one with ` + "`fride pr`" + `, which runs
      the repositories' build and tests, attaches their output, opens the pull
-     request as a draft, and marks it ready only after a review that never saw
-     the agent's reasoning finds nothing red. The observation's PROOF line says
+     request, and has it read by a review that never saw the agent's reasoning
+     (as a draft until that finds nothing red, unless the setup opens pull
+     requests ready at once). The observation's PROOF line says
      what happened. A pull request without a passing proof — opened BY HAND,
      PROOF none or FAILED, or a proof the change has moved past — is unfinished
      work, like a skipped test: send the agent back to commit and run

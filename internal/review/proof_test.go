@@ -534,3 +534,41 @@ func TestChecksForRunsACommandOnce(t *testing.T) {
 		t.Fatalf("want core's build and test once, got %+v (uncovered %v)", steps, uncovered)
 	}
 }
+
+// With pr.draft false the pull request opens ready for review and is never
+// turned into a draft, while the review still runs and its findings still
+// come back to the agent.
+func TestPROpensReadyWhenDraftsAreOff(t *testing.T) {
+	dir, _, f, fdir := forgeT(t)
+	cfg := testCfg(t)
+	tg := []Target{target(dir, "echo built", "echo tests ok")}
+	verdict := Verdict{Red: []Finding{{Grade: "red", Title: "Ready is called before listen returns"}}}
+	opt := PROptions{Title: "Say when ready", Body: "What this does.", Forge: func(string) Forge { return f }, NoDraft: true,
+		Review: func(context.Context) (Verdict, error) { return verdict, nil }}
+
+	res, err := OpenPR(context.Background(), cfg, "t1", tg, opt)
+	if !errors.Is(err, ErrFindings) || len(res.Verdict.Red) != 1 {
+		t.Fatalf("red findings should still come back: %v %+v", err, res.Verdict)
+	}
+	log := readFile(t, filepath.Join(fdir, "log"))
+	if strings.Contains(log, "--draft") || strings.Contains(log, "pr ready") {
+		t.Errorf("the pull request was drafted or toggled although drafts are off:\n%s", log)
+	}
+	if p := LoadProof(cfg, "t1"); p.PR == nil || p.PR.Review != ReviewFindings || !p.PR.Ready {
+		t.Errorf("the record should say: ready for review, with a red finding: %+v", p.PR)
+	}
+
+	write(t, dir, "server.go", "package api\n\nfunc Serve() {\n\tlisten()\n\tawaitListen()\n\tready()\n}\n")
+	gitT(t, dir, "commit", "-qam", "serve: wait for listen")
+	verdict = Verdict{}
+	os.Remove(filepath.Join(fdir, "log"))
+	if _, err := OpenPR(context.Background(), cfg, "t1", tg, opt); err != nil {
+		t.Fatal(err)
+	}
+	if log := readFile(t, filepath.Join(fdir, "log")); strings.Contains(log, "pr ready") || strings.Contains(log, "--draft") {
+		t.Errorf("a clean review toggled the draft state of a pull request that never was one:\n%s", log)
+	}
+	if p := LoadProof(cfg, "t1"); p.PR.Review != ReviewClean || !p.PR.Ready {
+		t.Errorf("the record should say ready and clean: %+v", p.PR)
+	}
+}
