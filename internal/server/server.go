@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/agent"
+	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/doctor"
 	"github.com/Icewater1337/fride/internal/files"
@@ -1623,10 +1624,12 @@ func doneOrTimeout(done chan struct{}) <-chan struct{} {
 
 // Listen starts the HTTP server on the given port, loopback only.
 func (s *Server) Listen(port int) error {
-	s.port = port
-	addr := "127.0.0.1:" + strconv.Itoa(port)
+	ln, err := s.bind(port)
+	if err != nil {
+		return err
+	}
+	addr := ln.Addr().String()
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           s.guard(s.Routes()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -1637,5 +1640,22 @@ func (s *Server) Listen(port int) error {
 	go s.watchPRs()
 	go s.qualityLoop() // config.json's quality schedule; idle without one
 	log.Printf("fride listening on http://%s", addr)
-	return srv.ListenAndServe()
+	return srv.Serve(ln)
+}
+
+// bind listens on port and records it in config.PortFile, so the CLI of
+// this FrIDE home finds this server even when it runs on --port: on the
+// default port it could reach another FrIDE, with other tasks, whose
+// answers read like a lookup bug ("no task …"). Written only once bound, so
+// a failed bind never points the file at whatever holds the port.
+func (s *Server) bind(port int) (net.Listener, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		return nil, err
+	}
+	s.port = ln.Addr().(*net.TCPAddr).Port
+	if err := atomicfile.Write(config.PortFile(s.cfg.StateDir), []byte(strconv.Itoa(s.port)+"\n"), 0o644); err != nil {
+		log.Printf("record the port: %v — the CLI finds this server only on $FRIDE_PORT or 7777", err)
+	}
+	return ln, nil
 }

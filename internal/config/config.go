@@ -57,6 +57,10 @@ func StateDir(home string) string {
 	return filepath.Join(home, ".fride")
 }
 
+// PortFile holds the port the server of stateDir listens on, which its
+// clients read when $FRIDE_PORT is not set.
+func PortFile(stateDir string) string { return filepath.Join(stateDir, "serve.port") }
+
 // Default builds the configuration for this machine.
 func Default() *Config {
 	home, _ := os.UserHomeDir()
