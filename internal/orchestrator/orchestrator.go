@@ -355,12 +355,10 @@ func (o *Orchestrator) Snapshot() View {
 	return v
 }
 
-// SetMode switches between chat and orchestrate, and sets what is supervised.
-//
-// Entering orchestrate mode resets the read cursors of the tasks being taken
-// on, so the first look reports where each agent actually is rather than only
-// what it does next.
-func (o *Orchestrator) SetMode(mode, autonomy string, watching []string) error {
+// SetMode switches between chat and orchestrate. What orchestrate mode
+// supervises is not chosen: it is every task in progress (syncWatching), and a
+// task leaves it by moving to open or done.
+func (o *Orchestrator) SetMode(mode, autonomy string) error {
 	if mode != ModeChat && mode != ModeOrchestrate {
 		return fmt.Errorf("unknown mode %q (want chat or orchestrate)", mode)
 	}
@@ -370,48 +368,60 @@ func (o *Orchestrator) SetMode(mode, autonomy string, watching []string) error {
 	if autonomy != AutonomyAuto && autonomy != AutonomyAsk {
 		return fmt.Errorf("unknown autonomy %q (want auto or ask)", autonomy)
 	}
-	known := map[string]bool{}
-	for _, t := range o.host.Tasks() {
-		known[t.Slug] = true
-	}
-	clean := []string{}
-	for _, s := range watching {
-		if !known[s] {
-			return fmt.Errorf("no task %q to supervise", s)
-		}
-		if !slices.Contains(clean, s) {
-			clean = append(clean, s)
-		}
-	}
-	sort.Strings(clean)
-	if mode == ModeOrchestrate && len(clean) == 0 {
-		return fmt.Errorf("choose at least one workspace to orchestrate")
-	}
+	o.syncWatching()
 
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for _, s := range clean {
-		if slices.Contains(o.st.Watching, s) {
-			continue
-		}
-		// Taking a task on is a fresh start: read from where its agent is now,
-		// and give it back the patience any earlier supervision spent.
-		delete(o.mem.tasks, s)
-	}
-	o.st.Mode, o.st.Autonomy, o.st.Watching = mode, autonomy, clean
+	o.st.Mode, o.st.Autonomy = mode, autonomy
 	// Look properly on the next tick. The user asked for this, so a backoff
 	// left by failed turns does not stand in the way of it.
 	o.mem.awaiting = false
 	o.mem.lastConsult, o.mem.retryAt = time.Time{}, time.Time{}
 	switch mode {
 	case ModeOrchestrate:
-		o.add(RoleEvent, "", fmt.Sprintf("Orchestrating %s (%s).",
-			strings.Join(clean, ", "), autonomyLabel(autonomy)))
+		what := "every task in progress"
+		if len(o.st.Watching) > 0 {
+			what += " (now " + strings.Join(o.st.Watching, ", ") + ")"
+		}
+		o.add(RoleEvent, "", fmt.Sprintf("Orchestrating %s, %s.", what, autonomyLabel(autonomy)))
 	default:
 		o.add(RoleEvent, "", "Orchestrator mode off — back to chat.")
 	}
 	o.save()
 	return nil
+}
+
+// syncWatching makes Watching the tasks in progress, as the host lists them
+// now. A task joining it is a fresh start: read from where its agent is now,
+// with back the patience any earlier supervision spent. One that could not be
+// observed (dropWatch) stays out while it is still in progress, or it would be
+// taken on and dropped again on every look.
+func (o *Orchestrator) syncWatching() {
+	var now []string
+	for _, t := range o.host.Tasks() {
+		if t.Status == "in_progress" {
+			now = append(now, t.Slug)
+		}
+	}
+	sort.Strings(now)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for s := range o.mem.gone {
+		if !slices.Contains(now, s) {
+			delete(o.mem.gone, s) // moved on, or deleted: it may come back fresh
+		}
+	}
+	out := []string{}
+	for _, s := range now {
+		if o.mem.gone[s] {
+			continue
+		}
+		if !slices.Contains(o.st.Watching, s) {
+			delete(o.mem.tasks, s)
+		}
+		out = append(out, s)
+	}
+	o.st.Watching = out
 }
 
 func autonomyLabel(a string) string {
@@ -762,10 +772,6 @@ func describe(a Action) string {
 		return "stop the stack of " + a.Task
 	case ActSetStatus:
 		return a.Task + " → " + strings.ReplaceAll(a.Status, "_", " ")
-	case ActWatch:
-		return "supervise " + a.Task
-	case ActUnwatch:
-		return "stop supervising " + a.Task
 	}
 	return a.Kind
 }
@@ -810,12 +816,17 @@ func (o *Orchestrator) create(a Action, tr turn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// A task the orchestrator created is one it is expected to follow.
+	// A task the orchestrator created in orchestrate mode is one it is expected
+	// to follow, and what it follows is the tasks in progress.
 	o.mu.Lock()
-	if o.st.Mode == ModeOrchestrate && !slices.Contains(o.st.Watching, t.Slug) {
-		o.st.Watching = append(o.st.Watching, t.Slug)
-	}
+	orchestrating := o.st.Mode == ModeOrchestrate
 	o.mu.Unlock()
+	if orchestrating {
+		if err := o.host.SetStatus(t.Slug, "in_progress"); err != nil {
+			return t.Slug, fmt.Errorf("created, but it could not be set in progress, so it is not supervised: %w", err)
+		}
+		o.syncWatching()
+	}
 	return t.Slug, nil
 }
 
@@ -915,30 +926,12 @@ func (o *Orchestrator) act(a Action, tr turn) error {
 	case ActStackDown:
 		return o.host.StackDown(a.Task)
 	case ActSetStatus:
-		return o.host.SetStatus(a.Task, a.Status)
-
-	case ActWatch:
-		if a.Task == "" {
-			return fmt.Errorf("which task?")
+		// Also what decides supervision: in progress is supervised, open and
+		// done are not. Seen at once, not on the next look.
+		if err := o.host.SetStatus(a.Task, a.Status); err != nil {
+			return err
 		}
-		o.mu.Lock()
-		defer o.mu.Unlock()
-		if !slices.Contains(o.st.Watching, a.Task) {
-			// A fresh start, exactly as when the user picks it: see SetMode.
-			o.st.Watching = append(o.st.Watching, a.Task)
-			delete(o.mem.tasks, a.Task)
-		}
-		return nil
-	case ActUnwatch:
-		o.mu.Lock()
-		defer o.mu.Unlock()
-		out := []string{}
-		for _, s := range o.st.Watching {
-			if s != a.Task {
-				out = append(out, s)
-			}
-		}
-		o.st.Watching = out
+		o.syncWatching()
 		return nil
 	}
 	return fmt.Errorf("unknown action %q", a.Kind)

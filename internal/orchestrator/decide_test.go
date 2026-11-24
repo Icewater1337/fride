@@ -300,7 +300,7 @@ func TestTheLoopDoesNotRepeatATurnForAnIdleAgent(t *testing.T) {
 	dir := t.TempDir()
 	o := New(dir, dir, st.bin, h)
 	defer func() { o.Close(); o.Wait() }()
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 
@@ -343,7 +343,7 @@ func TestTheLoopRetriesAFailedLookWithTheSameTurns(t *testing.T) {
 	dir := t.TempDir()
 	o := New(dir, dir, flaky, h)
 	defer func() { o.Close(); o.Wait() }()
-	if err := o.SetMode(ModeOrchestrate, AutonomyAuto, []string{"t1"}); err != nil {
+	if err := o.SetMode(ModeOrchestrate, AutonomyAuto); err != nil {
 		t.Fatal(err)
 	}
 

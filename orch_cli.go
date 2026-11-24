@@ -72,33 +72,29 @@ func cmdOrch(args []string) {
 		v := waitForOrch()
 		printOrch(v, 4)
 
-	case "watch":
-		if len(args) < 2 {
-			check(fmt.Errorf("fride orch watch <task>... [--ask]"))
-		}
-		autonomy, slugs := "auto", []string{}
+	case "on", "watch":
+		// What it supervises is every task in progress, not a choice: `watch`
+		// with task names is what this command used to be, so the names are
+		// only reported as unused.
+		autonomy := "auto"
 		for _, a := range args[1:] {
 			if a == "--ask" {
 				autonomy = "ask"
-				continue
+			} else {
+				fmt.Fprintf(os.Stderr, "fride: %s is not chosen: the orchestrator supervises every task in progress\n", a)
 			}
-			slugs = append(slugs, a)
 		}
-		v, err := orchCall(http.MethodPut, "/mode", map[string]any{
-			"mode": "orchestrate", "autonomy": autonomy, "watching": slugs,
-		})
+		v, err := orchCall(http.MethodPut, "/mode", map[string]any{"mode": "orchestrate", "autonomy": autonomy})
 		check(err)
 		printOrch(v, 2)
 
 	case "off":
-		v, err := orchCall(http.MethodPut, "/mode", map[string]any{
-			"mode": "chat", "autonomy": "auto", "watching": []string{},
-		})
+		v, err := orchCall(http.MethodPut, "/mode", map[string]any{"mode": "chat", "autonomy": "auto"})
 		check(err)
 		printOrch(v, 2)
 
 	default:
-		check(fmt.Errorf("unknown orch command %q (status, say, watch, off)", args[0]))
+		check(fmt.Errorf("unknown orch command %q (status, say, on, off)", args[0]))
 	}
 }
 

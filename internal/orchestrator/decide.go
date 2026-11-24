@@ -26,6 +26,9 @@ const (
 // memory is what the monitor loop carries from one tick to the next.
 type memory struct {
 	tasks map[string]taskState
+	// gone are the tasks in progress that could not be observed (dropWatch),
+	// kept out of supervision until they move on (syncWatching).
+	gone map[string]bool
 	// lastConsult is when the brain last saw a round. It paces the reports about
 	// steady progress.
 	lastConsult time.Time

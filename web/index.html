@@ -163,31 +163,18 @@
   <!-- ---------------------------------------------------------- orchestrator -->
   <section id="orch" class="view">
     <div class="task-body">
-      <aside class="sidebar">
-        <div class="panel">
-          <div class="panel-h"><h3><svg class="i"><use href="#i-bot"/></svg>Mode</h3></div>
-          <div id="orch-mode" class="agent-picker"></div>
-        </div>
-        <div class="panel grow">
-          <div class="panel-h"><h3><svg class="i"><use href="#i-board"/></svg>Workspaces it orchestrates</h3></div>
-          <div id="orch-tasks" class="orch-tasks"></div>
-          <p class="hint">Read from each agent's own transcript, so what it
-            reacts to is what the agent actually said.</p>
-        </div>
-        <div class="panel">
-          <div class="panel-h"><h3><svg class="i"><use href="#i-shield"/></svg>When it wants to act</h3></div>
-          <div id="orch-autonomy" class="agent-picker"></div>
-        </div>
-        <div class="orchbtns">
-          <button id="orch-apply" class="primary">Apply</button>
-          <button id="orch-reset" class="ghost"
+      <div class="workarea orch-main">
+        <div class="orch-bar">
+          <span class="orch-bar-l"><svg class="i"><use href="#i-bot"/></svg>Mode</span>
+          <div id="orch-mode" class="segmented" role="group" aria-label="Mode"></div>
+          <span class="orch-bar-l"><svg class="i"><use href="#i-shield"/></svg>When it wants to act</span>
+          <div id="orch-autonomy" class="segmented" role="group" aria-label="When it wants to act"></div>
+          <div id="orch-status" class="orch-status"></div>
+          <span class="sp"></span>
+          <button id="orch-reset" class="ghost sm"
                   title="Forget the conversation and start a new one. What it is supervising stays.">Clear chat</button>
         </div>
         <div id="orch-error" class="error"></div>
-      </aside>
-
-      <div class="workarea orch-main">
-        <div id="orch-status" class="orch-status"></div>
         <div id="orch-log" class="orch-log"></div>
         <div class="orch-compose" id="orch-compose">
           <div id="orch-attached" class="orch-attached hidden"></div>

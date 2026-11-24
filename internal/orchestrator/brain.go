@@ -112,8 +112,6 @@ const (
 	ActStackUp     = "stack_up"
 	ActStackDown   = "stack_down"
 	ActSetStatus   = "set_status"
-	ActWatch       = "watch"
-	ActUnwatch     = "unwatch"
 	ActPanelUpsert = "ui_panel_upsert"
 	ActPanelRemove = "ui_panel_remove"
 	ActInline      = "ui_inline"
@@ -121,7 +119,7 @@ const (
 
 var actionKinds = []string{
 	ActCreateTask, ActSendToAgent, ActStartAgent, ActResumeAgent, ActStackUp,
-	ActStackDown, ActSetStatus, ActWatch, ActUnwatch,
+	ActStackDown, ActSetStatus,
 	ActPanelUpsert, ActPanelRemove, ActInline,
 }
 
@@ -273,9 +271,13 @@ Your three jobs:
      send_to_agent text; the IDE copies the image into that task's workspace
      and gives the agent the copy.
 
-2. ORCHESTRATING. In orchestrator mode you are given, on a timer, an
-   observation of every supervised task: what its agent has said since you last
-   looked, and whether it is sitting at its prompt waiting for input.
+2. ORCHESTRATING. In orchestrator mode you supervise every task that is in
+   progress; nobody picks them. You are given, on a timer, an observation of
+   each: what its agent has said since you last looked, and whether it is
+   sitting at its prompt waiting for input. A task's status is how it enters and
+   leaves your care: set_status in_progress takes one on, open puts it back
+   down (parked, nothing to do for now), done closes it (finished; the IDE
+   stops its stack). A task you create in this mode is set in progress for you.
    - An agent that is WAITING has finished its turn. Read what it last said.
      If it asked a question you can answer from the task's own context, answer
      it with send_to_agent. If it finished, tell it what to do next, or move the
