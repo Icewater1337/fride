@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -127,6 +128,12 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   idea ls                               the ideas already in the ideas repository
   idea cat <path>                       read one of them, e.g. ideas/<slug>.md
   idea publish [task]                   push the task's idea page(s) (config: ideas)
+  skill ls                              your own skills ($FRIDE_HOME/skills), linked into
+                                        every workspace as .claude/skills/<name>
+  skill cat <name>                      print a skill's SKILL.md
+  skill write <name> [--new] < SKILL.md write it from stdin; --new adds a skill and
+                                        refuses a name that is taken
+  skill rm <name>                       delete a skill: its folder moves to skills/.deleted
   review gate [task] [--json]           the change's review tier and its human approvals
                                         (exit 1 while it lacks some); approvals are given
                                         in the Review tab
@@ -277,6 +284,8 @@ func main() {
 		cmdRationale(cfg, st, os.Args[2:])
 	case "idea":
 		cmdIdea(cfg, st, os.Args[2:])
+	case "skill":
+		cmdSkill(cfg, st, os.Args[2:])
 	case "quality":
 		cmdQuality(cfg, st, os.Args[2:])
 	case "incident":
@@ -1339,6 +1348,64 @@ func cmdNote(cfg *config.Config, st *store.Store, args []string) {
 // cmdIdea is the document-idea skill's window into the ideas repository: what
 // exists already, so an idea is extended rather than duplicated, and the
 // publish the person runs (the UI's Publish idea does the same).
+// cmdSkill is the Settings page's Skills section on the command line.
+func cmdSkill(cfg *config.Config, st *store.Store, args []string) {
+	usage := fmt.Errorf("usage: fride skill ls | skill cat <name> | skill write <name> [--new] < SKILL.md | skill rm <name>")
+	if len(args) == 0 {
+		check(usage)
+	}
+	// A new or deleted skill reaches every workspace now, not at its next agent start.
+	relink := func() {
+		if tasks, err := st.List(); err == nil {
+			for _, t := range tasks {
+				_ = workspace.InstallSkills(cfg, t.Slug)
+			}
+		}
+	}
+	switch args[0] {
+	case "ls":
+		skills, err := workspace.Skills(cfg)
+		check(err)
+		if len(skills) == 0 {
+			fmt.Println("no skills in " + workspace.SkillsDir(cfg))
+			return
+		}
+		w := tw()
+		fmt.Fprintln(w, "SKILL\tFILES\tDESCRIPTION")
+		for _, s := range skills {
+			fmt.Fprintf(w, "%s\t%d\t%s\n", s.Name, 1+len(s.Files), s.Description)
+		}
+		w.Flush()
+	case "cat":
+		if len(args) != 2 {
+			check(usage)
+		}
+		body, err := workspace.ReadSkill(cfg, args[1])
+		check(err)
+		fmt.Print(body)
+	case "write":
+		create, args := flagBool(args[1:], "--new")
+		if len(args) != 1 {
+			check(usage)
+		}
+		body, err := io.ReadAll(io.LimitReader(os.Stdin, 256<<10))
+		check(err)
+		check(workspace.WriteSkill(cfg, args[0], string(body), create))
+		relink()
+		fmt.Println("wrote " + filepath.Join(workspace.SkillsDir(cfg), args[0], "SKILL.md"))
+	case "rm":
+		if len(args) != 2 {
+			check(usage)
+		}
+		to, err := workspace.DeleteSkill(cfg, args[1])
+		check(err)
+		relink()
+		fmt.Println("deleted /" + args[1] + "; its folder is in " + to)
+	default:
+		check(usage)
+	}
+}
+
 func cmdIdea(cfg *config.Config, st *store.Store, args []string) {
 	if len(args) == 0 {
 		check(fmt.Errorf("usage: fride idea ls | idea cat <path> | idea publish [task]"))

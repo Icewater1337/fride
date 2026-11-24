@@ -657,3 +657,34 @@ change moves. See [REVIEW.md](REVIEW.md#proof-before-a-pull-request).
 ## requirements
 
 `{ "name": "...", "env": "VAR" }` checks that a variable is set. `{ "name": "...", "command": "..." }` checks that a command exits 0. Add `why` and `fix` so `fride doctor` can explain the failure. FrIDE never prints a value.
+
+## Skills of your own
+
+Not a field of config.json, but beside it: every folder in
+`$FRIDE_HOME/skills/` (`~/.fride/skills/`) with a `SKILL.md` is a skill that
+every workspace gets, as `.claude/skills/<name>` (where Claude Code finds
+project skills). A skill's other files, such as scripts, come along with it.
+
+```
+~/.fride/skills/
+  e2e/SKILL.md
+  video/SKILL.md
+  video/record.mjs
+```
+
+Manage them in Settings → Skills (add, edit SKILL.md, delete), with
+`fride skill ls | cat | write | rm`, or in the folder by hand. Deleting moves
+the folder to `skills/.deleted/` rather than erasing it, since a skill can hold
+scripts of your own. Skill names are lower-case letters, digits and hyphens.
+The skills API is served on this computer only, never over the fleet.
+
+FrIDE links each skill rather than copying it: when a workspace is created,
+whenever an agent starts in one, and on every change made in Settings or
+through `fride skill`. So an edit reaches every workspace at once, and a skill
+removed from the folder by hand loses its links at the next agent start.
+
+A skill folder of the same name already in the workspace (one of FrIDE's own,
+or one made by hand) is left alone. Deleting, moving or exporting a task never
+takes these files along: they stay here. A skill named after one of Claude
+Code's own commands (`ship`, say) replaces that command in workspaces, which is
+how a workspace gets a version of it that spans all of its repositories.

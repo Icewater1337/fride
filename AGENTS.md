@@ -48,7 +48,8 @@ internal/wip             uncommitted work as a commit without touching the workt
 internal/companion       companion mode: pairing code and token, the signed webhook
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
-internal/workspace       worktree create/remove, the per-task agent guide
+internal/workspace       worktree create/remove, the per-task agent guide, the user's
+                         own skills ($FRIDE_HOME/skills) linked into every workspace
 internal/gitid           git identities: token store, a task's environment, the
                          choice by host, the credential helper (`fride git credential`)
 internal/task            task creation, shared by the CLI, the server and the orchestrator
