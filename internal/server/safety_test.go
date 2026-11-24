@@ -3,11 +3,13 @@ package server
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -257,5 +259,23 @@ func TestTerminalOriginIsCheckedForFleetCallers(t *testing.T) {
 		if resp.StatusCode != c.want {
 			t.Errorf("Host=%q Origin=%q: %d, want %d", c.host, c.origin, resp.StatusCode, c.want)
 		}
+	}
+}
+
+// The server records the port it bound in its home, which is how the CLI of
+// that home finds it on --port (#230).
+func TestBindRecordsThePortInTheHome(t *testing.T) {
+	s, _, _ := testServer(t)
+	ln, err := s.bind(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	b, err := os.ReadFile(config.PortFile(s.cfg.StateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "\n"; string(b) != want || s.port != ln.Addr().(*net.TCPAddr).Port {
+		t.Fatalf("recorded %q, port %d; bound %s", b, s.port, ln.Addr())
 	}
 }

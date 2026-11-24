@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Icewater1337/fride/internal/config"
 	"github.com/Icewater1337/fride/internal/review"
 	"github.com/Icewater1337/fride/internal/settings"
 )
@@ -234,5 +235,22 @@ func TestForgeForPicksTheHostsTool(t *testing.T) {
 		if got := forgeFor(st, dir).Kind; got != want {
 			t.Errorf("forgeFor(%s) = %s, want %s", remote, got, want)
 		}
+	}
+}
+
+// A server on --port is found through the port it recorded in its FrIDE
+// home, not guessed at the default, where another FrIDE with other tasks
+// may answer "no task" (#230).
+func TestPRReviewFindsTheServerOfItsOwnHome(t *testing.T) {
+	accepted := func() (int, string) { return http.StatusAccepted, "" }
+	fakeReviewServer(t, accepted, review.AI{State: "done", Anchors: anchored})
+	home := t.TempDir()
+	t.Setenv("FRIDE_HOME", home)
+	if err := os.WriteFile(config.PortFile(home), []byte(os.Getenv("FRIDE_PORT")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FRIDE_PORT", "")
+	if _, err := prReview("t1")(context.Background()); err != nil {
+		t.Fatalf("the review did not reach the server of FRIDE_HOME: %v", err)
 	}
 }

@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/Icewater1337/fride/internal/config"
 )
 
 // The client of the `fride serve` running on this computer, shared by the
@@ -19,14 +22,30 @@ import (
 
 const defaultServePort = 7777
 
-// servePort is the port `fride serve` listens on and its clients call.
-func servePort() int {
+// listenPort is the port `fride serve` listens on without --port.
+func listenPort() int {
 	if s := os.Getenv("FRIDE_PORT"); s != "" {
 		if p, err := strconv.Atoi(s); err == nil {
 			return p
 		}
 	}
 	return defaultServePort
+}
+
+// servePort is the port of the server its clients call: $FRIDE_PORT, else
+// the port the server of this FRIDE_HOME recorded when it bound. Guessing
+// the default instead reached another FrIDE when this one ran on --port, and
+// its "no task" kept `fride pr`'s pull requests drafts (#230).
+func servePort() int {
+	if os.Getenv("FRIDE_PORT") == "" {
+		home, _ := os.UserHomeDir()
+		if b, err := os.ReadFile(config.PortFile(config.StateDir(home))); err == nil {
+			if p, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				return p
+			}
+		}
+	}
+	return listenPort()
 }
 
 // serverCall sends in as JSON to path and decodes the answer into out. An
