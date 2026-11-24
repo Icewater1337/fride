@@ -392,22 +392,20 @@ function renderColumns(tasks, force) {
     col.innerHTML = '';
     // Reviewing hidden tasks shows ONLY those, so unhiding is a short list to
     // work through rather than hunting them among the visible ones.
-    const items = tasks.filter(t => lane(t) === s && (state.showHidden ? t.hidden : !t.hidden));
+    const items = tasks.filter(t => t.status === s && (state.showHidden ? t.hidden : !t.hidden));
     $('#count-' + s).textContent = items.length;
     for (const t of items) col.appendChild(card(t));
     if (!items.length) col.appendChild(emptyColumn(s, visible.length));
   }
 }
 
-// lane is the column a task is shown in: its status, except that a task whose
-// pull requests have all landed (none open, at least one merged) reads as
-// done. Only shown so: its status is not changed, and dropping it on Done is
-// still what closes it.
-function lane(t) {
+// allMerged: every pull request of the task has landed (none open, at least
+// one merged). The card says so, but the task stays in the column its status
+// puts it in: a task's status is the person's to set, so only dropping it on
+// Done moves it there.
+function allMerged(t) {
   const prs = t.prs || [];
-  if (t.status !== 'done' && prs.length && prs.every(p => p.state !== 'open') &&
-      prs.some(p => p.state === 'merged')) return 'done';
-  return t.status;
+  return prs.length > 0 && prs.every(p => p.state !== 'open') && prs.some(p => p.state === 'merged');
 }
 
 // prTone is how a pull request reads at a glance: what it needs, if anything.
@@ -530,7 +528,7 @@ function card(t) {
   }
   c.appendChild(meta);
   if ((t.prs || []).length) c.appendChild(prRow(t));
-  if (lane(t) !== t.status) c.appendChild(el('div', 'instrow', 'Every pull request merged: drop it on Done to close the task.'));
+  if (t.status !== 'done' && allMerged(t)) c.appendChild(el('div', 'instrow', 'Every pull request merged: drop it on Done to close the task.'));
 
   if (t.stack && t.stack.up) {
     const foot = el('div', 'card-foot');
