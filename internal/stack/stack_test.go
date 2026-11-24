@@ -831,6 +831,44 @@ func TestDownRunsTheStopCommand(t *testing.T) {
 	}
 }
 
+// A record without the stop command (written before the profile had one, or by
+// an older FrIDE) still has it run on Down: the profile's, for the same service
+// on the same port. Without it, a launcher's detached services outlived the stop
+// and held the ports of a slot that was released under them.
+func TestDownRunsTheProfilesStopForARecordWithout(t *testing.T) {
+	needLsof(t)
+	base := freeBase(t)
+	s := &settings.Settings{
+		DefaultProfile: "a",
+		Profiles: map[string]*settings.Profile{"a": {Services: map[string]*settings.Service{
+			"api": {Repo: "backend", Run: "./run", Port: base, Stop: "echo down {{slot}} > stopped.txt"},
+		}}},
+	}
+	e := newEnv(t, s, "backend")
+	e.sidecar(t, TaskOpts{Profile: "a"})
+	fakeDocker(t)
+	fakeLauncher(t)
+	if _, err := Up(e.cfg, "t1", UpOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	k := LookupK(e.cfg, "t1")
+	rec := readRecord(e.cfg, "t1")
+	for i := range rec.Services {
+		rec.Services[i].Stop, rec.Services[i].Dir = "", ""
+	}
+	if err := writeRecord(e.cfg, "t1", rec); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Down(e.cfg, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(e.cfg.RepoDir("t1", "backend"), "stopped.txt"))
+	if want := fmt.Sprintf("down %d\n", k); err != nil || string(b) != want {
+		t.Fatalf("stop wrote %q (%v), want %q; warnings %v", b, err, want, st.Warnings)
+	}
+}
+
 // A failing stop command is reported, and the stack is stopped anyway.
 func TestDownReportsAFailingStop(t *testing.T) {
 	needLsof(t)
