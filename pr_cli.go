@@ -33,7 +33,7 @@ func proofTargets(cfg *config.Config, t *store.Task) []review.Target {
 	var out []review.Target
 	for _, sp := range review.Specs(cfg, t) {
 		rs := cfg.Settings.Repo(sp.Name)
-		out = append(out, review.Target{RepoSpec: sp, Build: rs.Build, Test: rs.Test})
+		out = append(out, review.Target{RepoSpec: sp, Build: rs.Build, Test: rs.Test, Checks: rs.Checks})
 	}
 	return out
 }

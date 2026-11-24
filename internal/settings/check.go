@@ -86,6 +86,12 @@ func (s *Settings) Check() []Problem {
 				add(true, fmt.Sprintf("repos.%s.setup[%d]", name, i), "run is empty")
 			}
 		}
+		for i, c := range r.Checks {
+			// A check without paths covers nothing, so it would never run.
+			if len(c.Paths) == 0 {
+				add(true, fmt.Sprintf("repos.%s.checks[%d]", name, i), "paths is empty: the check would never run")
+			}
+		}
 		out = append(out, r.Review.Problems("repos."+name+".review")...)
 	}
 

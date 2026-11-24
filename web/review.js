@@ -1039,7 +1039,8 @@ function rvProof(p) {
       const st = el('span', 'rv-cst ' + (c.ok ? 'ok' : 'bad'));
       st.appendChild(icon(c.ok ? 'check' : 'x'));
       head.appendChild(st);
-      head.appendChild(rvTag(c.kind, 'muted'));
+      // The part of the repository the check is for (repos.<name>.checks).
+      head.appendChild(rvTag(c.part ? `${c.part} ${c.kind}` : c.kind, 'muted'));
       const cmd = el('code', 'rv-ctext', c.command);
       cmd.title = c.command;
       head.appendChild(cmd);
