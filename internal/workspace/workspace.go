@@ -364,6 +364,7 @@ func Create(cfg *config.Config, slug string, specs []RepoSpec, agentKind, branch
 		_ = journal.InstallHook(cfg, slug, bin)
 	}
 	_ = journal.InstallIdeaSkill(cfg, slug)
+	_ = InstallSkills(cfg, slug)
 	return out, nil
 }
 

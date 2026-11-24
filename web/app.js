@@ -2691,6 +2691,7 @@ async function loadSettings() {
   state.settings = await api.get('/api/settings');
   await loadConfig();
   await loadGitIds('/api');
+  await loadSkills();
   renderSettings();
 }
 
@@ -2920,6 +2921,118 @@ async function addBase() {
 }
 $('#base-add').addEventListener('click', addBase);
 $('#base-input').addEventListener('keydown', e => { if (e.key === 'Enter') addBase(); });
+
+/* ------------------------------------------------------------------ skills */
+
+// The user's own skills, linked into every workspace (workspace.SkillsDir).
+// The editor holds one SKILL.md at a time; editingSkill.create says whether
+// Save adds a skill, which a taken name refuses, or changes one.
+state.skills = null;
+let editingSkill = null;
+const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+async function loadSkills() {
+  try { state.skills = await api.get('/api/skills'); } catch (e) { state.skills = null; toast(e.message); }
+  renderSkills();
+}
+
+function renderSkills() {
+  const d = state.skills;
+  $('#skills-dir').textContent = d ? d.dir : '';
+  const body = $('#skill-table').querySelector('tbody');
+  body.innerHTML = '';
+  const skills = (d && d.skills) || [];
+  for (const sk of skills) {
+    const tr = el('tr');
+    tr.appendChild(el('td', null, '/' + sk.name));
+    tr.appendChild(el('td', sk.description ? null : 'hint', sk.description || 'no description'));
+    const files = el('td');
+    for (const f of sk.files.slice(0, 6)) files.appendChild(el('span', 'tag muted', f));
+    if (sk.files.length > 6) files.appendChild(el('span', 'hint', `+${sk.files.length - 6} more`));
+    tr.appendChild(files);
+    const acts = el('td');
+    const ed = el('button', 'mini', 'Edit');
+    ed.addEventListener('click', () => openSkill(sk.name, false));
+    const rm = el('button', 'mini', 'Delete');
+    rm.addEventListener('click', () => deleteSkill(sk));
+    acts.appendChild(ed);
+    acts.appendChild(rm);
+    tr.appendChild(acts);
+    body.appendChild(tr);
+  }
+  if (!skills.length) {
+    const tr = el('tr');
+    const td = el('td', 'empty', 'No skills yet. Add one below, or put a folder with a SKILL.md into the folder above.');
+    td.colSpan = 4;
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
+}
+
+async function openSkill(name, create) {
+  let content;
+  if (create) {
+    content = `---\nname: ${name}\ndescription: What it does, and when to use it.\ndisable-model-invocation: true\n---\n\n# ${name}\n\n`;
+  } else {
+    try { content = (await api.get(`/api/skills/${encodeURIComponent(name)}`)).content; }
+    catch (e) { toast(e.message); return; }
+  }
+  editingSkill = { name, create };
+  $('#skill-editing').textContent = (create ? 'New skill: ' : '') + name + '/SKILL.md';
+  $('#skill-text').value = content;
+  $('#skill-editor').classList.remove('hidden');
+  const t = $('#skill-text');
+  t.focus();
+  t.setSelectionRange(0, 0); // open at the top, not where focus puts the caret
+  t.scrollTop = 0;
+  $('#skill-editor').scrollIntoView({ block: 'nearest' });
+}
+
+function closeSkill() {
+  editingSkill = null;
+  $('#skill-editor').classList.add('hidden');
+}
+
+function addSkill() {
+  const name = $('#skill-name').value.trim();
+  if (!SKILL_NAME.test(name)) {
+    toast('A skill name is lower-case letters, digits and hyphens, at most 64.');
+    $('#skill-name').focus();
+    return;
+  }
+  if (((state.skills && state.skills.skills) || []).some(s => s.name === name)) {
+    toast(`There is a skill called ${name} already. Edit it in the list.`);
+    return;
+  }
+  $('#skill-name').value = '';
+  openSkill(name, true);
+}
+
+async function deleteSkill(sk) {
+  const files = ['SKILL.md', ...sk.files].join(', ');
+  if (!await ask({ title: `Delete the skill /${sk.name}?`,
+                   body: `Every workspace loses it. Its folder (${files}) is moved to ${state.skills.dir}/.deleted, not erased.`,
+                   ok: 'Delete skill', danger: true })) return;
+  try { state.skills = await api.del(`/api/skills/${encodeURIComponent(sk.name)}`); }
+  catch (e) { toast(e.message); return; }
+  if (editingSkill && editingSkill.name === sk.name) closeSkill();
+  renderSkills();
+  toast(`Deleted /${sk.name}. Its folder is in ${state.skills.movedTo}.`, 'ok');
+}
+
+$('#skill-add').addEventListener('click', addSkill);
+$('#skill-name').addEventListener('keydown', e => { if (e.key === 'Enter') addSkill(); });
+$('#skill-cancel').addEventListener('click', closeSkill);
+$('#skill-save').addEventListener('click', async () => {
+  if (!editingSkill) return;
+  const { name, create } = editingSkill;
+  try {
+    state.skills = await api.put(`/api/skills/${encodeURIComponent(name)}`, { content: $('#skill-text').value, create });
+  } catch (e) { toast(e.message); return; }
+  closeSkill();
+  renderSkills();
+  toast(create ? `Added /${name} to every workspace.` : `Saved /${name}.`, 'ok');
+});
 
 $('#nav-settings').addEventListener('click', async () => {
   leaveTask(); showView('settings');

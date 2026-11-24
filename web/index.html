@@ -333,6 +333,29 @@
           <tr><th>Identity</th><th>Host</th><th>Commits as</th><th>Token</th></tr>
         </thead><tbody></tbody></table>
       </div>
+
+      <h3 class="sh">Skills</h3>
+      <p class="hint">Skills of your own, kept in <code id="skills-dir"></code> and linked into
+        every workspace, where Claude Code offers each one as <code>/name</code>. A change reaches
+        every workspace at once. Agent sessions started from now on see it.</p>
+      <div class="tablewrap">
+        <table id="skill-table" class="table"><thead>
+          <tr><th>Skill</th><th>Description</th><th>Files beside SKILL.md</th><th></th></tr>
+        </thead><tbody></tbody></table>
+      </div>
+      <div class="baseadd">
+        <input id="skill-name" type="text" placeholder="new-skill-name" autocomplete="off" spellcheck="false" aria-label="Name of the new skill">
+        <button id="skill-add" class="ghost"><svg class="i"><use href="#i-plus"/></svg>Add skill</button>
+      </div>
+      <div id="skill-editor" class="skilledit hidden">
+        <div class="skilledit-h">
+          <b id="skill-editing"></b>
+          <span class="sp"></span>
+          <button id="skill-cancel" class="ghost sm">Cancel</button>
+          <button id="skill-save" class="primary sm">Save</button>
+        </div>
+        <textarea id="skill-text" spellcheck="false" aria-label="SKILL.md"></textarea>
+      </div>
     </div>
   </section>
 

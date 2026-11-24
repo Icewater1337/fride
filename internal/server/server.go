@@ -137,6 +137,9 @@ func (s *Server) Routes() *http.ServeMux {
 	s.localFleetRoutes(mux)
 	// Tokens are set on this computer only, never over the fleet.
 	mux.HandleFunc("/api/git/identities/", s.handleGitToken)
+	// So are skills: every agent here follows them.
+	mux.HandleFunc("/api/skills", s.handleSkills)
+	mux.HandleFunc("/api/skills/", s.handleSkills)
 	if s.companion != nil {
 		// Like the inbox, never on the fleet listener: only here, on loopback.
 		mux.HandleFunc("/api/companion/", s.handleCompanion)
@@ -490,6 +493,7 @@ func (s *Server) launchAgent(slug string, kind agent.Kind, title string, o agent
 	// A workspace created before the guide learned about the stack gets that
 	// section now, before the agent reads the file. Best effort.
 	_ = workspace.EnsureGuide(s.cfg, slug, string(kind))
+	_ = workspace.InstallSkills(s.cfg, slug)
 	if o.Dangerous {
 		title += " !"
 	}
