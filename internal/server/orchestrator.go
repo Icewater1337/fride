@@ -111,7 +111,13 @@ func (h orchHost) CreateTask(n orchestrator.NewTask) (orchestrator.TaskInfo, err
 	for _, r := range n.Repos {
 		specs = append(specs, repoSpec{Name: r.Name, BaseRef: r.BaseRef})
 	}
-	v, err := h.s.createTask(n.Name, specs, kind, n.StartAgent, n.Dangerous, n.Branch, n.Profile, n.GitIdentity)
+	// Unless it said, the orchestrator's task skips permission checks only when
+	// config.json opts into that (orchestrator.dangerous).
+	dangerous := h.s.cfg.Settings.OrchestratorDangerous()
+	if n.Dangerous != nil {
+		dangerous = *n.Dangerous
+	}
+	v, err := h.s.createTask(n.Name, specs, kind, n.StartAgent, dangerous, n.Branch, n.Profile, n.GitIdentity)
 	if err != nil {
 		return orchestrator.TaskInfo{}, err
 	}

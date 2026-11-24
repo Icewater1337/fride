@@ -52,13 +52,15 @@ type NewRepo struct {
 // submits — so a task the orchestrator makes is indistinguishable from one made
 // by hand.
 type NewTask struct {
-	Name       string    `json:"name"`
-	Repos      []NewRepo `json:"repos"`
-	Branch     string    `json:"branch,omitempty"`
-	Profile    string    `json:"profile,omitempty"`
-	Agent      string    `json:"agent,omitempty"`
-	Dangerous  bool      `json:"dangerous,omitempty"`
-	StartAgent bool      `json:"startAgent,omitempty"`
+	Name    string    `json:"name"`
+	Repos   []NewRepo `json:"repos"`
+	Branch  string    `json:"branch,omitempty"`
+	Profile string    `json:"profile,omitempty"`
+	Agent   string    `json:"agent,omitempty"`
+	// Dangerous is nil when the orchestrator did not say: the host's default
+	// (orchestrator.dangerous in config.json) applies.
+	Dangerous  *bool `json:"dangerous,omitempty"`
+	StartAgent bool  `json:"startAgent,omitempty"`
 	// GitIdentity is an identity id, "none", or empty for the IDE's own
 	// choice: by the first repository's host, then git.default.
 	GitIdentity string `json:"gitIdentity,omitempty"`
