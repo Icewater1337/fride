@@ -73,7 +73,10 @@ type Action struct {
 	Branch    string    `json:"branch,omitempty"`
 	Profile   string    `json:"profile,omitempty"`
 	AgentKind string    `json:"agent,omitempty"`
-	Dangerous bool      `json:"dangerous,omitempty"`
+	// Dangerous is a pointer for the same reason as StartAgent: absent means
+	// the IDE's default (which may be to skip permission checks), and an
+	// explicit false has to be able to ask for them.
+	Dangerous *bool `json:"dangerous,omitempty"`
 	// StartAgent is a pointer because the schema makes it optional, and an
 	// absent field has to stay distinguishable from an explicit false: the
 	// default is to start one.
@@ -190,7 +193,7 @@ func schema() string {
           "branch": {"type": "string"},
           "profile": {"type": "string", "description": "For create_task: one of the PROFILES listed in the state; omit for the default."},
           "agent": {"type": "string", "enum": ["claude", "codex", "antigravity"]},
-          "dangerous": {"type": "boolean"},
+          "dangerous": {"type": "boolean", "description": "For create_task: omit it for the IDE's default; true or false only when the user asks for or against skipping the agent's permission checks."},
           "startAgent": {"type": "boolean"},
           "gitIdentity": {"type": "string", "description": "For create_task: one of the GIT IDENTITIES listed in the state, only when the user names one; omit it and the IDE picks by the repository's host."},
           "instruction": {"type": "string", "description": "For create_task: the first instruction for the new task's agent, typed in once it is ready. One line."},

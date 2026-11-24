@@ -128,6 +128,7 @@ backend's compose file.
 | `memory` | What one more stack needs, checked before a stack starts. See [memory](#memory). |
 | `inbox` | `{ "notify": "<shell command>" }`: how the sender of an inbox message hears back. See [inbox](#inbox). |
 | `panels` | `{ "model": "opus", "confirmRisky": false }`: the orchestrator's own web UI tabs. See [panels](#panels). |
+| `orchestrator` | `{ "dangerous": true }`: the tasks the orchestrator creates skip their agents' permission checks. See [orchestrator](#orchestrator). |
 | `fleet` | `{ "enabled": true, "name": "studio", "ephemeral": false }`: link this computer with your others. See [FLEET.md](FLEET.md). |
 | `companion` | `{ "enabled": true, "webhookUrl": "http://127.0.0.1:8770/fride" }`: run under a local companion program. See [companion](#companion). |
 | `git` | `{ "identities": [...], "default": "github" }`: the git identities a task can commit and push as. See [git](#git). |
@@ -440,6 +441,18 @@ the whole FrIDE API behind them. See [PANELS.md](PANELS.md).
 |---|---|
 | `model` | The model of the orchestrator turns that likely build or change a panel: a chat message or panel event that mentions a panel, dashboard, widget, chart, tab or UI. Default `opus`. `sonnet` keeps every turn on the routine model. |
 | `confirmRisky` | Ask before a panel's API call that deletes, moves, restores, resets, stops a stack or drives a terminal goes through. Default `false`: panels act without asking, and every call they make is written to `panels/audit.log` either way. |
+
+## orchestrator
+
+The tasks the orchestrator creates.
+
+```json
+"orchestrator": { "dangerous": true }
+```
+
+| field | meaning |
+|---|---|
+| `dangerous` | Default `false`. `true` starts the agents of the tasks the orchestrator creates with their permission checks skipped (shown in amber on the board, like a task created that way by hand), unless the orchestrator asks otherwise for a task because the user did. The orchestrator acts while nobody watches, so this is opted into. |
 
 ## companion
 

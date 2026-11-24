@@ -80,6 +80,9 @@ type Settings struct {
 	PR *PR `json:"pr,omitempty"`
 	// Panels configures the tabs the orchestrator builds in the web UI.
 	Panels *Panels `json:"panels,omitempty"`
+	// Orchestrator configures the orchestrator's own choices for the tasks it
+	// creates.
+	Orchestrator *Orchestrator `json:"orchestrator,omitempty"`
 
 	mu   sync.Mutex
 	path string
@@ -360,6 +363,20 @@ type Panels struct {
 	// ConfirmRisky makes the UI ask before a panel's API call that deletes,
 	// moves or drives a terminal goes through. Default false.
 	ConfirmRisky bool `json:"confirmRisky,omitempty"`
+}
+
+// Orchestrator configures the tasks the orchestrator creates.
+type Orchestrator struct {
+	// Dangerous starts the agents of the tasks the orchestrator creates with
+	// their permission checks skipped, unless it asks for them in that task.
+	// Default false: it acts while nobody watches, so skipping is opted into.
+	Dangerous bool `json:"dangerous,omitempty"`
+}
+
+// OrchestratorDangerous reports whether the orchestrator's tasks skip their
+// agents' permission checks by default.
+func (s *Settings) OrchestratorDangerous() bool {
+	return s != nil && s.Orchestrator != nil && s.Orchestrator.Dangerous
 }
 
 // PanelModel is the model for panel turns.
