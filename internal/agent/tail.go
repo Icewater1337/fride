@@ -457,3 +457,51 @@ func Failed(k Kind, home, workspaceDir, sessionID string, since time.Time) (*Fai
 	}
 	return last, nil
 }
+
+// TurnEnded reports whether the conversation's latest message is an assistant
+// answer that ended its turn (stop_reason end_turn) with nothing said after it:
+// the agent is at its prompt, done or waiting for input.
+//
+// This is the transcript's word on what the PTY's idle signal guesses. That
+// guess needs three quiet seconds, and a TUI that keeps repainting after its
+// turn (a footer, a status line) never gives them, so a finished agent looked
+// busy and, after an hour, stuck. A turn still in a tool call ends in
+// tool_use, and a prompt typed after the answer is a user line, so neither
+// counts.
+func TurnEnded(k Kind, home, workspaceDir, sessionID string) (bool, error) {
+	if !Tailable(k) || sessionID == "" {
+		return false, nil
+	}
+	path := transcriptPath(home, workspaceDir, sessionID)
+	if path == "" {
+		return false, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	ended := false
+	err = jsonl.Scan(f, func(line []byte) bool {
+		var e struct {
+			Type        string `json:"type"`
+			IsSidechain bool   `json:"isSidechain"`
+			IsMeta      bool   `json:"isMeta"`
+			Message     struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &e) != nil || e.IsSidechain || e.IsMeta {
+			return true
+		}
+		if e.Type != "assistant" && e.Type != "user" {
+			return true // turn durations, attachments, bookkeeping come after the answer
+		}
+		ended = e.Type == "assistant" && e.Message.StopReason == "end_turn"
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	return ended, nil
+}

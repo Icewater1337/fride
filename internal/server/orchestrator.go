@@ -576,6 +576,12 @@ func (h orchHost) Observe(slug, cursor string) (orchestrator.Observation, error)
 			dir := h.s.cfg.WorkspaceDir(slug)
 			ob.Turns, ob.Cursor = agent.Tail(kind, h.s.cfg.Home, dir, id, cursor,
 				orchestrator.TurnsPerObservation)
+			if !ob.Waiting {
+				// A TUI that keeps repainting after its final answer never goes
+				// quiet, so the transcript decides (#223). An error leaves it
+				// working: the stall notice is the safe side.
+				ob.Waiting, _ = agent.TurnEnded(kind, h.s.cfg.Home, dir, id)
+			}
 			if ob.Waiting {
 				// An agent that stopped mid-tool-call is sitting on a
 				// confirmation, not at a prompt. Only checked when it has

@@ -415,3 +415,48 @@ func TestFailedSpotsATurnThatEndedOnAnAPIError(t *testing.T) {
 		t.Fatalf("Failed = %+v for a turn that ended normally", f)
 	}
 }
+
+// A final report ends the turn even when the terminal keeps repainting; a
+// turn inside a tool call or still being written does not (#223).
+func TestTurnEndedReadsTheStopReason(t *testing.T) {
+	home := t.TempDir()
+	stop := func(l map[string]any, reason string) map[string]any {
+		l["message"].(map[string]any)["stop_reason"] = reason
+		return l
+	}
+	system := map[string]any{"type": "system", "subtype": "turn_duration", "uuid": "s1"}
+	sidechain := stop(assistant("x1", "subagent working", "Bash"), "tool_use")
+	sidechain["isSidechain"] = true
+	ended := func(session string) bool {
+		t.Helper()
+		ok, err := TurnEnded(Claude, home, "/ws", session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	for _, c := range []struct {
+		name  string
+		lines []map[string]any
+		want  bool
+	}{
+		{"final report", []map[string]any{stop(toolUse("a1", "t1", "Bash"), "tool_use"), toolResult("u1", "t1"),
+			stop(assistant("a2", "The PR is open."), "end_turn"), system}, true},
+		{"report then subagent noise", []map[string]any{stop(assistant("a2", "Done."), "end_turn"), sidechain}, true},
+		{"inside a long tool call", []map[string]any{stop(assistant("a1", "Watching CI."), "tool_use"),
+			stop(toolUse("a1b", "t1", "Bash"), "tool_use")}, false},
+		{"tool result, answer not yet written", []map[string]any{stop(toolUse("a1", "t1", "Bash"), "tool_use"),
+			toolResult("u1", "t1")}, false},
+		{"prompted after the report", []map[string]any{stop(assistant("a2", "Done."), "end_turn"),
+			{"type": "user", "uuid": "p1", "message": map[string]any{"role": "user", "content": "now merge it"}}}, false},
+		{"no stop reason recorded", []map[string]any{assistant("a1", "Done.")}, false},
+	} {
+		writeTurns(t, home, "/ws", c.name, c.lines)
+		if got := ended(c.name); got != c.want {
+			t.Errorf("%s: TurnEnded = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if ended("missing") {
+		t.Error("TurnEnded = true for a transcript that does not exist")
+	}
+}
