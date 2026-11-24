@@ -14,7 +14,7 @@ const panelsUI = {
   list: [],
   confirmRisky: false,
   current: '',          // the panel shown in #panel, '' when none
-  frames: new Map(),    // contentWindow → {panel, frame, errorHost}
+  frames: [],           // {panel, frame, errorHost}; a frame's window is looked up when a message comes
   subs: new Map(),      // `${panel}|${sub}` → {win, topic}
   last: new Map(),      // topic → JSON text last sent
   poll: null,
@@ -66,18 +66,22 @@ function mountPanel(host, id, html, cls) {
   frame.srcdoc = panelDoc(id, html);
   host.appendChild(errorHost);
   host.appendChild(frame);
-  // contentWindow exists once the frame is in the document.
-  panelsUI.frames.set(frame.contentWindow, { panel: id, frame, errorHost });
+  // Not keyed by contentWindow: host may not be in the document yet (an
+  // orchestrator message row is built first, attached after), and then it is null.
+  panelsUI.frames.push({ panel: id, frame, errorHost });
   return frame;
 }
 
+function frameOf(win) {
+  return win ? panelsUI.frames.find(f => f.frame.contentWindow === win) : undefined;
+}
+
 function unmountFrames(root) {
-  for (const [win, f] of panelsUI.frames) {
-    if (!root || root.contains(f.frame)) {
-      panelsUI.frames.delete(win);
-      for (const [k, s] of panelsUI.subs) if (s.win === win) panelsUI.subs.delete(k);
-    }
-  }
+  panelsUI.frames = panelsUI.frames.filter(f => {
+    if (root && !root.contains(f.frame)) return true;
+    for (const [k, s] of panelsUI.subs) if (s.f === f) panelsUI.subs.delete(k);
+    return false;
+  });
 }
 
 function showPanelError(f, msg) {
@@ -137,7 +141,7 @@ async function panelFetch(panel, method, path, body) {
 const PANEL_TOPICS = { tasks: '/api/tasks', orchestrator: '/api/orchestrator', panels: '/api/panels' };
 
 window.addEventListener('message', async e => {
-  const f = panelsUI.frames.get(e.source);
+  const f = frameOf(e.source);
   const m = e.data;
   if (!f || !m || m.fride !== 1) return;   // not one of our frames
   const reply = (ok, v) => e.source.postMessage(
@@ -164,7 +168,7 @@ window.addEventListener('message', async e => {
         // The first read is the panel's own, so the audit log shows who
         // follows what; the shared poll after it is not repeated there.
         const data = await panelFetch(f.panel, 'GET', path);
-        panelsUI.subs.set(f.panel + '|' + m.sub, { win: e.source, topic: path, sub: m.sub });
+        panelsUI.subs.set(f.panel + '|' + m.sub, { win: e.source, f, topic: path, sub: m.sub });
         panelsUI.last.set(path, JSON.stringify(data));
         e.source.postMessage({ fride: 1, event: 'topic', sub: m.sub, data }, '*');
         pollTopics();
@@ -204,7 +208,7 @@ async function pollTopics(start) {
 // no choice stored the system's preference decides.
 function sendPanelTheme() {
   const t = panelTheme();
-  for (const win of panelsUI.frames.keys()) win.postMessage({ fride: 1, event: 'theme', theme: t.theme, css: t.css }, '*');
+  for (const f of panelsUI.frames) f.frame.contentWindow?.postMessage({ fride: 1, event: 'theme', theme: t.theme, css: t.css }, '*');
 }
 new MutationObserver(sendPanelTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', sendPanelTheme);
@@ -268,7 +272,7 @@ async function openPanel(id) {
   unmountFrames(host);
   host.innerHTML = '';
   const frame = mountPanel(host, id, p.html);
-  if (p.error) showPanelError(panelsUI.frames.get(frame.contentWindow), p.error);
+  if (p.error) showPanelError(panelsUI.frames.find(f => f.frame === frame), p.error);
   $('#panel-menu').onclick = () => showMenu($('#panel-menu'), {
     title: p.title,
     items: [
