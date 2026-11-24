@@ -347,17 +347,31 @@ func (p *Plan) ownPorts() []int {
 	return out
 }
 
-// instanceBusy reports whether any of the task's own ports for slot k, as the
-// task is configured now, is listening: whether slot k is free for the task to
-// take. Checked exactly, never from the cached snapshot: the answer is acted
-// on, and a reading from up to a second ago would hand a live instance's ports
-// to the next task.
+// slotPorts are every port the task's stack listens on in its slot: ownPorts,
+// and the external services' too. Those are not evidence that this task's stack
+// runs, but whoever holds one, the task cannot have it: a launcher that starts
+// its own proxy refuses a port another instance's proxy still holds.
+func (p *Plan) slotPorts() []int {
+	var out []int
+	for _, r := range p.Ordered() {
+		if r.Mode.Owned() && r.Port > 0 {
+			out = append(out, r.Port)
+		}
+	}
+	return out
+}
+
+// instanceBusy reports whether any of the task's ports for slot k (slotPorts),
+// as the task is configured now, is listening: whether slot k is free for the
+// task to take. Checked exactly, never from the cached snapshot: the answer is
+// acted on, and a reading from up to a second ago would hand a live instance's
+// ports to the next task.
 func instanceBusy(cfg *config.Config, slug string, k int) bool {
 	p, err := Resolve(cfg, slug, k)
 	if err != nil {
 		return false
 	}
-	for _, port := range p.ownPorts() {
+	for _, port := range p.slotPorts() {
 		if infra.Held(port) {
 			return true
 		}

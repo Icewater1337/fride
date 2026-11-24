@@ -858,3 +858,29 @@ func TestDownReportsAFailingStop(t *testing.T) {
 		t.Error("the slot was kept")
 	}
 }
+
+// A slot is not free while a port an external service of the task would use
+// there is held. Whoever holds it (another instance's proxy, left running by a
+// stop that only ends host processes), the task's launcher cannot have it.
+// Checking only the task's started services handed out slot 3 while another
+// workspace's UI and proxy still held :3103 and :4183, and the launcher refused.
+func TestAllocKSkipsASlotWhoseExternalPortIsHeld(t *testing.T) {
+	needLsof(t)
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot bind a loopback port here")
+	}
+	defer held.Close()
+	s := portless()
+	s.Profiles["local"].Services["api"].Port = freeBase(t)
+	s.Profiles["local"].Services["proxy"] = &settings.Service{Repo: "backend", External: true,
+		Port: held.Addr().(*net.TCPAddr).Port - 1}
+	e := newEnv(t, s, "backend")
+	k, err := AllocK(e.cfg, "t1", busyFor(e.cfg, "t1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k == 1 {
+		t.Fatalf("slot 1 was handed out while its proxy port :%d is held", held.Addr().(*net.TCPAddr).Port)
+	}
+}

@@ -550,7 +550,11 @@ func Down(cfg *config.Config, slug string) (*Status, error) {
 	}
 	for _, s := range services {
 		if s.Mode == ModeExternal && s.Port > 0 && infra.Held(s.Port) {
-			warnings = append(warnings, fmt.Sprintf("%s on :%d is started by something else and was left running", s.Name, s.Port))
+			// Its slot is released anyway (it is not evidence of this stack), but
+			// no task is handed a slot whose ports are held (slotPorts), so say
+			// what keeps the slot out of use, and how to end it.
+			warnings = append(warnings, fmt.Sprintf("%s on :%d is started by something else and was left running; "+
+				"no task gets slot %d while it runs (a stop command in the profile can end it)", s.Name, s.Port, k))
 		}
 		if s.Mode == ModeSource && !s.Started && s.Port > 0 && infra.Held(s.Port) {
 			warnings = append(warnings, fmt.Sprintf("%s on :%d was not started by this task and was left running", s.Name, s.Port))
