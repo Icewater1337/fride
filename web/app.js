@@ -3275,6 +3275,7 @@ function renderThread(v) {
   if (key !== inbox.logKey) {
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
     inbox.logKey = key;
+    unmountFrames(log);
     log.innerHTML = '';
     if (!msgs.length) {
       // The trail is the orchestrator's chat filtered to this thread, and a
