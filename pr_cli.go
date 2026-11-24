@@ -102,6 +102,7 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 	}
 	if cfg.Settings.PRReview() {
 		opt.Review = prReview(t.Slug)
+		opt.NoDraft = !cfg.Settings.PRDraft()
 	}
 	ctx, stop := interruptible()
 	defer stop()
@@ -122,6 +123,16 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 			review.ReviewCapped:   "a draft: the review round cap is reached",
 			review.ReviewRunning:  "a draft",
 		}[r.Review]
+		// Opened ready (pr.draft false): ready whatever the review said, which
+		// is still said.
+		if r.Ready && r.Review != review.ReviewOff && r.Review != review.ReviewClean {
+			state = "ready for review, but " + map[string]string{
+				review.ReviewFindings: "the fresh-context review found red findings: fix them",
+				review.ReviewFailed:   "the review could not run",
+				review.ReviewCapped:   "the review round cap is reached",
+				review.ReviewRunning:  "the review has not finished",
+			}[r.Review]
+		}
 		if n := res.Verdict.Yellow; n > 0 && r.Review == review.ReviewClean {
 			state += fmt.Sprintf(" (%d yellow finding(s) in the Review tab)", n)
 		}

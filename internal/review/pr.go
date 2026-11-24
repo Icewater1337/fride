@@ -82,6 +82,10 @@ type PROptions struct {
 	// the round cap it returns an error wrapping ErrRoundCap; it never forces
 	// a round, which only the owner may.
 	Review func(context.Context) (Verdict, error)
+	// NoDraft opens the pull request ready for review at once while Review
+	// still runs (pr.draft false): its findings still go back to the agent,
+	// but the pull request is never turned into a draft.
+	NoDraft bool
 	// Gate is the task's review tier and its human approvals (GateFor), read
 	// once the pull request is ready for review. nil leaves it unsaid.
 	Gate func() Gate
@@ -107,7 +111,7 @@ var (
 	ErrProofFailed = errors.New("the proof failed, so no pull request was opened")
 	// ErrFindings is a review that left red findings: the pull request stays a
 	// draft, and the findings go back to the agent.
-	ErrFindings = errors.New("the review left red findings, so the pull request stays a draft")
+	ErrFindings = errors.New("the review left red findings")
 )
 
 // OpenPR proves the change, pushes every changed repository's branch, opens or
@@ -158,7 +162,8 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		return res, ErrProofFailed
 	}
 
-	draft := opt.Review != nil
+	reviewing := opt.Review != nil
+	draft := reviewing && !opt.NoDraft
 	block := p.Markdown()
 	type opened struct {
 		forge Forge
@@ -200,9 +205,9 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		links = append(links, PRLink{Repo: t.Name, URL: url})
 	}
 
-	rec := &PRRecord{At: time.Now(), Links: links, Review: ReviewOff, Ready: true}
-	if draft {
-		rec.Review, rec.Ready = ReviewRunning, false
+	rec := &PRRecord{At: time.Now(), Links: links, Review: ReviewOff, Ready: !draft}
+	if reviewing {
+		rec.Review = ReviewRunning
 	}
 	p.PR = rec
 	if !draft {
@@ -212,12 +217,24 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		return res, err
 	}
 	res.Proof = p
-	if !draft {
+	if !reviewing {
 		notePR(cfg, slug, p)
 		return res, nil
 	}
 
-	fmt.Fprintln(logw, "opened as a draft; a review that never saw this conversation reads the change now (it takes a few minutes)")
+	how := "opened as a draft"
+	if !draft {
+		how = "opened ready for review"
+	}
+	fmt.Fprintln(logw, how+"; a review that never saw this conversation reads the change now (it takes a few minutes)")
+	// stays is what a review that does not come back clean leaves the pull
+	// request as: a draft, unless it opens ready (pr.draft false).
+	stays := func(what string, err error) error {
+		if draft {
+			return fmt.Errorf("%s, so the pull request stays a draft: %w", what, err)
+		}
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	v, err := opt.Review(ctx)
 	res.Verdict = v
 	switch {
@@ -225,15 +242,18 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		// Another round would be the loop the cap exists to stop. The cap has
 		// told the owner (a blocking thread); the agent stops here.
 		rec.Review, rec.Err = ReviewCapped, err.Error()
-		err = fmt.Errorf("the pull request stays a draft: %w", err)
+		err = stays("the review round cap is reached", err)
 	case err != nil:
 		rec.Review, rec.Err = ReviewFailed, err.Error()
-		err = fmt.Errorf("the review could not run, so the pull request stays a draft: %w", err)
+		err = stays("the review could not run", err)
 	case len(v.Red) > 0:
 		rec.Review, rec.Red = ReviewFindings, len(v.Red)
 		err = ErrFindings
 	default:
 		for _, o := range made {
+			if !draft {
+				break // opened ready: nothing to mark
+			}
 			if e := o.forge.setDraft(ctx, o.dir, opt.Env, o.ref, false); e != nil {
 				err = fmt.Errorf("the review is clean, but marking the pull request ready failed: %w", e)
 				rec.Review, rec.Err = ReviewFailed, err.Error()
@@ -251,6 +271,15 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 	res.Proof = p
 	notePR(cfg, slug, p)
 	return res, err
+}
+
+// stillDraft is what a record's pull request still is, for the decision log:
+// a draft until the review is clean, or ready already (pr.draft false).
+func stillDraft(r *PRRecord, until string) string {
+	if r.Ready {
+		return ", while it is open for review"
+	}
+	return ", so it stays a draft" + until
 }
 
 // needs is what the review tier still asks of people once a pull request is
@@ -287,11 +316,11 @@ func notePR(cfg *config.Config, slug string, p Proof) {
 	case ReviewClean:
 		text += " A fresh-context review found nothing red, so it was marked ready."
 	case ReviewFindings:
-		text += fmt.Sprintf(" A fresh-context review left %d red finding(s), so it stays a draft until they are fixed.", r.Red)
+		text += fmt.Sprintf(" A fresh-context review left %d red finding(s) to fix", r.Red) + stillDraft(r, " first") + "."
 	case ReviewFailed:
-		text += " The review could not run (" + clipLine(r.Err, 200) + "), so it stays a draft."
+		text += " The review could not run (" + clipLine(r.Err, 200) + ")" + stillDraft(r, "") + "."
 	case ReviewCapped:
-		text += " The review round cap stopped another review, so it stays a draft for the owner to decide."
+		text += " The review round cap stopped another review; the owner decides" + stillDraft(r, "") + "."
 	}
 	if r.Needs != "" {
 		text += " Before Done, " + r.Needs + "."

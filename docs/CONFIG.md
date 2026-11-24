@@ -695,6 +695,7 @@ itself:
 | field | meaning |
 |---|---|
 | `review` | Default `true`: wait for the fresh-context review before marking the pull request ready. `false` opens it ready at once, with the proof attached, and the workspace guide says so. The review needs a running `fride serve`; without one, the pull request stays a draft. Each review is a round of the AI pass, so [review](#review)'s `maxRounds` caps them, and its `finders` and `agree` apply. |
+| `draft` | Default `true`: keep the pull request a draft while the review runs and while it leaves red findings. `false` opens it ready for review at once and never turns it into a draft; the review still runs (with `review` on), and its findings still go back to the agent, which fixes them and runs `fride pr` again. |
 
 The proof is kept in the task's review folder and shown in the Review tab's
 Evidence, with the version it was taken on. It goes stale as soon as the

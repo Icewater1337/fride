@@ -453,6 +453,20 @@ type PR struct {
 	// ready only when no red finding remains. Default true. false opens the
 	// pull request ready at once, with the proof attached.
 	Review *bool `json:"review,omitempty"`
+	// Draft keeps the pull request a draft while that review runs, and while it
+	// has red findings. Default true. false opens it ready for review at once:
+	// the review still runs and its findings still go back to the agent, but
+	// the pull request is never turned into a draft.
+	Draft *bool `json:"draft,omitempty"`
+}
+
+// PRDraft reports whether `fride pr` keeps a pull request a draft until the
+// review is clean.
+func (s *Settings) PRDraft() bool {
+	if s == nil || s.PR == nil || s.PR.Draft == nil {
+		return true
+	}
+	return *s.PR.Draft
 }
 
 // PRReview reports whether `fride pr` waits for a fresh-context review before
