@@ -220,7 +220,7 @@ tier, a rule without paths, an empty pattern, and a count outside 0 to 5.
 | `pre` | A command run before every start, for example to remove a stale sidecar container. If it fails, the failure is logged and the service still starts. |
 | `stop` | A command run on `stack down`, in the service's directory, before FrIDE signals its processes and reaps its port, templated like `run`: how the launcher `run` handed the service to stops what it started (detached processes, containers). Its output goes to the service's log; a failure is reported and the stack is stopped anyway. It runs as the stack was started, also after a profile switch. |
 | `port` | The **base** port. A task in slot *k* uses `port + k`. See [Ports](#ports). |
-| `external` | `true` for a listener that something else starts, such as a proxy a dev server spawns. FrIDE starts nothing for it. It only watches `port + k`, so `--wait` and the entry link work. |
+| `external` | `true` for a listener that something else starts, such as a proxy a dev server spawns. FrIDE starts nothing for it. It only watches `port + k`, so `--wait` and the entry link work. FrIDE does not stop it either: the launcher's `stop` command should, or the slot stays out of use while it runs (see [Ports](#ports)). |
 | `env` | Extra environment variables for `run`, templated. Each replaces a variable of the same name that FrIDE inherited, so a `PORT` or `API_URL` exported in your shell never wins over the task's own. |
 | `files` | Keys set in KEY=VALUE files (dotenv, `.properties`) before every start: `{ ".env": { "PORT": "{{port}}" } }`. Paths are relative to `dir`. Other keys and comments are kept. A value that refers to a service the task does not have **removes** the key instead, so the app falls back to its own default rather than to a port nothing listens on. |
 | `url` | How to open the service, templated. Default `http://localhost:{{port}}`. |
@@ -286,6 +286,8 @@ Every per-task port is **base + slot**. Slot 0, the base port itself, is never u
 Tasks can run different profiles at the same time, so the ranges `base+1 … base+maxSlots` of two different bases must not overlap anywhere in the file. With `maxSlots: 10`, keep bases at least 10 apart. Use bases that end in 0 (3100, 8090, 8140), and don't put a base just below a port something else uses. A shared container's port must not fall inside any range either. `fride config check` reports both problems.
 
 When a service's usual port is, say, 8080, a good base is 8090. The main checkout keeps 8080, and tasks get 8091, 8092 and so on.
+
+A slot is handed to a task only while none of the ports the task would use in it is listening, its external services' ports included, whoever holds them. Something left running from an earlier stack keeps its slot out of use until it stops.
 
 ## ledger
 
