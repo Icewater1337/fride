@@ -279,13 +279,15 @@ func TakeProof(ctx context.Context, targets []Target, progress io.Writer) Proof 
 // renames as both of their paths: a check covers what a file left as much as
 // where it went.
 func changedFiles(dir, from, to string) ([]string, error) {
-	out, err := git(dir, "diff-tree", "-r", "--name-status", "--no-renames", from, to)
+	// quotepath off and -z: git otherwise quotes names with non-ASCII bytes,
+	// tabs or newlines, and the quoted form matches no check's paths.
+	out, err := gitRaw(dir, "-c", "core.quotepath=off", "diff-tree", "-r", "-z", "--name-only", "--no-renames", from, to)
 	if err != nil {
 		return nil, err
 	}
 	var files []string
-	for _, l := range strings.Split(out, "\n") {
-		if _, path, ok := strings.Cut(l, "\t"); ok && path != "" {
+	for _, path := range strings.Split(out, "\x00") {
+		if path != "" {
 			files = append(files, path)
 		}
 	}
@@ -652,15 +654,16 @@ func (p Proof) Brief(byHand []agent.Command, changed bool) string {
 		case ReviewOff:
 			b.WriteString("opened ready (the automatic review is off).")
 		case ReviewRunning:
-			b.WriteString("a draft while the fresh-context review runs.")
+			b.WriteString("the fresh-context review runs" + stillDraft(r, " until it is clean") + ".")
 		case ReviewClean:
 			b.WriteString("marked ready after a clean fresh-context review.")
 		case ReviewFindings:
-			fmt.Fprintf(&b, "still a draft: the fresh-context review left %d red finding(s), handed back to the agent.", r.Red)
+			fmt.Fprintf(&b, "the fresh-context review left %d red finding(s), handed back to the agent", r.Red)
+			b.WriteString(stillDraft(r, " until they are fixed") + ".")
 		case ReviewFailed:
-			b.WriteString("still a draft: the review could not run (" + clipLine(r.Err, 200) + ").")
+			b.WriteString("the review could not run (" + clipLine(r.Err, 200) + ")" + stillDraft(r, "") + ".")
 		case ReviewCapped:
-			b.WriteString("still a draft: the review round cap is reached, and the owner decides " +
+			b.WriteString("the review round cap is reached" + stillDraft(r, "") + ", and the owner decides " +
 				"what happens next (a blocking comment in the Review tab says so). Do not send the agent back.")
 		}
 		if r.Needs != "" {

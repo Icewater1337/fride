@@ -273,8 +273,9 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 	return res, err
 }
 
-// stillDraft is what a record's pull request still is, for the decision log:
-// a draft until the review is clean, or ready already (pr.draft false).
+// stillDraft is what a record's pull request still is, for the decision log
+// and the orchestrator's brief: a draft until the review is clean, or ready
+// already (pr.draft false).
 func stillDraft(r *PRRecord, until string) string {
 	if r.Ready {
 		return ", while it is open for review"
