@@ -148,7 +148,7 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 	case errors.Is(err, review.ErrRoundCap):
 		fmt.Println("\nSTOP: " + err.Error())
 		fmt.Println("The review round cap is there to end a review-and-fix loop. The owner of this change " +
-			"decides what happens next; a blocking comment in the task's Review tab tells them. Do not run " +
+			"decides what happens next; a comment in the task's Review tab tells them. Do not run " +
 			"`fride pr` again, and do not mark the pull request ready yourself: tell the user and wait.")
 		os.Exit(1)
 	case err == review.ErrFindings:

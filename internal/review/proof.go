@@ -664,7 +664,7 @@ func (p Proof) Brief(byHand []agent.Command, changed bool) string {
 			b.WriteString("the review could not run (" + clipLine(r.Err, 200) + ")" + stillDraft(r, "") + ".")
 		case ReviewCapped:
 			b.WriteString("the review round cap is reached" + stillDraft(r, "") + ", and the owner decides " +
-				"what happens next (a blocking comment in the Review tab says so). Do not send the agent back.")
+				"what happens next (a comment in the Review tab says so). Do not send the agent back.")
 		}
 		if r.Needs != "" {
 			b.WriteString(" Ready for review is not approved: before Done, " + r.Needs + ", which only a person can give.")

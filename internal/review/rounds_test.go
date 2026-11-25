@@ -21,11 +21,12 @@ func version(head, hash string, hunks ...Hunk) Changes {
 		Files: []File{{Path: "auth.go", Hash: hash, Hunks: hunks}}}}}
 }
 
-func openThreads(t *testing.T, cfg *config.Config, slug string) []Thread {
+// capThreads are the threads not yet settled, blocking or not.
+func capThreads(t *testing.T, cfg *config.Config, slug string) []Thread {
 	t.Helper()
 	var out []Thread
 	for _, th := range LoadThreads(cfg, slug) {
-		if th.Open() {
+		if !th.Satisfied {
 			out = append(out, th)
 		}
 	}
@@ -61,18 +62,18 @@ func TestRoundsCountVersionsAndTheCapStopsTheNext(t *testing.T) {
 	if !errors.Is(err, ErrRoundCap) {
 		t.Fatalf("round 4 on a new version was not refused by the cap: %v", err)
 	}
-	open := openThreads(t, cfg, "t1")
-	if len(open) != 1 || !open[0].Blocking || !strings.Contains(open[0].Comments[0].Text, "rethink") &&
-		!strings.Contains(open[0].Comments[0].Text, "different approach") {
-		t.Fatalf("the owner was not told in a blocking thread: %+v", open)
+	open := capThreads(t, cfg, "t1")
+	if len(open) != 1 || open[0].Blocking || !strings.Contains(open[0].Comments[0].Text, "different approach") {
+		t.Fatalf("the owner was not told in one thread that does not block: %+v", open)
 	}
-	if err := CheckDone(cfg, "t1"); err == nil {
-		t.Error("a task whose review loop hit the cap can be closed without the owner looking")
+	// The cap stops the automation already; the task stays closable.
+	if err := CheckDone(cfg, "t1"); err != nil {
+		t.Errorf("the cap's thread keeps the task out of Done: %v", err)
 	}
 	if _, err := begin(version("h6", "v5"), false); !errors.Is(err, ErrRoundCap) {
 		t.Fatalf("a second attempt past the cap: %v", err)
 	}
-	if n := len(openThreads(t, cfg, "t1")); n != 1 {
+	if n := len(capThreads(t, cfg, "t1")); n != 1 {
 		t.Errorf("a loop knocking twice opened %d threads, want 1", n)
 	}
 	if len(LoadKept(cfg, "t1").Rounds.Rounds) != 3 {
@@ -83,7 +84,7 @@ func TestRoundsCountVersionsAndTheCapStopsTheNext(t *testing.T) {
 	if err != nil || st.N != 4 {
 		t.Fatalf("the owner's override: %+v %v", st, err)
 	}
-	if len(openThreads(t, cfg, "t1")) != 0 {
+	if len(capThreads(t, cfg, "t1")) != 0 {
 		t.Error("starting a round by hand did not settle the cap's thread")
 	}
 	rs := LoadKept(cfg, "t1").Rounds

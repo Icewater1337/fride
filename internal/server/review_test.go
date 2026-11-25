@@ -225,10 +225,12 @@ func TestAIPassRefusedPastTheRoundCap(t *testing.T) {
 	if !c.Rounds.Capped || c.Rounds.Next != 4 || c.Rounds.Max != 3 || len(c.Rounds.Done) != 3 || c.Rounds.Escalation == "" {
 		t.Errorf("rounds as served: %+v", c.Rounds)
 	}
-	if len(c.Threads) != 1 || !c.Threads[0].Open() || c.Threads[0].ID != c.Rounds.Escalation {
+	if len(c.Threads) != 1 || c.Threads[0].Blocking || c.Threads[0].Satisfied || c.Threads[0].ID != c.Rounds.Escalation {
 		t.Errorf("the owner's thread: %+v", c.Threads)
 	}
-	if w := do(t, h, "PUT", "/api/tasks/foo/status", `{"status":"done"}`); w.Code != 400 {
-		t.Errorf("a task stopped by the round cap was closed without the owner: %d %s", w.Code, w.Body)
+	// The cap stops the automation; it does not keep the task out of Done.
+	// (This task still waits for its human approval, a gate of its own.)
+	if w := do(t, h, "PUT", "/api/tasks/foo/status", `{"status":"done"}`); strings.Contains(w.Body.String(), "thread") {
+		t.Errorf("the round cap's thread keeps the task out of Done: %d %s", w.Code, w.Body)
 	}
 }

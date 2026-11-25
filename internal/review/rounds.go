@@ -34,12 +34,12 @@ const (
 
 // ErrRoundCap is wrapped by every refusal to start a review past the round
 // cap. Automation that runs reviews on its own should stop on it and leave the
-// decision to the owner, who has been told in a blocking thread.
+// decision to the owner, who has been told in a thread on the change.
 var ErrRoundCap = errors.New("review round cap reached")
 
 type roundsState struct {
 	Rounds []Round `json:"rounds"`
-	// Escalation is the id of the blocking thread the cap opened, so a loop
+	// Escalation is the id of the thread the cap opened, so a loop
 	// that keeps knocking opens one thread, not one per attempt.
 	Escalation string `json:"escalation,omitempty"`
 }
@@ -158,24 +158,24 @@ func doneOf(done, max int) string {
 	return fmt.Sprintf("%d of %d review rounds are done", done, max)
 }
 
-// escalate opens the blocking thread that tells the owner the cap stopped a
-// round, unless one is still open. A blocking thread is where a task already
-// asks its owner for a decision: it keeps the task out of Done on every path
-// (the board, the CLI, the orchestrator), and the Reviews view counts it as
-// the owner's turn. The caller holds stateMu.
+// escalate opens the thread that tells the owner the cap stopped a round,
+// unless one is still open. It is not blocking: the cap already stops the
+// automation, so the thread only says why, and keeping the task out of Done on
+// top of that left owners hunting for a comment before they could close a task
+// whose change had long been merged. The caller holds stateMu.
 func escalate(cfg *config.Config, slug string, rs *roundsState, done, max int) {
 	if rs.Escalation != "" {
 		for _, t := range loadThreads(cfg, slug) {
-			if t.ID == rs.Escalation && t.Open() {
+			if t.ID == rs.Escalation && !t.Satisfied {
 				return
 			}
 		}
 	}
 	text := fmt.Sprintf("Review round cap (review.maxRounds): %s, and the change moved on again. FrIDE starts no "+
 		"further round on its own. A change that still draws findings after %d rounds usually needs a different "+
-		"approach rather than another fix: read the open findings, decide how to go on, and mark this Satisfied. "+
+		"approach rather than another fix: read the open findings and decide how to go on. "+
 		"Run anyway in the AI review section starts one more round.", doneOf(done, max), done)
-	t, err := addThread(cfg, slug, Thread{Blocking: true}, text)
+	t, err := addThread(cfg, slug, Thread{}, text)
 	if err == nil {
 		rs.Escalation = t.ID
 		_ = save(cfg, slug, roundsFile, *rs)
@@ -190,7 +190,7 @@ func settle(cfg *config.Config, slug string, rs *roundsState, n int) {
 	}
 	all := loadThreads(cfg, slug)
 	for i := range all {
-		if t := &all[i]; t.ID == rs.Escalation && t.Open() {
+		if t := &all[i]; t.ID == rs.Escalation && !t.Satisfied {
 			t.Satisfied = true
 			t.Comments = append(t.Comments, Comment{At: time.Now(), Text: fmt.Sprintf("Round %d was started by hand.", n)})
 			_ = save(cfg, slug, threadsFile, all)
@@ -236,7 +236,7 @@ type Rounds struct {
 	// cap stops it: only the owner can start it then.
 	Next   int  `json:"next"`
 	Capped bool `json:"capped,omitempty"`
-	// Escalation is the open blocking thread the cap opened.
+	// Escalation is the thread the cap opened, while it is not settled.
 	Escalation string `json:"escalation,omitempty"`
 }
 
@@ -254,7 +254,7 @@ func roundsView(rs roundsState, max int, c Changes, ai AI) Rounds {
 		v.Capped = false
 	}
 	for _, t := range c.Threads {
-		if t.ID == rs.Escalation && t.Open() {
+		if t.ID == rs.Escalation && !t.Satisfied {
 			v.Escalation = t.ID
 		}
 	}
