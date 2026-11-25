@@ -86,3 +86,15 @@ func TestOpenByPIDWithoutARegistry(t *testing.T) {
 		t.Errorf("got %v, want nil", got)
 	}
 }
+
+// A background session is reached by its job id (`claude attach`), which the
+// registry keeps next to the session id.
+func TestOpenByPIDKnowsABackgroundSession(t *testing.T) {
+	home := t.TempDir()
+	pid := os.Getpid()
+	writeSession(t, home, fmt.Sprint(pid), fmt.Sprintf(
+		`{"pid":%d,"sessionId":"bg-conv","cwd":"/w","kind":"bg","jobId":"bg01"}`, pid))
+	if o := OpenByPID(Claude, home)[pid]; o.Kind != "bg" || o.JobID != "bg01" {
+		t.Errorf("got kind %q job %q, want bg / bg01", o.Kind, o.JobID)
+	}
+}

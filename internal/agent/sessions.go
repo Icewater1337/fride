@@ -35,6 +35,10 @@ type Recorded struct {
 	// for reading, not for resuming: a second process on one transcript is how
 	// two agents end up interleaving turns into the same file.
 	InUse bool `json:"inUse,omitempty"`
+	// Attach is set when what holds an InUse conversation is a background
+	// session of the agent CLI: it cannot be resumed, but it can be opened, with
+	// `claude attach <Attach>`.
+	Attach string `json:"attach,omitempty"`
 }
 
 // Sessions lists the conversations recorded for a workspace, newest first.

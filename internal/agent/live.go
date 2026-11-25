@@ -22,6 +22,11 @@ type Open struct {
 	// transcript begins after this cannot have been left behind by anything
 	// older, so one of the processes still running must have started it.
 	StartedAt int64 `json:"startedAt"`
+	// Kind is "bg" for a background session (`claude --bg`, or one sent to the
+	// background from its terminal), which runs on in the CLI's own daemon and
+	// is reached with `claude attach <JobID>` rather than resumed.
+	Kind  string `json:"kind"`
+	JobID string `json:"jobId"`
 }
 
 // Started is StartedAt as a time, or the zero time if the CLI did not record one.
