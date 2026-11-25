@@ -572,3 +572,40 @@ func TestPROpensReadyWhenDraftsAreOff(t *testing.T) {
 		t.Errorf("the record should say ready and clean: %+v", p.PR)
 	}
 }
+
+// A changed file whose name git would quote (non-ASCII bytes) is matched by
+// its real path, not by git's quoted form of it (#242).
+func TestProofMatchesANonASCIIPathToItsCheck(t *testing.T) {
+	dir := repo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "docs/café.md", "why\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-qm", "docs: café")
+	tg := Target{RepoSpec: RepoSpec{Name: "api", Dir: dir, Base: "main"},
+		Checks: []settings.RepoCheck{{Name: "docs", Paths: []string{"docs/"}, Test: "echo docs tested"}}}
+	p := TakeProof(context.Background(), []Target{tg}, nil)
+	if !p.OK || len(p.Repos[0].Checks) != 1 || p.Repos[0].Checks[0].label() != "docs test" {
+		t.Fatalf("a change to docs/café.md should run the docs check: %+v", p.Repos[0])
+	}
+}
+
+// With pr.draft false the pull request is ready from the start: the brief
+// never calls it a draft while the review runs or its findings are worked on (#243).
+func TestBriefCallsAReadyPullRequestOpenForReview(t *testing.T) {
+	now := time.Now()
+	for _, ready := range []bool{false, true} {
+		for _, rv := range []string{ReviewRunning, ReviewFindings, ReviewFailed, ReviewCapped} {
+			p := Proof{Taken: now, OK: true, PR: &PRRecord{At: now, Review: rv, Red: 1, Err: "boom", Ready: ready,
+				Links: []PRLink{{Repo: "api", URL: "https://forge.example/pull/7"}}}}
+			got := p.Brief(nil, true)
+			if draft := strings.Contains(got, "draft"); draft == ready {
+				t.Errorf("ready=%v review=%s: %q", ready, rv, got)
+			}
+			if ready && !strings.Contains(got, "open for review") {
+				t.Errorf("ready=%v review=%s should say open for review: %q", ready, rv, got)
+			}
+		}
+	}
+}
