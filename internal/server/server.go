@@ -133,6 +133,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/orchestrator/", s.handleOrchestrator)
 	mux.HandleFunc("/api/panels", s.handlePanels)
 	mux.HandleFunc("/api/panels/", s.handlePanels)
+	mux.HandleFunc("/api/run", s.handleRun) // a panel's command, panels.go
 	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/inbox/", s.handleInbox)
 	s.localFleetRoutes(mux)

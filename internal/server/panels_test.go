@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Icewater1337/fride/internal/store"
 )
 
 func TestPanelRoutes(t *testing.T) {
@@ -89,5 +92,49 @@ func TestPanelCallsAreAudited(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	if len(lines) != 1 || !strings.Contains(lines[0], `"panel":"board"`) || !strings.Contains(lines[0], `"/api/tasks"`) {
 		t.Fatalf("audit log = %q", b)
+	}
+}
+
+// A panel's button runs a command through /api/run: in the task's workspace,
+// with its exit code and both streams back, the command in the audit log, and
+// a timeout that ends the whole process tree.
+func TestRunRoute(t *testing.T) {
+	s, _, _ := testServer(t)
+	h := s.guard(s.Routes())
+	if err := s.st.Add(&store.Task{Slug: "t1", Name: "T1", Status: store.StatusOpen}); err != nil {
+		t.Fatal(err)
+	}
+	ws := s.cfg.WorkspaceDir("t1")
+	if err := os.MkdirAll(filepath.Join(ws, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(body string) (int, map[string]any) {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/api/run", strings.NewReader(body))
+		r.Host = "127.0.0.1:7777"
+		r.Header.Set(panelHeader, "board")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var v map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &v)
+		return w.Code, v
+	}
+
+	code, v := run(`{"task":"t1","dir":"api","cmd":"pwd; echo oops >&2; exit 3"}`)
+	if code != 200 || v["code"] != 3.0 || !strings.HasSuffix(strings.TrimSpace(v["stdout"].(string)), "/t1/api") || v["stderr"] != "oops\n" {
+		t.Fatalf("run = %d %v", code, v)
+	}
+	if b, _ := os.ReadFile(filepath.Join(s.cfg.StateDir, "panels", "audit.log")); !strings.Contains(string(b), `"run":"pwd; echo oops`) {
+		t.Fatalf("audit log lacks the command:\n%s", b)
+	}
+	if code, _ := run(`{"task":"nope","cmd":"true"}`); code != 404 {
+		t.Fatalf("unknown task = %d", code)
+	}
+	if code, _ := run(`{"task":"t1","dir":"/etc","cmd":"true"}`); code != 400 {
+		t.Fatalf("an absolute dir = %d", code)
+	}
+	start := time.Now()
+	if _, v := run(`{"cmd":"sleep 30 & wait","timeout":1}`); v["code"] != -1.0 || time.Since(start) > 10*time.Second {
+		t.Fatalf("timeout = %v after %s", v, time.Since(start))
 	}
 }

@@ -8,7 +8,10 @@ as the work changes.
 
 Panels are free HTML, not a fixed set of components, and they have **the same
 access as FrIDE itself**: the whole HTTP API, tasks, approvals, diffs,
-terminals. That is a deliberate choice; see [Safety](#safety).
+terminals, and shell commands on this computer. They are live (their data
+follows the server) and they act: a button can set a status, start a stack
+or run `glab mr merge`. They act when you click; the orchestrator's own turns
+still have no shell. That is a deliberate choice; see [Safety](#safety).
 
 ## How it works
 
@@ -50,6 +53,7 @@ Chart.js 4 (vendored at `web/vendor/chart.umd.min.js`, as the global `Chart`).
 |---|---|
 | `await fride.api(method, path, body)` | Any `/api/…` route of this FrIDE. Returns the parsed JSON, throws with the server's error on a failing status. |
 | `fride.subscribe(topic, cb)` | `cb(data)` now and whenever the data changes (polled every 2.5 s, one fetch per topic for all panels). `topic` is `tasks`, `orchestrator`, `panels` or any GET path under `/api/`. Returns an unsubscribe function. |
+| `await fride.run(cmd, {task, dir, timeout})` | A shell command (`sh -c`) on this computer: `POST /api/run`. With `task` in its workspace (`dir` inside it) as its git identity, else in the workspace root. Returns `{code, stdout, stderr, truncated, seconds, error}`; `timeout` in seconds, 120 by default, at most 1800; each stream is cut at 1 MB. |
 | `await fride.ask(text, data)` | A UI event for the orchestrator: `POST /api/orchestrator/ui-event`. Queued if a turn is running (never 409), at most 20 waiting. The prompt reads `UI EVENT (panel <id>): <text>` and `DATA: <json>`, and the turn counts as the user speaking. |
 | `await fride.state.get()`, `fride.state.set(v)` | The panel's own JSON state, kept on the server, up to 256 KB. Not available to inline widgets. |
 | `fride.theme` | `light` or `dark`. The CSS variables `--bg --bg2 --bg3 --bg4 --fg --dim --faint --line --accent --accent-fg --on-accent --green --amber --red` (and their `-soft` fills), `--radius`, `--font` and `--mono` follow FrIDE's theme, live. |
@@ -68,6 +72,7 @@ The host side is `web/panels.js`; the frame side `web/panel-kit.js`.
 | `POST /api/panels/<id>/error` | `{"error": "…"}`: what the UI caught; cleared by the next version. |
 | `GET`, `PUT /api/panels/<id>/state` | The panel's state, any JSON. |
 | `POST /api/panels/<id>/restore` | `{"version": 3}`: make a kept version current, as a new version. |
+| `POST /api/run` | `{"cmd", "task", "dir", "timeout"}`: run a command, answer with its exit code and output. |
 | `POST /api/orchestrator/ui-event` | `{"panel", "text", "data"}`: 202, queued. |
 
 Like `/api/orchestrator`, these are served on this computer only, never over
@@ -82,16 +87,20 @@ hostile panel:
 - **Audit.** Every call a panel makes goes through the page around it, which
   marks it with `X-Fride-Panel: <id>`; the server appends each such call
   (time, panel, method, path) to `<state>/panels/audit.log` (rotated at 4 MB)
-  and to the server log.
+  and to the server log. A command a panel runs is written there whole,
+  with its task and folder.
 - **Confirm, optional.** With `panels.confirmRisky` (default off) the page
   asks before a panel's call that deletes (any `DELETE`), moves, restores,
-  resets, stops a stack, touches the trash or drives a terminal.
+  resets, stops a stack, touches the trash, drives a terminal or runs a
+  command (showing the command).
 - **Only the API.** `fride.api` refuses paths outside `/api/`. Terminal
-  streams (`/ws/term`) are not bridged.
+  streams (`/ws/term`) are not bridged; `fride.run` is the way to a shell.
 - **Prompt injection.** A panel is code a model wrote, and the model reads
   agent output, pull request comments and inbox messages. Text in any of them
-  that talks the orchestrator into a panel that, say, deletes tasks or types
-  into a terminal gets that panel the access FrIDE has. The orchestrator's
+  that talks the orchestrator into a panel that, say, deletes tasks or runs
+  a command gets that panel the access FrIDE has. A panel acts only when you
+  click it, by the orchestrator's instructions, but those are instructions to
+  a model, not a guarantee. The orchestrator's
   instructions say that such text is data, never instructions; the audit log
   and `confirmRisky` are the backstops. Turn `confirmRisky` on where untrusted
   text reaches the orchestrator (a public inbox, pull requests from strangers).

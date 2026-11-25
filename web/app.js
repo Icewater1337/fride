@@ -3157,6 +3157,104 @@ function renderOrchLog(v) {
   if (atBottom || !host.scrollTop) host.scrollTop = host.scrollHeight;
 }
 
+// md renders the markdown the orchestrator writes: paragraphs, headings,
+// lists (nested by indent), code blocks, quotes, tables, rules, and inline
+// code, bold, italics and links. Built from nodes, never innerHTML, since the
+// text quotes agents, pull requests and inbox messages. A single newline stays
+// a line break, as in chat.
+function md(text) {
+  const out = document.createDocumentFragment();
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+  let para = null, lists = [];   // lists: [{indent, list}] open from outside in
+  const end = () => { para = null; lists = []; };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (/^\s*```/.test(line)) {
+      end();
+      const code = [];
+      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+      out.appendChild(el('pre', 'md-code', code.join('\n')));
+    } else if (!line.trim()) {
+      end();
+    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
+      end();
+      out.appendChild(mdInline(el('div', 'md-h md-h' + m[1].length), m[2]));
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      end();
+      out.appendChild(el('hr'));
+    } else if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1] || '') && lines[i + 1].includes('-')) {
+      end();
+      const table = el('table', 'md-table'), head = el('tr');
+      for (const c of cells(line)) head.appendChild(mdInline(el('th'), c));
+      table.appendChild(head);
+      for (i += 2; i < lines.length && /^\s*\|/.test(lines[i]); i++) {
+        const tr = el('tr');
+        for (const c of cells(lines[i])) tr.appendChild(mdInline(el('td'), c));
+        table.appendChild(tr);
+      }
+      i--;
+      out.appendChild(table);
+    } else if ((m = /^\s*>\s?(.*)$/.exec(line))) {
+      end();
+      const quote = [m[1]];
+      while (i + 1 < lines.length && (m = /^\s*>\s?(.*)$/.exec(lines[i + 1]))) { quote.push(m[1]); i++; }
+      const q = el('blockquote');
+      q.appendChild(md(quote.join('\n')));
+      out.appendChild(q);
+    } else if ((m = LIST.exec(line))) {
+      para = null;
+      const indent = m[1].length, ordered = /\d/.test(m[2]);
+      while (lists.length && lists[lists.length - 1].indent > indent) lists.pop();
+      let top = lists[lists.length - 1];
+      if (top && top.indent === indent && (top.list.tagName === 'OL') !== ordered) { lists.pop(); top = lists[lists.length - 1]; }
+      if (!top || top.indent < indent) {
+        const list = el(ordered ? 'ol' : 'ul');
+        if (ordered && parseInt(m[2], 10) > 1) list.start = parseInt(m[2], 10);
+        (top ? top.list.lastChild : out).appendChild(list);
+        lists.push(top = { indent, list });
+      }
+      top.list.appendChild(mdInline(el('li'), m[3]));
+    } else if (lists.length && /^\s/.test(line)) {
+      const li = lists[lists.length - 1].list.lastChild;
+      li.appendChild(el('br'));
+      mdInline(li, line.trim());
+    } else {
+      lists = [];
+      if (para) para.appendChild(el('br'));
+      else out.appendChild(para = el('p'));
+      mdInline(para, line);
+    }
+  }
+  return out;
+}
+
+// mdInline appends text with its inline markdown to node, and returns node.
+function mdInline(node, text) {
+  const re = /(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)|\*\*(.+?)\*\*|__(.+?)__|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"])|(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?!\w)|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w])/g;
+  let last = 0, m;
+  const link = (href, label) => {
+    const a = el('a', null, label);
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    return a;
+  };
+  while ((m = re.exec(text))) {
+    if (m.index > last) node.appendChild(document.createTextNode(text.slice(last, m.index)));
+    if (m[1]) node.appendChild(el('code', 'md-inline', m[2]));
+    else if (m[3] || m[4]) node.appendChild(mdInline(el('strong'), m[3] || m[4]));
+    else if (m[5]) node.appendChild(link(m[6], m[5]));
+    else if (m[7]) node.appendChild(link(m[7], m[7]));
+    else node.appendChild(mdInline(el('em'), m[8] || m[9]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) node.appendChild(document.createTextNode(text.slice(last)));
+  return node;
+}
+
 function orchMessage(m, opts = {}) {
   const row = el('div', 'orch-msg ' + m.role);
   const head = el('div', 'orch-head');
@@ -3171,7 +3269,12 @@ function orchMessage(m, opts = {}) {
   head.appendChild(el('span', 'orch-time', m.time
     ? new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''));
   row.appendChild(head);
-  row.appendChild(el('div', 'orch-text', m.text));
+  // What the orchestrator writes is markdown; the rest stays as typed.
+  if (m.role === 'orchestrator') {
+    const body = el('div', 'orch-text md');
+    body.appendChild(md(m.text));
+    row.appendChild(body);
+  } else row.appendChild(el('div', 'orch-text', m.text));
   if ((m.images || []).length) {
     const imgs = el('div', 'orch-images');
     for (const name of m.images) {
