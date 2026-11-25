@@ -47,6 +47,10 @@ type Settings struct {
 	// MaxSlots is how many task stacks can run at once. Every per-task port is
 	// base+slot, so each service's base needs MaxSlots free ports above it.
 	MaxSlots int `json:"maxSlots,omitempty"`
+	// RebaseOnUp rebases every task branch onto the newest version of its
+	// base before the task's stack starts. Off by default: it rewrites
+	// branches that may already be pushed.
+	RebaseOnUp bool `json:"rebaseOnUp,omitempty"`
 	// Repos is per-repository configuration, keyed by repository folder name.
 	Repos map[string]*Repo `json:"repos,omitempty"`
 	// DefaultProfile is what a new task boots with.

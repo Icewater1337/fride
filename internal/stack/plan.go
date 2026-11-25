@@ -57,6 +57,13 @@ type TaskOpts struct {
 	// provided: "shared", "task" or "off". A repo checked out into the
 	// workspace always wins — it is run from source.
 	Scopes map[string]string `json:"scopes"`
+	// Repos and GitIdentity are what a rebase before the start needs
+	// (settings.RebaseOnUp): each branch's base, and who fetches and commits.
+	Repos []struct {
+		Name    string `json:"name"`
+		BaseRef string `json:"baseRef"`
+	} `json:"repos"`
+	GitIdentity string `json:"gitIdentity"`
 }
 
 // SidecarDir is the per-workspace metadata folder.
