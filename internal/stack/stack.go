@@ -45,10 +45,12 @@ import (
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
+	"github.com/Icewater1337/fride/internal/gitid"
 	"github.com/Icewater1337/fride/internal/ide"
 	"github.com/Icewater1337/fride/internal/infra"
 	"github.com/Icewater1337/fride/internal/mem"
 	"github.com/Icewater1337/fride/internal/settings"
+	"github.com/Icewater1337/fride/internal/workspace"
 )
 
 // Service is one component of the stack, as reported by status.
@@ -174,6 +176,11 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 			warnings = append(warnings, w)
 		}
 	}
+	// Only a stack that is not running yet: rebasing under one would change
+	// the code its services already run.
+	if !running && cfg.Settings != nil && cfg.Settings.RebaseOnUp {
+		warnings = append(warnings, rebaseBranches(cfg, slug, opts)...)
+	}
 	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
 		return nil, err
@@ -274,6 +281,31 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 // startOpts decides what a start of the task starts: the options of the stack
 // that is already running, if one is, else the task's own. note says when the
 // two differ.
+// rebaseBranches moves each of the task's branches onto the newest version of
+// its base (workspace.Rebase). What it could not do is reported, never fatal:
+// the stack starts either way, on the branch as it stands.
+func rebaseBranches(cfg *config.Config, slug string, o TaskOpts) []string {
+	env, err := gitid.ForID(cfg.Settings, cfg.StateDir, o.GitIdentity)
+	if err != nil {
+		return []string{"not rebased: " + err.Error()}
+	}
+	var notes []string
+	for _, r := range o.Repos {
+		dir := cfg.RepoDir(slug, r.Name)
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			continue
+		}
+		base := r.BaseRef
+		if base == "" {
+			base = workspace.DefaultBase(dir)
+		}
+		if n := workspace.Rebase(dir, base, env); n != "" {
+			notes = append(notes, r.Name+": "+n)
+		}
+	}
+	return notes
+}
+
 func startOpts(cfg *config.Config, slug string) (o TaskOpts, running bool, note string) {
 	o = Opts(cfg, slug)
 	rec := readRecord(cfg, slug)

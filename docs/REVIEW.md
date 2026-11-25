@@ -636,7 +636,9 @@ the workspace guide tells it so, and never to use `gh` or `glab` for it:
 2. It reuses a proof that passed on this very tree, or takes a new one, and
    refuses on failure. Nothing is pushed then.
 3. For each changed repository it pushes the branch and opens its pull
-   request, or updates the open one: the proof block goes after the
+   request. The push is `--force-with-lease --force-if-includes`: a branch
+   rebased since its last push goes up, while commits somebody else pushed
+   meanwhile refuse it. Then it opens the pull request, or updates the open one: the proof block goes after the
    description, or replaces the block an earlier run wrote. `gh` or `glab` is
    picked by the kind of the git identity of the remote's host, else by the
    host's name. The task's git identity is in the environment of both.

@@ -191,7 +191,11 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 			remote = "origin"
 		}
 		fmt.Fprintf(logw, "%s: pushing %s to %s\n", t.Name, branch, remote)
-		if out, err := runIn(ctx, t.Dir, opt.Env, "git", "push", "-u", remote, branch); err != nil {
+		// Forced only over what this branch once held (--force-if-includes):
+		// a branch rebased since its last push (rebaseOnUp, or by hand) goes
+		// up, while commits somebody else pushed meanwhile still refuse it,
+		// even after a fetch has moved the remote-tracking ref past them.
+		if out, err := runIn(ctx, t.Dir, opt.Env, "git", "push", "--force-with-lease", "--force-if-includes", "-u", remote, branch); err != nil {
 			return res, fmt.Errorf("%s: the push failed: %s", t.Name, clipLine(out, 400))
 		}
 		fallback, _ := git(t.Dir, "log", "-1", "--format=%s")
