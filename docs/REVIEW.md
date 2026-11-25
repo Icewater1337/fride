@@ -525,11 +525,10 @@ round back; one that finds nothing new to read (below) uses none.
 [CONFIG.md](CONFIG.md#review)). A review of a new version past the cap is
 refused, for the AI pass from the tab, the API, code (`StartAI` returns an
 error wrapping `ErrRoundCap`) and the agent reviewer alike. The refusal
-escalates to the owner where a task already asks them for a decision: a
-blocking thread on the task as a whole, "rethink the approach", which keeps the
-task out of Done on every path (the board, `fride task status`, the
-orchestrator's `set_status`) and makes it the owner's turn in the Reviews
-view. A loop that keeps knocking opens one thread, not one per attempt. The
+escalates to the owner in a thread on the task as a whole, "rethink the
+approach". It is not blocking: the cap already stops the automation, so the
+thread only says why, and the task can be closed whenever its owner decides. A
+loop that keeps knocking opens one thread, not one per attempt. The
 owner can start the round anyway (*Run anyway* in the AI section, after a
 confirmation; `{"force": true}` in the API), which settles the thread; every
 further round past the cap needs them again. Automation never forces.
@@ -688,7 +687,7 @@ waiting for a person, not as done.
 not moved since the last one, and each pass is a [review round](#review-rounds)
 like one started from the tab. Past `review.maxRounds` the pass refuses to
 start, `fride pr` reports that the pull request stays a draft, and the round
-cap's blocking thread hands the change to its owner; `fride pr` never forces
+cap's thread hands the change to its owner; `fride pr` never forces
 a round (it asks with no body, a plain start). The orchestrator is told not to
 loop on a review that could not run or was capped.
 

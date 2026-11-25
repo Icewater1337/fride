@@ -240,7 +240,7 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 	switch {
 	case errors.Is(err, ErrRoundCap):
 		// Another round would be the loop the cap exists to stop. The cap has
-		// told the owner (a blocking thread); the agent stops here.
+		// told the owner (a thread on the change); the agent stops here.
 		rec.Review, rec.Err = ReviewCapped, err.Error()
 		err = stays("the review round cap is reached", err)
 	case err != nil:

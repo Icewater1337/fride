@@ -1288,7 +1288,7 @@ function rvRoundCap(d) {
   const th = (d.threads || []).find(t => t.id === r.escalation);
   if (th) {
     const b = el('button', 'ghost xs', 'Satisfied');
-    b.title = 'You looked and decided: this no longer keeps the task out of Done';
+    b.title = 'You looked and decided: settles this note';
     b.addEventListener('click', () => rvThreadPut(th, { satisfied: true }));
     box.appendChild(b);
   }
