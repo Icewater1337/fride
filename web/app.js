@@ -3212,15 +3212,18 @@ async function sendOrch() {
 // URLs, which is what the thumbnails show and what goes to the server. The
 // server checks what they really are; this only keeps obvious non-images out.
 const ORCH_MAX_IMAGES = 8, ORCH_MAX_BYTES = 10 << 20;
-let orchImages = [];
+let orchImages = [], orchPending = 0;
 
 function addOrchImages(files) {
   for (const f of files) {
     if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type)) { toast(`${f.name || 'That file'} is not a PNG, JPEG, GIF or WebP image.`); continue; }
     if (f.size > ORCH_MAX_BYTES) { toast(`${f.name || 'An image'} is over 10 MB.`); continue; }
-    if (orchImages.length >= ORCH_MAX_IMAGES) { toast(`At most ${ORCH_MAX_IMAGES} images go with a message.`); break; }
+    // Reads finish later, so the ones still running count against the cap too.
+    if (orchImages.length + orchPending >= ORCH_MAX_IMAGES) { toast(`At most ${ORCH_MAX_IMAGES} images go with a message.`); break; }
     const r = new FileReader();
-    r.onload = () => { orchImages.push({ url: r.result }); renderOrchImages(); };
+    orchPending++;
+    r.onloadend = () => orchPending--;
+    r.onload = () => { if (orchImages.length < ORCH_MAX_IMAGES) orchImages.push({ url: r.result }); renderOrchImages(); };
     r.readAsDataURL(f);
   }
 }
