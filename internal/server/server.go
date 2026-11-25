@@ -636,6 +636,9 @@ type liveness struct {
 	// open: the agent CLI's own registry names it as held by a live process,
 	// anywhere on the machine — including terminals outside fride.
 	open map[string]bool
+	// background: the ones among open held by a background session of the CLI,
+	// with the job id that `claude attach` takes.
+	background map[string]string
 	// since is when the oldest agent process still running in this workspace
 	// started, or the zero time when none is.
 	since time.Time
@@ -643,9 +646,10 @@ type liveness struct {
 
 func (s *Server) liveness(slug string) liveness {
 	l := liveness{
-		claimed:  s.terms.ClaimedIDs(slug),
-		released: s.terms.ReleasedIDs(slug),
-		open:     map[string]bool{},
+		claimed:    s.terms.ClaimedIDs(slug),
+		released:   s.terms.ReleasedIDs(slug),
+		open:       map[string]bool{},
+		background: map[string]string{},
 	}
 	t, err := s.st.Get(slug)
 	if err != nil {
@@ -654,6 +658,9 @@ func (s *Server) liveness(slug string) liveness {
 	dir := s.cfg.WorkspaceDir(slug)
 	for _, o := range agent.OpenByPID(agent.Normalize(t.Agent), s.cfg.Home) {
 		l.open[o.SessionID] = true
+		if o.Kind == "bg" && o.JobID != "" {
+			l.background[o.SessionID] = o.JobID
+		}
 		if !agent.Under(o.CWD, dir) {
 			continue
 		}
@@ -956,6 +963,9 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			// reported as such rather than dropped: silently omitting the
 			// conversation you are looking at looks like it was lost.
 			ps.InUse = live.busyReason(ps) != ""
+			if ps.InUse {
+				ps.Attach = live.background[ps.ID]
+			}
 			out = append(out, ps)
 		}
 		writeJSON(w, 200, out)
@@ -1108,6 +1118,9 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 			Dir      string `json:"dir"`  // relative to the workspace
 			Resume   bool   `json:"resume"`
 			ResumeID string `json:"resumeId"`
+			// Attach opens a conversation that a background session of the CLI
+			// is running (see agent.Recorded.Attach), by its session id.
+			Attach string `json:"attach"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		dir := s.cfg.WorkspaceDir(slug)
@@ -1123,7 +1136,20 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		var err error
 		// "claude" is still accepted: it is what this endpoint was called with
 		// before the agent could be chosen.
-		if req.Kind == term.KindAgent || req.Kind == "claude" {
+		if req.Attach != "" {
+			// The background session stays the conversation's only writer: this
+			// tab only shows it, and leaving the tab leaves it running. A shell
+			// tab, not an agent one, so it claims nothing and its exit releases
+			// nothing. The job id comes from the CLI's registry, never the request.
+			_, ok := recordedIn(s.resumableAll(slug), req.Attach)
+			job := s.liveness(slug).background[req.Attach]
+			if !ok || job == "" {
+				writeErr(w, 409, fmt.Errorf("conversation %s is not running as a background session of this task", req.Attach))
+				return
+			}
+			sess, err = s.terms.Start(slug, term.KindShell, "claude ⇄", s.cfg.WorkspaceDir(slug),
+				[]string{s.cfg.ClaudeBin, "attach", job}, s.taskGitEnv(slug))
+		} else if req.Kind == term.KindAgent || req.Kind == "claude" {
 			resumeID := req.ResumeID
 			if resumeID != "" || req.Resume {
 				// One pass over the transcripts answers both questions below, and

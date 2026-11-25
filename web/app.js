@@ -1515,7 +1515,7 @@ async function renderResumable(p = pin()) {
   if (stale(p)) return; // switched away mid-flight: not ours to draw
   state.resumable = list;
   state.resumableFor = p;
-  const free = list.filter(c => !c.inUse).length;
+  const free = list.filter(c => !c.inUse || c.attach).length;
   btn.classList.toggle('hidden', !list.length);
   const count = btn.querySelector('.count');
   count.textContent = free;
@@ -1541,19 +1541,22 @@ $('#resume-list').addEventListener('click', () => {
       return {
         icon: 'history',
         label: c.title || meta || c.id,
-        detail: (c.title ? meta : '') + (c.inUse ? ' · in use' : ''),
+        detail: (c.title ? meta : '') + (c.attach ? ' · background session' : c.inUse ? ' · in use' : ''),
         // Still being written, by a tab that changed session id under us or
         // by a terminal outside fride. Shown rather than hidden — it is the
         // conversation you are probably looking for — but not startable: a
-        // second --resume on it would give one transcript two writers.
-        disabled: c.inUse,
-        title: c.inUse ? `Conversation ${c.id} is open in another session` : `Resume conversation ${c.id}`,
+        // second --resume on it would give one transcript two writers. A
+        // background session of the CLI is the exception: it can be attached
+        // to, which shows it without adding a writer.
+        disabled: c.inUse && !c.attach,
+        title: c.attach ? `Open background session ${c.attach} (claude attach)`
+             : c.inUse ? `Conversation ${c.id} is open in another session` : `Resume conversation ${c.id}`,
         onSelect: async () => {
           // p, not the open task: an item belongs to the task it was drawn for.
           if (stale(p)) return;
           try {
             const sess = await api.post(`${p.base}/tasks/${p.slug}/terminals`,
-                                        { kind: 'agent', resumeId: c.id });
+                                        c.attach ? { attach: c.id } : { kind: 'agent', resumeId: c.id });
             if (!stale(p)) { attachTerm(sess, p); selectTerm(sess.id); }
           } catch (e) { toast(e.message); }
           await renderResumable(p);
