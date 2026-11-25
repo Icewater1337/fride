@@ -1,17 +1,22 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Icewater1337/fride/internal/files"
 	"github.com/Icewater1337/fride/internal/panels"
+	"github.com/Icewater1337/fride/internal/procgroup"
 )
 
 // The orchestrator's panels, as the web UI sees them (docs/PANELS.md). The UI
@@ -35,11 +40,14 @@ func (s *Server) auditPanel(r *http.Request) {
 	if id == "" {
 		return
 	}
-	line, _ := json.Marshal(map[string]any{
-		"time": time.Now().UTC().Format(time.RFC3339), "panel": clipLabel(id),
-		"method": r.Method, "path": r.URL.Path, "query": r.URL.RawQuery,
-	})
 	log.Printf("panel %s: %s %s", clipLabel(id), r.Method, r.URL.Path)
+	s.audit(map[string]any{"panel": clipLabel(id), "method": r.Method, "path": r.URL.Path, "query": r.URL.RawQuery})
+}
+
+// audit appends one entry, stamped with the time, to the panels' audit log.
+func (s *Server) audit(entry map[string]any) {
+	entry["time"] = time.Now().UTC().Format(time.RFC3339)
+	line, _ := json.Marshal(entry)
 	auditMu.Lock()
 	defer auditMu.Unlock()
 	dir := filepath.Join(s.cfg.StateDir, "panels")
@@ -162,6 +170,104 @@ func (s *Server) handlePanels(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, 404, fmt.Errorf("no route for %s %s", r.Method, r.URL.Path))
 	}
+}
+
+// Limits of POST /api/run.
+const (
+	runTimeout    = 2 * time.Minute
+	runMaxTimeout = 30 * time.Minute
+	runMaxOutput  = 1 << 20 // per stream
+)
+
+// handleRun runs one shell command and answers with its exit code and
+// output: POST /api/run {cmd, task, dir, timeout (seconds)}. It is what a
+// panel's button uses when the task API is not enough (git, glab, a script):
+// panels have FrIDE's access by choice (docs/PANELS.md). With a task the
+// command runs in its workspace, dir inside it, as the task's git identity;
+// without one in the workspace root. A command a panel runs is written to the
+// audit log whole, since the path alone says nothing. Served on this computer
+// only, like the panels.
+func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, 405, fmt.Errorf("POST a command"))
+		return
+	}
+	var req struct {
+		Cmd     string `json:"cmd"`
+		Task    string `json:"task"`
+		Dir     string `json:"dir"`
+		Timeout int    `json:"timeout"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Cmd) == "" {
+		writeErr(w, 400, fmt.Errorf("cmd is empty"))
+		return
+	}
+	dir, env := s.cfg.WorkspaceRoot, []string(nil)
+	if req.Task != "" {
+		if _, err := s.st.Get(req.Task); err != nil {
+			writeErr(w, 404, err)
+			return
+		}
+		dir, env = s.cfg.WorkspaceDir(req.Task), s.taskGitEnv(req.Task)
+	}
+	if req.Dir != "" {
+		d, err := files.SafeJoin(dir, req.Dir)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		dir = d
+	}
+	timeout := runTimeout
+	if req.Timeout > 0 {
+		timeout = min(time.Duration(req.Timeout)*time.Second, runMaxTimeout)
+	}
+	if id := r.Header.Get(panelHeader); id != "" {
+		s.audit(map[string]any{"panel": clipLabel(id), "run": req.Cmd, "task": req.Task, "dir": req.Dir})
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", req.Cmd)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	procgroup.Contain(cmd)
+	var stdout, stderr capped
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	start := time.Now()
+	err := cmd.Run()
+	res := map[string]any{
+		"code": 0, "stdout": stdout.b.String(), "stderr": stderr.b.String(),
+		"truncated": stdout.over || stderr.over, "seconds": time.Since(start).Round(100 * time.Millisecond).Seconds(),
+	}
+	switch ee, isExit := err.(*exec.ExitError); {
+	case ctx.Err() == context.DeadlineExceeded:
+		res["code"], res["error"] = -1, fmt.Sprintf("timed out after %s", timeout)
+	case isExit:
+		res["code"] = ee.ExitCode()
+	case err != nil:
+		res["code"], res["error"] = -1, err.Error()
+	}
+	writeJSON(w, 200, res)
+}
+
+// capped keeps the first runMaxOutput bytes written to it and drops the rest,
+// so a command that prints without end cannot fill the server's memory.
+type capped struct {
+	b    bytes.Buffer
+	over bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := runMaxOutput - c.b.Len(); len(p) > room {
+		c.b.Write(p[:max(room, 0)])
+		c.over = true
+		return len(p), nil
+	}
+	return c.b.Write(p)
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

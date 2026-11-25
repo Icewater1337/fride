@@ -1397,6 +1397,25 @@ pre.docbody {
 .orch-who { font-size: 11.5px; font-weight: 600; color: var(--dim); }
 .orch-time { font-size: 11px; color: var(--faint); }
 .orch-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+/* Rendered markdown (md() in app.js): blocks carry their own spacing. */
+.orch-text.md { white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md pre, .md blockquote, .md .md-table { margin: 0 0 8px; }
+.md ul, .md ol { padding-left: 22px; }
+.md li > ul, .md li > ol { margin: 2px 0; }
+.md li + li { margin-top: 2px; }
+.md .md-h { font-weight: 650; margin: 12px 0 4px; }
+.md .md-h1 { font-size: 1.2em; }
+.md .md-h2 { font-size: 1.1em; }
+.md code.md-inline { font-family: var(--mono); font-size: .92em; background: var(--bg4); padding: 1px 5px; border-radius: var(--radius-sm); }
+.md pre.md-code { font-family: var(--mono); font-size: 12px; background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; white-space: pre; overflow-x: auto; }
+.md blockquote { border-left: 3px solid var(--line-strong); padding-left: 10px; color: var(--dim); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.md .md-table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md .md-table th, .md .md-table td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md .md-table th { background: var(--bg2); font-weight: 600; }
+.md a { color: var(--accent-fg); }
 
 .orch-msg.orchestrator .orch-text {
   background: var(--bg3); border: 1px solid var(--line); padding: 9px 12px;

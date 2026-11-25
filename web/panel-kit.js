@@ -87,6 +87,9 @@
     theme: 'light',
     api: (method, path, body) => call('api', { method, path, body }),
     ask: (text, data) => call('ask', { text, data }),
+    // A shell command on this computer: {code, stdout, stderr, truncated,
+    // seconds, error}. opts: {task, dir, timeout (seconds)}.
+    run: (cmd, opts) => call('api', { method: 'POST', path: '/api/run', body: Object.assign({ cmd }, opts) }),
     subscribe(topic, cb) {
       const sub = ++seq;
       subs.set(sub, cb);

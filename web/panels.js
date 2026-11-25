@@ -108,10 +108,10 @@ function showPanelError(f, msg) {
   h.appendChild(x);
 }
 
-// A call that deletes, moves, restarts or drives a terminal. Asked about only
-// with panels.confirmRisky set.
+// A call that deletes, moves, restarts, drives a terminal or runs a command.
+// Asked about only with panels.confirmRisky set.
 function riskyPanelCall(method, path) {
-  return method === 'DELETE' || /\/(terminals|move|restore|reset|stack\/down|trash)(\/|$)/.test(path);
+  return method === 'DELETE' || /\/(terminals|move|restore|reset|stack\/down|trash|run)(\/|$)/.test(path);
 }
 
 async function panelFetch(panel, method, path, body) {
@@ -122,7 +122,8 @@ async function panelFetch(panel, method, path, body) {
   if (!path.startsWith('/api/')) throw new Error('fride.api: path must start with /api/');
   if (panelsUI.confirmRisky && riskyPanelCall(method, path)) {
     const ok = await ask({ title: `Panel “${panel}” wants to ${method} ${path}`,
-      body: 'This call can delete or change running work. Allow it?', ok: 'Allow', danger: true });
+      body: path === '/api/run' ? `It runs: ${body && body.cmd}` : 'This call can delete or change running work. Allow it?',
+      ok: 'Allow', danger: true });
     if (!ok) throw new Error('the user declined ' + method + ' ' + path);
   }
   const init = { method, headers: { 'X-Fride-Panel': panel } };
