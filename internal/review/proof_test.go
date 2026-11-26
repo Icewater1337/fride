@@ -609,3 +609,24 @@ func TestBriefCallsAReadyPullRequestOpenForReview(t *testing.T) {
 		}
 	}
 }
+
+// A pull request opened ready (pr.draft false) and reviewed clean was never
+// marked ready: the brief and the decision log say it was opened ready (#251).
+func TestCleanReviewOfAReadyPullRequestSaysOpenedReady(t *testing.T) {
+	cfg := testCfg(t)
+	now := time.Now()
+	for _, opened := range []bool{false, true} {
+		r := &PRRecord{At: now, Review: ReviewClean, Ready: true, OpenedReady: opened,
+			Links: []PRLink{{Repo: "api", URL: "https://forge.example/pull/7"}}}
+		p := Proof{Taken: now, OK: true, PR: r}
+		if got := p.Brief(nil, true); strings.Contains(got, "marked ready") == opened || strings.Contains(got, "opened ready") != opened {
+			t.Errorf("openedReady=%v brief: %q", opened, got)
+		}
+		slug := fmt.Sprintf("t%v", opened)
+		notePR(cfg, slug, p)
+		entries, _ := journal.Read(cfg, slug)
+		if len(entries) != 1 || strings.Contains(entries[0].Text, "marked ready") == opened {
+			t.Errorf("openedReady=%v log: %+v", opened, entries)
+		}
+	}
+}

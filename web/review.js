@@ -1071,11 +1071,15 @@ function rvProof(p) {
   }
   const pr = p.pr;
   if (pr && (pr.links || []).length) {
-    const said = { off: 'opened ready for review (the automatic review is off)', running: 'a draft while the review runs',
-      clean: 'ready for review after a clean fresh-context review',
-      findings: `a draft: the review left ${pr.red} red finding${pr.red === 1 ? '' : 's'}`,
-      failed: 'a draft: the review could not run' + (pr.err ? ` (${pr.err})` : ''),
-      capped: 'a draft: the review round cap is reached, the owner decides' }[pr.review] || pr.review;
+    // The same wording as stillDraft (pr.go): a pull request opened ready
+    // (pr.draft false) is open for review, never a draft.
+    const still = pr.ready ? 'open for review' : 'a draft';
+    const said = { off: 'opened ready for review (the automatic review is off)', running: still + ' while the review runs',
+      clean: pr.openedReady ? 'opened ready, and a clean fresh-context review found nothing red'
+        : 'ready for review after a clean fresh-context review',
+      findings: `${still}: the review left ${pr.red} red finding${pr.red === 1 ? '' : 's'}`,
+      failed: still + ': the review could not run' + (pr.err ? ` (${pr.err})` : ''),
+      capped: still + ': the review round cap is reached, the owner decides' }[pr.review] || pr.review;
     for (const l of pr.links) {
       const line = el('div', 'rv-pline');
       line.appendChild(el('b', null, l.repo + ' '));

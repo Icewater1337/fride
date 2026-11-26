@@ -656,7 +656,11 @@ func (p Proof) Brief(byHand []agent.Command, changed bool) string {
 		case ReviewRunning:
 			b.WriteString("the fresh-context review runs" + stillDraft(r, " until it is clean") + ".")
 		case ReviewClean:
-			b.WriteString("marked ready after a clean fresh-context review.")
+			if r.OpenedReady {
+				b.WriteString("opened ready, and a clean fresh-context review found nothing red.")
+			} else {
+				b.WriteString("marked ready after a clean fresh-context review.")
+			}
 		case ReviewFindings:
 			fmt.Fprintf(&b, "the fresh-context review left %d red finding(s), handed back to the agent", r.Red)
 			b.WriteString(stillDraft(r, " until they are fixed") + ".")

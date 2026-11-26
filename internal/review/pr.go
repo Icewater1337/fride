@@ -49,6 +49,9 @@ type PRRecord struct {
 	// may be Done (Gate.Missing); neither counts as an approval.
 	Ready bool   `json:"ready"`
 	Needs string `json:"needs,omitempty"`
+	// OpenedReady is a pull request opened ready (pr.draft false): a clean
+	// review leaves it as it was instead of marking it ready.
+	OpenedReady bool `json:"openedReady,omitempty"`
 }
 
 // PRLink is one pull request, of one repository.
@@ -209,7 +212,7 @@ func OpenPR(ctx context.Context, cfg *config.Config, slug string, targets []Targ
 		links = append(links, PRLink{Repo: t.Name, URL: url})
 	}
 
-	rec := &PRRecord{At: time.Now(), Links: links, Review: ReviewOff, Ready: !draft}
+	rec := &PRRecord{At: time.Now(), Links: links, Review: ReviewOff, Ready: !draft, OpenedReady: !draft}
 	if reviewing {
 		rec.Review = ReviewRunning
 	}
@@ -287,6 +290,15 @@ func stillDraft(r *PRRecord, until string) string {
 	return ", so it stays a draft" + until
 }
 
+// cleanReady is what a clean review did to the pull request: marked it
+// ready, or left it ready as it was opened (pr.draft false).
+func cleanReady(r *PRRecord) string {
+	if r.OpenedReady {
+		return "stays open for review, as it was opened ready"
+	}
+	return "was marked ready"
+}
+
 // needs is what the review tier still asks of people once a pull request is
 // ready for review. Ready for review is not approved: a proof and an AI
 // review are no person's approval, so nothing here records one.
@@ -319,7 +331,7 @@ func notePR(cfg *config.Config, slug string, p Proof) {
 	case ReviewOff:
 		text += " Opened ready: the automatic review is off."
 	case ReviewClean:
-		text += " A fresh-context review found nothing red, so it was marked ready."
+		text += " A fresh-context review found nothing red, so it " + cleanReady(r) + "."
 	case ReviewFindings:
 		text += fmt.Sprintf(" A fresh-context review left %d red finding(s) to fix", r.Red) + stillDraft(r, " first") + "."
 	case ReviewFailed:

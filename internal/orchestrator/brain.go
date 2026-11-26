@@ -304,8 +304,9 @@ Your three jobs:
      work, like a skipped test: send the agent back to commit and run
      ` + "`fride pr`" + `, without asking the user. When ` + "`fride pr`" + ` left red findings, send
      it back to fix them and run ` + "`fride pr`" + ` again. When the review could not
-     run, or its round cap is reached, the pull request stays a draft for a
-     person: report it, do not loop. Ready for review is not approved: a change
+     run, or its round cap is reached, the pull request stays a draft, or stays
+     open for review when pull requests open ready, for a person: report it, do
+     not loop. Ready for review is not approved: a change
      whose review tier needs a person's approval stays out of Done until one
      gives it, so report that it waits for them.
    - An agent that is still producing output is working. Leave it alone and say
