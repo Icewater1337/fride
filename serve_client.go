@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -68,7 +69,7 @@ func serverCall(method, path string, in, out any, timeout time.Duration) error {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
-		return fmt.Errorf("no fride is serving on :%d — start one with `fride serve`", servePort())
+		return unreachable(req, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 400 {
@@ -85,6 +86,18 @@ func serverCall(method, path string, in, out any, timeout time.Duration) error {
 		return json.NewDecoder(res.Body).Decode(out)
 	}
 	return nil
+}
+
+// unreachable is the error of a call that got no reply: the address it
+// called and what failed, so that a client calling the wrong port (a server
+// on --port of another FRIDE_HOME, or inside a sandbox) says so instead of
+// only "no fride is serving".
+func unreachable(req *http.Request, err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err // the method and URL are said below already
+	}
+	return fmt.Errorf("no fride answers at %s (%w) — start one with `fride serve`, or set FRIDE_PORT to the port it serves on", req.URL.Host, err)
 }
 
 // serverError is an error reply of the server. It reads as the reply's

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -252,5 +253,27 @@ func TestPRReviewFindsTheServerOfItsOwnHome(t *testing.T) {
 	t.Setenv("FRIDE_PORT", "")
 	if _, err := prReview("t1")(context.Background()); err != nil {
 		t.Fatalf("the review did not reach the server of FRIDE_HOME: %v", err)
+	}
+}
+
+// A call that gets no reply names the address it called and what failed,
+// not only "no fride is serving": a client on the wrong port must be
+// visible as one (fridolin#815, #256).
+func TestNoServerSaysWhereAndWhy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens there now
+	t.Setenv("FRIDE_PORT", addr[strings.LastIndexByte(addr, ':')+1:])
+	_, passErr := startPass("/api/tasks/t1/review/ai")
+	for name, err := range map[string]error{
+		"serverCall": serverCall(http.MethodGet, "/api/tasks", nil, nil, time.Second),
+		"startPass":  passErr,
+	} {
+		if err == nil || !strings.Contains(err.Error(), addr) || !strings.Contains(err.Error(), "refused") {
+			t.Errorf("%s: %v, want the address %s and the refusal", name, err, addr)
+		}
 	}
 }

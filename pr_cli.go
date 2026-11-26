@@ -254,7 +254,7 @@ func startPass(path string) (capped bool, err error) {
 	}
 	res, err := (&http.Client{Timeout: time.Minute}).Do(req)
 	if err != nil {
-		return false, fmt.Errorf("no fride is serving on :%d — start one with `fride serve`", servePort())
+		return false, unreachable(req, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 400 {
