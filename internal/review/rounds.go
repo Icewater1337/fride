@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Icewater1337/fride/internal/config"
@@ -46,10 +47,38 @@ type roundsState struct {
 
 const roundsFile = "rounds.json"
 
+// loadRounds reads the rounds state. The caller holds stateMu.
 func loadRounds(cfg *config.Config, slug string) roundsState {
 	var rs roundsState
 	load(cfg, slug, roundsFile, &rs)
+	unblockEscalation(cfg, slug, rs.Escalation)
 	return rs
+}
+
+// capThreadText starts every thread escalate opens.
+const capThreadText = "Review round cap (review.maxRounds):"
+
+// unblockEscalation clears Blocking on the cap's thread. Threads escalate
+// opened before it stopped blocking were stored with "blocking": true, and
+// escalate reuses an unsatisfied one, so nothing else would ever clear it and
+// a capped task whose change is long merged could not reach Done. Only the
+// cap's own thread (no repo or path, the cap's text) is touched; a thread
+// already non-blocking is left as it is, so this writes once at most.
+func unblockEscalation(cfg *config.Config, slug, id string) {
+	if id == "" {
+		return
+	}
+	all := loadThreads(cfg, slug)
+	for i := range all {
+		t := &all[i]
+		if t.ID != id || !t.Blocking || t.Repo != "" || t.Path != "" ||
+			len(t.Comments) == 0 || !strings.HasPrefix(t.Comments[0].Text, capThreadText) {
+			continue
+		}
+		t.Blocking = false
+		_ = save(cfg, slug, threadsFile, all)
+		return
+	}
 }
 
 func maxRounds(cfg *config.Config) int {
@@ -171,7 +200,7 @@ func escalate(cfg *config.Config, slug string, rs *roundsState, done, max int) {
 			}
 		}
 	}
-	text := fmt.Sprintf("Review round cap (review.maxRounds): %s, and the change moved on again. FrIDE starts no "+
+	text := fmt.Sprintf(capThreadText+" %s, and the change moved on again. FrIDE starts no "+
 		"further round on its own. A change that still draws findings after %d rounds usually needs a different "+
 		"approach rather than another fix: read the open findings and decide how to go on. "+
 		"Run anyway in the AI review section starts one more round.", doneOf(done, max), done)
