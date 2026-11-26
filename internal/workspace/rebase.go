@@ -32,10 +32,16 @@ func Rebase(dir, base string, env []string) string {
 		return ""
 	}
 
-	// Uncommitted work is carried across with --autostash. Put back on files
-	// the base also changed, it could conflict and leave markers in the
-	// user's work, so then nothing is rebased. On any other file it comes
-	// back exactly as it was.
+	// --autostash puts the stash back without --index: everything staged would
+	// come back unstaged, partial staging lost. So with anything staged (or an
+	// index that cannot be read) nothing is rebased.
+	if _, err := git(dir, "diff", "--cached", "--quiet"); err != nil {
+		return "not rebased onto " + base + ": changes are staged, and the rebase would unstage them; commit them, or rebase by hand"
+	}
+	// Unstaged and untracked work is carried across with --autostash. Put back
+	// on files the base also changed, it could conflict and leave markers in
+	// the user's work, so then nothing is rebased. On any other file it comes
+	// back as it was.
 	if f := touchedByBoth(dir, base); f != "" {
 		return "not rebased onto " + base + ": uncommitted changes in " + f + " touch files it changed; commit them, or rebase by hand"
 	}
