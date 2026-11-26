@@ -56,6 +56,7 @@ type Kept struct {
 func LoadKept(cfg *config.Config, slug string) Kept {
 	stateMu.Lock()
 	defer stateMu.Unlock()
+	rs := loadRounds(cfg, slug) // first: it may unblock the cap's thread
 	k := Kept{
 		Viewed:   loadViewed(cfg, slug),
 		Threads:  loadThreads(cfg, slug),
@@ -64,7 +65,7 @@ func LoadKept(cfg *config.Config, slug string) Kept {
 		Captures: loadCaptures(cfg, slug),
 		Proof:    loadProof(cfg, slug),
 	}
-	k.Rounds, k.MaxRounds = loadRounds(cfg, slug), maxRounds(cfg)
+	k.Rounds, k.MaxRounds = rs, maxRounds(cfg)
 	a := loadApprovals(cfg, slug)
 	k.Approvals = a.Approvals
 	if a.Accountable != nil {

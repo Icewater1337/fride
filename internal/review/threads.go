@@ -97,8 +97,12 @@ func UpdateThread(cfg *config.Config, slug, id string, fn func(*Thread)) (Thread
 // Every path to Done asks: the button, the board, the CLI, the orchestrator
 // and the companion.
 func CheckDone(cfg *config.Config, slug string) error {
+	stateMu.Lock()
+	loadRounds(cfg, slug) // clears an old round cap thread's Blocking first
+	all := loadThreads(cfg, slug)
+	stateMu.Unlock()
 	n := 0
-	for _, t := range LoadThreads(cfg, slug) {
+	for _, t := range all {
 		if t.Open() {
 			n++
 		}

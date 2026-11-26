@@ -334,3 +334,33 @@ func TestPromptRoundSaysTheRoundAndTheDelta(t *testing.T) {
 		}
 	}
 }
+
+// A cap thread stored blocking, before the cap stopped blocking (#253), must
+// not keep the task out of Done; other blocking threads still do.
+func TestOldBlockingCapThreadIsUnblockedOnLoad(t *testing.T) {
+	cfg := testCfg(t)
+	cap, err := AddThread(cfg, "t1", Thread{Blocking: true}, "Review round cap (review.maxRounds): 3 of 3 review rounds are done.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateMu.Lock()
+	err = save(cfg, "t1", roundsFile, roundsState{Escalation: cap.ID})
+	stateMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDone(cfg, "t1"); err != nil {
+		t.Fatalf("the old cap thread keeps the task out of Done: %v", err)
+	}
+	for _, th := range LoadThreads(cfg, "t1") {
+		if th.ID == cap.ID && (th.Blocking || th.Satisfied) {
+			t.Errorf("the cap thread should be stored non-blocking and still unsatisfied: %+v", th)
+		}
+	}
+	if _, err := AddThread(cfg, "t1", Thread{Repo: "api", Path: "auth.go", Blocking: true}, "fix this"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDone(cfg, "t1"); err == nil {
+		t.Error("a reviewer's blocking thread no longer holds the task out of Done")
+	}
+}
