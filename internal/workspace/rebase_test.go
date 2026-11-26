@@ -53,10 +53,30 @@ func TestRebaseOntoTheNewestBase(t *testing.T) {
 		t.Fatalf("uncommitted work was not kept: %q %q", read("mine.txt"), read("new.txt"))
 	}
 
+	// Something is staged, mine.txt partly (MM): --autostash would put it all
+	// back unstaged, so nothing moves and index and worktree stay as they were.
+	upstream("theirs2.txt", "theirs2\n")
+	write(t, filepath.Join(api, "mine.txt"), "mine, staged\n")
+	run(t, api, "add", "mine.txt")
+	write(t, filepath.Join(api, "mine.txt"), "mine, staged\nand not\n")
+	head, _ := git(api, "rev-parse", "HEAD")
+	status, _ := git(api, "status", "--porcelain")
+	index, _ := git(api, "diff", "--cached")
+	if n := Rebase(api, "origin/main", nil); !strings.Contains(n, "staged") {
+		t.Fatalf("note = %q", n)
+	}
+	nowStatus, _ := git(api, "status", "--porcelain")
+	nowIndex, _ := git(api, "diff", "--cached")
+	if now, _ := git(api, "rev-parse", "HEAD"); now != head || nowStatus != status || nowIndex != index || read("mine.txt") != "mine, staged\nand not\n" {
+		t.Fatalf("the branch, index or worktree moved: %q, was %q", nowStatus, status)
+	}
+	run(t, api, "reset", "-q")
+	write(t, filepath.Join(api, "mine.txt"), "mine, edited\n")
+
 	// The base changes a file the user is editing: putting their edit back
 	// could conflict, so nothing moves.
 	upstream("mine.txt", "theirs too\n")
-	head, _ := git(api, "rev-parse", "HEAD")
+	head, _ = git(api, "rev-parse", "HEAD")
 	if n := Rebase(api, "origin/main", nil); !strings.Contains(n, "uncommitted changes in mine.txt") {
 		t.Fatalf("note = %q", n)
 	}

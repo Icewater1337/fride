@@ -119,7 +119,7 @@ backend's compose file.
 | `baseFolders` | Folders holding your repositories side by side. Each is scanned **one level deep** for git repositories. |
 | `coreRepos` | The repositories that make up the app. A new task checks them out by default. |
 | `maxSlots` | How many task stacks can run at once. Default 10. See [Ports](#ports). |
-| `rebaseOnUp` | `true` rebases every task branch onto the newest version of its base before the task's stack starts (fetching it first when it is an `origin/` branch). Uncommitted work is carried across. A branch with uncommitted changes to files the base also changed, or one that conflicts with it, is left as it was and the start says why; the stack starts either way. A stack that is already running is not rebased. Default `false`: it rewrites branches that may be pushed already, and `fride pr` then force-pushes them, refusing if someone else pushed meanwhile. |
+| `rebaseOnUp` | `true` rebases every task branch onto the newest version of its base before the task's stack starts (fetching it first when it is an `origin/` branch). Unstaged and untracked work is carried across (`git rebase --autostash`). A branch with staged changes (autostash would unstage them), with uncommitted changes to files the base also changed, or one that conflicts with it, is left exactly as it was, index included, and the start says why; the stack starts either way. A stack that is already running is not rebased. Default `false`: it rewrites branches that may be pushed already, and `fride pr` then force-pushes them, refusing if someone else pushed meanwhile. |
 | `repos` | Settings per repository, keyed by folder name. |
 | `defaultProfile` | The profile a new task boots with. |
 | `profiles` | The ways the stack can boot. |
