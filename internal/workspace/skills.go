@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"bytes"
+	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +18,9 @@ import (
 
 // Skills of the user's own: folders in $FRIDE_HOME/skills, each a Claude Code
 // skill (SKILL.md, and whatever else it needs beside it), linked into every
-// workspace. FrIDE ships none of them. The Settings page and `fride skill`
-// manage them, and so does anyone editing the folder by hand.
+// workspace. FrIDE's own skills are not among them (see installBuiltins). The
+// Settings page and `fride skill` manage them, and so does anyone editing the
+// folder by hand.
 
 // skillName is the name Claude Code accepts for a skill. It is also a folder
 // name here, so it is the only thing that keeps a request inside SkillsDir.
@@ -196,5 +199,54 @@ func InstallSkills(cfg *config.Config, slug string) error {
 			first = err
 		}
 	}
+	if err := installBuiltins(dst); err != nil && first == nil {
+		first = err
+	}
 	return first
+}
+
+// FrIDE's own skills, written into every workspace after the user's links:
+// pr (review the change, then `fride pr`) and watch-pr (the pipeline, started
+// by hand). Each SKILL.md carries builtinMark, which is how a file FrIDE wrote
+// is told from one somebody made: only the former is ever rewritten.
+//
+//go:embed builtin
+var builtins embed.FS
+
+const builtinMark = "<!-- FrIDE writes this file"
+
+// installBuiltins writes FrIDE's skills into dst, and rewrites one FrIDE wrote
+// that has changed since, so an older workspace gets the new version at its
+// next agent start. A user's skill of the same name (a link) and a folder made
+// by hand are left alone and win.
+func installBuiltins(dst string) error {
+	entries, err := builtins.ReadDir("builtin")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		body, err := builtins.ReadFile("builtin/" + e.Name() + "/SKILL.md")
+		if err != nil {
+			return err
+		}
+		dir := filepath.Join(dst, e.Name())
+		if fi, err := os.Lstat(dir); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+			continue
+		}
+		path := filepath.Join(dir, "SKILL.md")
+		cur, err := os.ReadFile(path)
+		switch {
+		case err == nil && (bytes.Equal(cur, body) || !bytes.Contains(cur, []byte(builtinMark))):
+			continue
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return err // unreadable is not "missing": nothing is overwritten on a guess
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }

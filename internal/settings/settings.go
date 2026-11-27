@@ -79,9 +79,6 @@ type Settings struct {
 	Review *Review `json:"review,omitempty"`
 	// Quality schedules the outcome record and the eval replay (REVIEW.md).
 	Quality *Quality `json:"quality,omitempty"`
-	// PR configures `fride pr`: the proof a pull request carries, and the
-	// review it waits for before it is marked ready (REVIEW.md).
-	PR *PR `json:"pr,omitempty"`
 	// Panels configures the tabs the orchestrator builds in the web UI.
 	Panels *Panels `json:"panels,omitempty"`
 	// Orchestrator configures the orchestrator's own choices for the tasks it
@@ -479,38 +476,6 @@ type ClaudeAutoMode struct {
 // sections are its sections by their names in Claude Code's settings.
 func (a *ClaudeAutoMode) sections() map[string][]string {
 	return map[string][]string{"environment": a.Environment, "allow": a.Allow, "soft_deny": a.SoftDeny, "hard_deny": a.HardDeny}
-}
-
-// PR configures how a task's agent opens a pull request, with `fride pr`.
-type PR struct {
-	// Review runs the AI review pass, which never saw the agent's
-	// conversation, once the pull request is open as a draft, and marks it
-	// ready only when no red finding remains. Default true. false opens the
-	// pull request ready at once, with the proof attached.
-	Review *bool `json:"review,omitempty"`
-	// Draft keeps the pull request a draft while that review runs, and while it
-	// has red findings. Default true. false opens it ready for review at once:
-	// the review still runs and its findings still go back to the agent, but
-	// the pull request is never turned into a draft.
-	Draft *bool `json:"draft,omitempty"`
-}
-
-// PRDraft reports whether `fride pr` keeps a pull request a draft until the
-// review is clean.
-func (s *Settings) PRDraft() bool {
-	if s == nil || s.PR == nil || s.PR.Draft == nil {
-		return true
-	}
-	return *s.PR.Draft
-}
-
-// PRReview reports whether `fride pr` waits for a fresh-context review before
-// it marks a pull request ready.
-func (s *Settings) PRReview() bool {
-	if s == nil || s.PR == nil || s.PR.Review == nil {
-		return true
-	}
-	return *s.PR.Review
 }
 
 // ClaudeAllowRules is companion.claudeAllow, trimmed, without empty or

@@ -133,3 +133,65 @@ func TestSkillsAreWrittenListedAndDeleted(t *testing.T) {
 		t.Fatal("a deleted skill is still linked")
 	}
 }
+
+// FrIDE's own skills are written into every workspace and kept current, but a
+// user's skill of the same name, or one made by hand, wins.
+func TestInstallSkillsWritesFridesOwn(t *testing.T) {
+	cfg := &config.Config{WorkspaceRoot: t.TempDir(), StateDir: t.TempDir()}
+	dst := filepath.Join(cfg.WorkspaceDir("t1"), ".claude", "skills")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := builtins.ReadFile("builtin/pr/SKILL.md")
+	if !strings.Contains(string(want), builtinMark) {
+		t.Fatal("the pr skill lacks the mark that lets FrIDE rewrite it")
+	}
+	if err := InstallSkills(cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pr", "watch-pr"} {
+		if b, err := os.ReadFile(filepath.Join(dst, name, "SKILL.md")); err != nil || !strings.HasPrefix(string(b), "---\nname: "+name+"\n") {
+			t.Fatalf("%s was not written: %v %q", name, err, b)
+		}
+	}
+
+	// An older version FrIDE wrote is brought up to date.
+	pr := filepath.Join(dst, "pr", "SKILL.md")
+	if err := os.WriteFile(pr, []byte("old\n"+builtinMark+" -->\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkills(cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(pr); string(b) != string(want) {
+		t.Errorf("FrIDE's older copy was not rewritten: %q", b)
+	}
+
+	// One made by hand, without the mark, stays.
+	if err := os.WriteFile(pr, []byte("made by hand"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A user's skill of the same name, linked, stays the link.
+	user := filepath.Join(SkillsDir(cfg), "watch-pr")
+	if err := os.MkdirAll(user, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(user, "SKILL.md"), []byte("user's watch-pr"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dst, "watch-pr")); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkills(cfg, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(pr); string(b) != "made by hand" {
+		t.Errorf("a skill made by hand was overwritten: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dst, "watch-pr", "SKILL.md")); string(b) != "user's watch-pr" {
+		t.Errorf("the user's skill was not linked, or was written through: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(user, "SKILL.md")); string(b) != "user's watch-pr" {
+		t.Errorf("the user's own skill was touched: %q", b)
+	}
+}

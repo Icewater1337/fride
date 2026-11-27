@@ -607,18 +607,16 @@ func indent(s, prefix string) string {
 	return prefix + strings.ReplaceAll(s, "\n", "\n"+prefix)
 }
 
-// byHandRe spots an agent opening a pull request, or marking one ready, with
-// the forge's tool instead of `fride pr`: a pull request with no proof, or one
-// the review never cleared.
-var byHandRe = regexp.MustCompile(`(^|[\s;&|(])(gh\s+pr\s+(create|ready)|glab\s+mr\s+(create|update\b[^;&|]*--ready))\b`)
+// byHandRe spots an agent opening a pull request with the forge's tool
+// instead of `fride pr`: a pull request with no proof.
+var byHandRe = regexp.MustCompile(`(^|[\s;&|(])(gh\s+pr|glab\s+mr)\s+create\b`)
 
-// ByHand are the commands the agent ran after since that opened or readied a
-// pull request itself. `gh pr ready --undo` turns one back into a draft, which
-// bypasses nothing.
+// ByHand are the commands the agent ran after since that opened a pull
+// request itself.
 func ByHand(cmds []agent.Command, since time.Time) []agent.Command {
 	var out []agent.Command
 	for _, c := range cmds {
-		if c.Time.After(since) && byHandRe.MatchString(c.Command) && !strings.Contains(c.Command, "--undo") {
+		if c.Time.After(since) && byHandRe.MatchString(c.Command) {
 			out = append(out, c)
 		}
 	}
@@ -649,35 +647,15 @@ func (p Proof) Brief(byHand []agent.Command, changed bool) string {
 		for _, l := range r.Links {
 			links = append(links, l.URL)
 		}
-		b.WriteString(" PULL REQUEST by `fride pr` at " + at(r.At) + ": " + strings.Join(links, ", ") + " — ")
-		switch r.Review {
-		case ReviewOff:
-			b.WriteString("opened ready (the automatic review is off).")
-		case ReviewRunning:
-			b.WriteString("the fresh-context review runs" + stillDraft(r, " until it is clean") + ".")
-		case ReviewClean:
-			if r.OpenedReady {
-				b.WriteString("opened ready, and a clean fresh-context review found nothing red.")
-			} else {
-				b.WriteString("marked ready after a clean fresh-context review.")
-			}
-		case ReviewFindings:
-			fmt.Fprintf(&b, "the fresh-context review left %d red finding(s), handed back to the agent", r.Red)
-			b.WriteString(stillDraft(r, " until they are fixed") + ".")
-		case ReviewFailed:
-			b.WriteString("the review could not run (" + clipLine(r.Err, 200) + ")" + stillDraft(r, "") + ".")
-		case ReviewCapped:
-			b.WriteString("the review round cap is reached" + stillDraft(r, "") + ", and the owner decides " +
-				"what happens next (a comment in the Review tab says so). Do not send the agent back.")
-		}
+		b.WriteString(" PULL REQUEST by `fride pr` at " + at(r.At) + ": " + strings.Join(links, ", ") + ".")
 		if r.Needs != "" {
-			b.WriteString(" Ready for review is not approved: before Done, " + r.Needs + ", which only a person can give.")
+			b.WriteString(" Open for review is not approved: before Done, " + r.Needs + ", which only a person can give.")
 		}
 	}
 	if len(byHand) > 0 {
 		c := byHand[len(byHand)-1]
 		b.WriteString(" BY HAND: the agent ran `" + clipLine(c.Command, 120) + "` at " + at(c.Time) +
-			" instead of `fride pr`: that pull request carries no proof, or was marked ready without a clean review.")
+			" instead of `fride pr`: that pull request carries no proof.")
 	}
 	return b.String()
 }

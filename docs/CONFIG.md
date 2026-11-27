@@ -136,7 +136,6 @@ backend's compose file.
 | `review` | `{ "tabDisabled": false, "maxRounds": 3, "finders": 3, "agree": 2, "approvals": {...} }`: whether the Review tab is shown (hidden by default), the cap on a task's review rounds, how many finders the AI pass runs and must agree, and how many human approvals each review tier needs before a task can be Done. See [review](#review). |
 | `quality` | How often `fride serve` updates the quality record and replays the AI review's eval set. See [quality](#quality). |
 | `pullRequests` | `{ "watch": true, "feedback": true }`: follow the pull requests of task branches, and tell agents what is wrong with theirs. On unless turned off. See [pullRequests](#pullrequests). |
-| `pr` | `{ "review": true }`: how `fride pr` opens a task's pull request, with its proof, and whether it waits for a fresh-context review before marking it ready. See [pr](#pr). |
 
 ## repos.&lt;name&gt;
 
@@ -146,7 +145,7 @@ backend's compose file.
 | `share` | Git-ignored `KEY=VALUE` files that the repo's own tooling keeps one of per checkout, typically its store of secrets, and that you mean as one store. A new worktree gets them like `copy`. Then, whenever an agent or a stack starts in a workspace, FrIDE merges the file key by key with the main checkout's, after merging every other workspace's into it first. A secret set in any checkout reaches all of them, including workspaces that edited their copy. A changed value is taken from the side that changed it since the last merge. A record of hashes per key, never values, tells which side that was. A value both sides changed, or one FrIDE cannot place, is kept on both sides and reported; delete the line from the copy that is wrong. Keys are never deleted. Only files that git ignores in the main checkout are merged, because a merge may create the file there. |
 | `ide` | The JetBrains launcher this repo opens in: `idea`, `pycharm`, `webstorm`, `goland` and so on. Empty means FrIDE detects it from the build files. |
 | `setup` | Steps that prepare a fresh worktree, such as dependency installs or code generation. They run in the background when a task is created. They run again before a service from this repo starts, if a step's `creates` path is missing. |
-| `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. `fride proof` and `fride pr` run it in the task's worktree before a pull request (see [pr](#pr)). |
+| `test` | A shell command that runs this repo's tests from a fresh checkout, installs included: `npm ci && npm test`, `go test ./...`. The Review tab's revert check runs it in a scratch worktree at the merge-base with only the changed test files in place, to see whether the tests notice the change. `fride proof` and `fride pr` run it in the task's worktree before a pull request (see [REVIEW.md](REVIEW.md)). |
 | `build` | A shell command that builds this repo in a task's worktree: `go build ./...`, `npm run build`, `./gradlew assemble`. `fride proof` and `fride pr` run it before `test`. What it writes must be git-ignored: a build that changes the tree it proves fails the proof. |
 | `checks` | Build and test commands for parts of a repository, such as the components of a monorepo: `fride proof` and `fride pr` run only the checks whose paths the change touches. See [below](#reposnamechecks). |
 | `review` | `{ "tiers": [...] }`: which review tier a change to this repo's paths falls in, and so how many human approvals it needs before the task can be Done. See [below](#reposnamereview). |
@@ -550,7 +549,7 @@ change needs; see [REVIEW.md](REVIEW.md#review-rounds) and
 
 | field | meaning |
 |---|---|
-| `tabDisabled` | Default `true`: the UI shows no Review tab, no *Reviews* view and no *Agent review* button, and never loads a task's change for them. What only the tab could resolve no longer blocks: every tier needs 0 approvals, whatever `approvals` says, and an open blocking thread does not keep a task out of Done. `fride proof` and `fride pr`, with its AI pass (`maxRounds`, `finders`, `agree` and [pr](#pr) still apply), work as before. `false` brings the tab and its gate back. |
+| `tabDisabled` | Default `true`: the UI shows no Review tab, no *Reviews* view and no *Agent review* button, and never loads a task's change for them. What only the tab could resolve no longer blocks: every tier needs 0 approvals, whatever `approvals` says, and an open blocking thread does not keep a task out of Done. `fride proof` and `fride pr` work as before. `false` brings the tab and its gate back. |
 | `maxRounds` | The most review→fix rounds of one task. A round is one review of a new version of the change, by the AI pass or the agent reviewer. Past the cap a review of a new version is refused, the owner gets a thread suggesting to rethink the approach (it does not keep the task out of Done), and only they can start another round (*Run anyway*). Default 3; `0` turns the cap off; at most 20. |
 | `finders` | How many finders the AI pass runs in parallel, each with its own focus: correctness, security, tests, resilience, performance, in that order. Default 3, at most 5. Each is a strong model reading the whole change, so the pass costs about one model call per finder more. `1` is a single finder covering everything, with no vote. |
 | `agree` | How many finders must report a problem before it is shown, each finding saying who agreed. Default 2; between 1 and `finders`. `1` shows what any finder found, with the agreement still marked. |
@@ -662,48 +661,6 @@ The token the tool uses needs to read, besides the repository:
 |---|---|
 | GitHub, fine-grained token or app | **Pull requests: read** (the pull request, reviews, review threads), **Checks: read** and **Commit statuses: read** (CI), **Actions: read** (job logs). A classic token needs `repo`. |
 | GitLab | `read_api` (or `api`), as a member who can see the project's pipelines, job logs and members. Without the members, no GitLab review comment is passed on. |
-
-## pr
-
-How a task's agent opens a pull request (or merge request). The workspace
-guide tells it to run `fride pr`, never `gh pr create` or `glab mr create`
-itself:
-
-1. `fride pr` refuses while anything is uncommitted. A pull request carries
-   commits, and its proof has to be of what it carries.
-2. It runs each changed repository's `build` and then its `test` command (see
-   `repos.<name>` above) in the task's worktree, and refuses
-   while one fails, or while a changed repository has neither. A proof taken
-   earlier on exactly this version is used again instead.
-3. It pushes the branch and opens the pull request with the commands' exit
-   codes and the end of their output in its description, or updates the one
-   that is open. `gh` or `glab` is picked by the kind of the git identity whose
-   host the remote is on, else by the host's name.
-4. With `review` on, the pull request opens as a draft. The Review tab's AI
-   review pass then reads the change in the running `fride serve`, without
-   the agent's conversation, and the pull request is marked ready only when
-   no red finding is left that a person did not dismiss. Red findings go back
-   to the agent, which fixes them, commits and runs `fride pr` again; that
-   updates the same pull request. A pass already made on the same version is
-   used again, so a second `fride pr` with nothing changed costs no model
-   turn. Past `review.maxRounds` the pass is refused: the pull request stays a
-   draft, the agent is told to stop, and the owner decides.
-5. Ready means ready for review, not approved. When the change's review tier
-   (`review.approvals`, `repos.<name>.review`) wants people's approval,
-   `fride pr` says what is missing; it never records an approval itself.
-
-```json
-"pr": { "review": false }
-```
-
-| field | meaning |
-|---|---|
-| `review` | Default `true`: wait for the fresh-context review before marking the pull request ready. `false` opens it ready at once, with the proof attached, and the workspace guide says so. The review needs a running `fride serve`; without one, the pull request stays a draft. Each review is a round of the AI pass, so [review](#review)'s `maxRounds` caps them, and its `finders` and `agree` apply. |
-| `draft` | Default `true`: keep the pull request a draft while the review runs and while it leaves red findings. `false` opens it ready for review at once and never turns it into a draft; the review still runs (with `review` on), and its findings still go back to the agent, which fixes them and runs `fride pr` again. |
-
-The proof is kept in the task's review folder and shown in the Review tab's
-Evidence, with the version it was taken on. It goes stale as soon as the
-change moves. See [REVIEW.md](REVIEW.md#proof-before-a-pull-request).
 
 ## requirements
 

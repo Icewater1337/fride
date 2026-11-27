@@ -1071,26 +1071,16 @@ function rvProof(p) {
   }
   const pr = p.pr;
   if (pr && (pr.links || []).length) {
-    // The same wording as stillDraft (pr.go): a pull request opened ready
-    // (pr.draft false) is open for review, never a draft.
-    const still = pr.ready ? 'open for review' : 'a draft';
-    const said = { off: 'opened ready for review (the automatic review is off)', running: still + ' while the review runs',
-      clean: pr.openedReady ? 'opened ready, and a clean fresh-context review found nothing red'
-        : 'ready for review after a clean fresh-context review',
-      findings: `${still}: the review left ${pr.red} red finding${pr.red === 1 ? '' : 's'}`,
-      failed: still + ': the review could not run' + (pr.err ? ` (${pr.err})` : ''),
-      capped: still + ': the review round cap is reached, the owner decides' }[pr.review] || pr.review;
     for (const l of pr.links) {
       const line = el('div', 'rv-pline');
       line.appendChild(el('b', null, l.repo + ' '));
       const a = el('a', null, l.url);
       if (/^https?:\/\//.test(l.url)) { a.href = l.url; a.target = '_blank'; a.rel = 'noopener'; }
       line.appendChild(a);
-      line.appendChild(el('span', 'dim', ' · ' + said));
       wrap.appendChild(line);
     }
-    // Ready for review is not approved: the proof and the AI pass are no
-    // person's approval, and the tier's gate below still counts its own.
+    // Open for review is not approved: the proof is no person's approval,
+    // and the tier's gate below still counts its own.
     if (pr.needs) wrap.appendChild(el('div', 'rv-pline dim', 'Not approved: ' + pr.needs + '.'));
   }
   return wrap;

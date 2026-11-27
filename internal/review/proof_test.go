@@ -3,7 +3,6 @@ package review
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,13 +210,14 @@ func TestBriefTellsAPullRequestWithProofFromOneWithout(t *testing.T) {
 		{Time: now, Command: "cd api && gh pr ready --undo 7"},
 		{Time: now, Command: "git push && gh pr create --title x"},
 		{Time: now, Command: "glab mr update 3 --ready"},
+		{Time: now, Command: "glab mr create --fill"},
 		{Time: now, Command: "echo gh pr"},
 	}
 	hand := ByHand(cmds, now.Add(-time.Minute))
 	if len(hand) != 2 || !strings.Contains(hand[0].Command, "gh pr create --title x") {
-		t.Fatalf("ByHand = %+v, want the create and the glab ready after since", hand)
+		t.Fatalf("ByHand = %+v, want the two creates after since, and no ready", hand)
 	}
-	if got := (Proof{}).Brief(hand, true); !strings.Contains(got, "BY HAND") || !strings.Contains(got, "glab mr update 3 --ready") {
+	if got := (Proof{}).Brief(hand, true); !strings.Contains(got, "BY HAND") || !strings.Contains(got, "glab mr create --fill") {
 		t.Errorf("a pull request opened by hand should be named: %q", got)
 	}
 
@@ -225,11 +225,9 @@ func TestBriefTellsAPullRequestWithProofFromOneWithout(t *testing.T) {
 	if got := failed.Brief(nil, true); !strings.Contains(got, "FAILED") || !strings.Contains(got, "api test") {
 		t.Errorf("a failed proof should say what failed: %q", got)
 	}
-	ok := Proof{Taken: now, OK: true, PR: &PRRecord{At: now, Links: []PRLink{{Repo: "api", URL: "https://forge.example/pull/7"}},
-		Review: ReviewFindings, Red: 2}}
-	if got := ok.Brief(nil, true); !strings.Contains(got, "passed") || !strings.Contains(got, "2 red finding") ||
-		!strings.Contains(got, "https://forge.example/pull/7") {
-		t.Errorf("a draft with findings should say so: %q", got)
+	ok := Proof{Taken: now, OK: true, PR: &PRRecord{At: now, Links: []PRLink{{Repo: "api", URL: "https://forge.example/pull/7"}}}}
+	if got := ok.Brief(nil, true); !strings.Contains(got, "passed") || !strings.Contains(got, "https://forge.example/pull/7") {
+		t.Errorf("a proven pull request should say so, with its link: %q", got)
 	}
 	ok.Stale = true
 	if got := ok.Brief(nil, true); !strings.Contains(got, "moved since") {
@@ -287,11 +285,10 @@ func readFile(t *testing.T, path string) string {
 	return string(b)
 }
 
-func TestPRNeedsAPassingProofOfWhatIsCommitted(t *testing.T) {
+func TestPRNeedsAPassingProof(t *testing.T) {
 	dir, remote, f, fdir := forgeT(t)
 	cfg := testCfg(t)
-	opt := PROptions{Forge: func(string) Forge { return f },
-		Review: func(context.Context) (Verdict, error) { t.Error("reviewed without a proof"); return Verdict{}, nil }}
+	opt := PROptions{Forge: func(string) Forge { return f }}
 
 	res, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "echo 1 failed; exit 1")}, opt)
 	if !errors.Is(err, ErrProofFailed) || res.Proof.OK {
@@ -299,12 +296,6 @@ func TestPRNeedsAPassingProofOfWhatIsCommitted(t *testing.T) {
 	}
 	if LoadProof(cfg, "t1").OK || LoadProof(cfg, "t1").Repos[0].Checks[0].ExitCode != 1 {
 		t.Error("the failed proof was not recorded")
-	}
-
-	write(t, dir, "server.go", "package api\n")
-	if _, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")}, opt); err == nil ||
-		!strings.Contains(err.Error(), "uncommitted") {
-		t.Errorf("uncommitted work should refuse the pull request, got %v", err)
 	}
 	if log := readFile(t, filepath.Join(fdir, "log")); log != "" {
 		t.Errorf("the forge was called without a proof:\n%s", log)
@@ -314,26 +305,37 @@ func TestPRNeedsAPassingProofOfWhatIsCommitted(t *testing.T) {
 	}
 }
 
-func TestPRIsADraftUntilAFreshReviewIsClean(t *testing.T) {
+// Uncommitted work is the agent's call: the pull request opens, and the
+// output says what it leaves out.
+func TestPRWarnsAboutWhatIsNotCommitted(t *testing.T) {
+	dir, _, f, _ := forgeT(t)
+	cfg := testCfg(t)
+	write(t, dir, "scratch.txt", "notes\n")
+	var log strings.Builder
+	res, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
+		PROptions{Forge: func(string) Forge { return f }, Log: &log})
+	if err != nil || res.Proof.PR == nil {
+		t.Fatalf("uncommitted work should not refuse the pull request: %v", err)
+	}
+	if !strings.Contains(log.String(), "api: 1 uncommitted file(s) are not part of the pull request") {
+		t.Errorf("the uncommitted file was not named:\n%s", log.String())
+	}
+}
+
+func TestPROpensAndUpdatesItsPullRequest(t *testing.T) {
 	dir, remote, f, fdir := forgeT(t)
 	cfg := testCfg(t)
 	tg := []Target{target(dir, "echo built", "echo tests ok")}
-	verdict := Verdict{Red: []Finding{{Grade: "red", Title: "Ready is called before listen returns"}}}
-	reviews := 0
-	opt := PROptions{Title: "Say when ready", Body: "What this does.", Forge: func(string) Forge { return f },
-		Review: func(context.Context) (Verdict, error) { reviews++; return verdict, nil }}
+	opt := PROptions{Title: "Say when ready", Body: "What this does.", Forge: func(string) Forge { return f }}
 
 	res, err := OpenPR(context.Background(), cfg, "t1", tg, opt)
-	if !errors.Is(err, ErrFindings) || len(res.Verdict.Red) != 1 {
-		t.Fatalf("red findings should leave the pull request a draft and come back: %v %+v", err, res.Verdict)
+	if err != nil || res.Reused {
+		t.Fatalf("a passing proof should open the pull request: %v reused=%v", err, res.Reused)
 	}
 	log := readFile(t, filepath.Join(fdir, "log"))
 	if !strings.Contains(log, "pr create --head work --title Say when ready --body-file") ||
-		!strings.Contains(log, "--base main --draft") {
-		t.Errorf("the pull request should be created as a draft against the base:\n%s", log)
-	}
-	if strings.Contains(log, "pr ready") {
-		t.Errorf("a pull request with red findings was marked ready:\n%s", log)
+		!strings.Contains(log, "--base main") || strings.Contains(log, "--draft") {
+		t.Errorf("the pull request should be created ready, against the base:\n%s", log)
 	}
 	body := readFile(t, filepath.Join(fdir, "body.md"))
 	if !strings.HasPrefix(body, "What this does.") || !strings.Contains(body, proofStart) || !strings.Contains(body, "tests ok") {
@@ -342,118 +344,67 @@ func TestPRIsADraftUntilAFreshReviewIsClean(t *testing.T) {
 	if head := gitT(t, remote, "rev-parse", "work"); head != gitT(t, dir, "rev-parse", "HEAD") {
 		t.Error("the branch was not pushed")
 	}
-	p := LoadProof(cfg, "t1")
-	if p.PR == nil || p.PR.Review != ReviewFindings || p.PR.Ready || p.PR.Red != 1 ||
-		p.PR.Links[0].URL != "https://forge.example/o/api/pull/7" {
-		t.Errorf("the record should say: a draft with one red finding: %+v", p.PR)
+	if p := LoadProof(cfg, "t1"); p.PR == nil || len(p.PR.Links) != 1 || p.PR.Links[0].URL != "https://forge.example/o/api/pull/7" {
+		t.Errorf("the record should name the pull request: %+v", p.PR)
 	}
 
-	// Fixed and run again: the same pull request, the proof run again on the
-	// new version, and ready once the review is clean.
+	// A person made it a draft meanwhile. Changed and run again: the same
+	// pull request, a new proof, and the draft left a draft.
+	if err := os.WriteFile(filepath.Join(fdir, "draft"), []byte("true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	write(t, dir, "server.go", "package api\n\nfunc Serve() {\n\tlisten()\n\tawaitListen()\n\tready()\n}\n")
 	gitT(t, dir, "commit", "-qam", "serve: wait for listen")
-	verdict = Verdict{Yellow: 1}
 	os.Remove(filepath.Join(fdir, "log"))
 	res, err = OpenPR(context.Background(), cfg, "t1", tg, opt)
 	if err != nil || res.Reused {
-		t.Fatalf("a clean review should succeed, with a new proof: %v reused=%v", err, res.Reused)
+		t.Fatalf("a moved change should be proven again: %v reused=%v", err, res.Reused)
 	}
 	log = readFile(t, filepath.Join(fdir, "log"))
 	if strings.Contains(log, "pr create") || !strings.Contains(log, "pr edit https://forge.example/o/api/pull/7") ||
-		!strings.Contains(log, "pr ready https://forge.example/o/api/pull/7\n") {
-		t.Errorf("the open pull request should be updated and marked ready:\n%s", log)
-	}
-	if readFile(t, filepath.Join(fdir, "draft")) != "false\n" {
-		t.Error("the pull request is still a draft")
-	}
-	if p := LoadProof(cfg, "t1"); p.PR.Review != ReviewClean || !p.PR.Ready {
-		t.Errorf("the record should say ready after a clean review: %+v", p.PR)
+		strings.Contains(log, "pr ready") {
+		t.Errorf("the open pull request should be updated, its draft state untouched:\n%s", log)
 	}
 
 	// Nothing moved: the proof holds and is not run again.
 	res, err = OpenPR(context.Background(), cfg, "t1", tg, opt)
-	if err != nil || !res.Reused || reviews != 3 {
-		t.Errorf("an unmoved change should reuse its proof: %v reused=%v reviews=%d", err, res.Reused, reviews)
+	if err != nil || !res.Reused {
+		t.Errorf("an unmoved change should reuse its proof: %v reused=%v", err, res.Reused)
 	}
 
 	entries, _ := journal.Read(cfg, "t1")
-	if len(entries) != 3 || !strings.Contains(entries[0].Text, "red finding") || !strings.Contains(entries[1].Text, "marked ready") {
+	if len(entries) != 3 || !strings.Contains(entries[0].Text, "Opened https://forge.example/o/api/pull/7 with its proof") {
 		t.Errorf("the decision log should record each pull request with its proof: %+v", entries)
 	}
 }
 
-func TestPRWithoutTheReviewOpensReady(t *testing.T) {
+func TestPRTitlesANewPullRequestByTheLastCommit(t *testing.T) {
 	dir, _, f, fdir := forgeT(t)
 	cfg := testCfg(t)
-	res, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
-		PROptions{Forge: func(string) Forge { return f }})
-	if err != nil || res.Proof.PR == nil || res.Proof.PR.Review != ReviewOff || !res.Proof.PR.Ready {
-		t.Fatalf("with the review off the pull request opens ready: %v %+v", err, res.Proof.PR)
+	if _, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
+		PROptions{Forge: func(string) Forge { return f }}); err != nil {
+		t.Fatal(err)
 	}
-	log := readFile(t, filepath.Join(fdir, "log"))
-	if strings.Contains(log, "--draft") || !strings.Contains(log, "--title serve: say when ready") {
-		t.Errorf("want a ready pull request titled by the last commit:\n%s", log)
+	if log := readFile(t, filepath.Join(fdir, "log")); !strings.Contains(log, "--title serve: say when ready") {
+		t.Errorf("want the pull request titled by the last commit:\n%s", log)
 	}
 }
 
-func TestPRStaysADraftWhenTheReviewCannotRun(t *testing.T) {
-	dir, _, f, fdir := forgeT(t)
-	cfg := testCfg(t)
-	_, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
-		PROptions{Forge: func(string) Forge { return f },
-			Review: func(context.Context) (Verdict, error) { return Verdict{}, errors.New("three rounds already") }})
-	if err == nil || !strings.Contains(err.Error(), "three rounds already") {
-		t.Fatalf("a review that cannot run should be an error: %v", err)
-	}
-	if p := LoadProof(cfg, "t1"); p.PR.Review != ReviewFailed || p.PR.Ready {
-		t.Errorf("the record should say the review failed: %+v", p.PR)
-	}
-	if strings.Contains(readFile(t, filepath.Join(fdir, "log")), "pr ready") {
-		t.Error("a pull request nobody reviewed was marked ready")
-	}
-}
-
-// Past the round cap another review is the loop the cap ends: the pull
-// request stays a draft, nothing is forced, and the agent is told to stop.
-func TestPRStopsAtTheRoundCap(t *testing.T) {
-	dir, _, f, fdir := forgeT(t)
-	cfg := testCfg(t)
-	capped := fmt.Errorf("%w: 3 of 3 review rounds are done", ErrRoundCap)
-	_, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
-		PROptions{Forge: func(string) Forge { return f },
-			Review: func(context.Context) (Verdict, error) { return Verdict{}, capped }})
-	if !errors.Is(err, ErrRoundCap) {
-		t.Fatalf("the cap should come back as ErrRoundCap, got %v", err)
-	}
-	p := LoadProof(cfg, "t1")
-	if p.PR.Review != ReviewCapped || p.PR.Ready {
-		t.Errorf("the record should say capped, still a draft: %+v", p.PR)
-	}
-	if strings.Contains(readFile(t, filepath.Join(fdir, "log")), "pr ready") {
-		t.Error("a capped review marked the pull request ready")
-	}
-	if b := p.Brief(nil, true); !strings.Contains(b, "round cap is reached") || !strings.Contains(b, "Do not send the agent back") {
-		t.Errorf("the orchestrator should be told to leave it to the owner: %q", b)
-	}
-}
-
-// Ready for review is not approved: a tier that needs people says so, and
+// Open for review is not approved: a tier that needs people says so, and
 // fride pr records no approval of its own.
-func TestReadyForReviewIsNoApproval(t *testing.T) {
+func TestAnOpenPullRequestIsNoApproval(t *testing.T) {
 	dir, _, f, _ := forgeT(t)
 	cfg := testCfg(t)
 	gate := Gate{Tier: settings.TierRisky, Need: 2, Repos: []RepoTier{{Repo: "api", Tier: settings.TierRisky, Need: 2}}}
 	res, err := OpenPR(context.Background(), cfg, "t1", []Target{target(dir, "", "true")},
-		PROptions{Forge: func(string) Forge { return f }, Gate: func() Gate { return gate },
-			Review: func(context.Context) (Verdict, error) { return Verdict{}, nil }})
+		PROptions{Forge: func(string) Forge { return f }, Gate: func() Gate { return gate }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := res.Proof.PR
-	if !r.Ready || r.Review != ReviewClean || !strings.Contains(r.Needs, "needs 2 human approvals") {
-		t.Errorf("want ready for review, with the approvals still needed: %+v", r)
+	if r := res.Proof.PR; !strings.Contains(r.Needs, "needs 2 human approvals") {
+		t.Errorf("want the approvals still needed: %+v", r)
 	}
-	if b := res.Proof.Brief(nil, true); !strings.Contains(b, "Ready for review is not approved") {
+	if b := res.Proof.Brief(nil, true); !strings.Contains(b, "Open for review is not approved") {
 		t.Errorf("the orchestrator should hear that people still have to approve: %q", b)
 	}
 	if k := LoadKept(cfg, "t1"); len(k.Approvals) != 0 {
@@ -535,44 +486,6 @@ func TestChecksForRunsACommandOnce(t *testing.T) {
 	}
 }
 
-// With pr.draft false the pull request opens ready for review and is never
-// turned into a draft, while the review still runs and its findings still
-// come back to the agent.
-func TestPROpensReadyWhenDraftsAreOff(t *testing.T) {
-	dir, _, f, fdir := forgeT(t)
-	cfg := testCfg(t)
-	tg := []Target{target(dir, "echo built", "echo tests ok")}
-	verdict := Verdict{Red: []Finding{{Grade: "red", Title: "Ready is called before listen returns"}}}
-	opt := PROptions{Title: "Say when ready", Body: "What this does.", Forge: func(string) Forge { return f }, NoDraft: true,
-		Review: func(context.Context) (Verdict, error) { return verdict, nil }}
-
-	res, err := OpenPR(context.Background(), cfg, "t1", tg, opt)
-	if !errors.Is(err, ErrFindings) || len(res.Verdict.Red) != 1 {
-		t.Fatalf("red findings should still come back: %v %+v", err, res.Verdict)
-	}
-	log := readFile(t, filepath.Join(fdir, "log"))
-	if strings.Contains(log, "--draft") || strings.Contains(log, "pr ready") {
-		t.Errorf("the pull request was drafted or toggled although drafts are off:\n%s", log)
-	}
-	if p := LoadProof(cfg, "t1"); p.PR == nil || p.PR.Review != ReviewFindings || !p.PR.Ready {
-		t.Errorf("the record should say: ready for review, with a red finding: %+v", p.PR)
-	}
-
-	write(t, dir, "server.go", "package api\n\nfunc Serve() {\n\tlisten()\n\tawaitListen()\n\tready()\n}\n")
-	gitT(t, dir, "commit", "-qam", "serve: wait for listen")
-	verdict = Verdict{}
-	os.Remove(filepath.Join(fdir, "log"))
-	if _, err := OpenPR(context.Background(), cfg, "t1", tg, opt); err != nil {
-		t.Fatal(err)
-	}
-	if log := readFile(t, filepath.Join(fdir, "log")); strings.Contains(log, "pr ready") || strings.Contains(log, "--draft") {
-		t.Errorf("a clean review toggled the draft state of a pull request that never was one:\n%s", log)
-	}
-	if p := LoadProof(cfg, "t1"); p.PR.Review != ReviewClean || !p.PR.Ready {
-		t.Errorf("the record should say ready and clean: %+v", p.PR)
-	}
-}
-
 // A changed file whose name git would quote (non-ASCII bytes) is matched by
 // its real path, not by git's quoted form of it (#242).
 func TestProofMatchesANonASCIIPathToItsCheck(t *testing.T) {
@@ -588,45 +501,5 @@ func TestProofMatchesANonASCIIPathToItsCheck(t *testing.T) {
 	p := TakeProof(context.Background(), []Target{tg}, nil)
 	if !p.OK || len(p.Repos[0].Checks) != 1 || p.Repos[0].Checks[0].label() != "docs test" {
 		t.Fatalf("a change to docs/café.md should run the docs check: %+v", p.Repos[0])
-	}
-}
-
-// With pr.draft false the pull request is ready from the start: the brief
-// never calls it a draft while the review runs or its findings are worked on (#243).
-func TestBriefCallsAReadyPullRequestOpenForReview(t *testing.T) {
-	now := time.Now()
-	for _, ready := range []bool{false, true} {
-		for _, rv := range []string{ReviewRunning, ReviewFindings, ReviewFailed, ReviewCapped} {
-			p := Proof{Taken: now, OK: true, PR: &PRRecord{At: now, Review: rv, Red: 1, Err: "boom", Ready: ready,
-				Links: []PRLink{{Repo: "api", URL: "https://forge.example/pull/7"}}}}
-			got := p.Brief(nil, true)
-			if draft := strings.Contains(got, "draft"); draft == ready {
-				t.Errorf("ready=%v review=%s: %q", ready, rv, got)
-			}
-			if ready && !strings.Contains(got, "open for review") {
-				t.Errorf("ready=%v review=%s should say open for review: %q", ready, rv, got)
-			}
-		}
-	}
-}
-
-// A pull request opened ready (pr.draft false) and reviewed clean was never
-// marked ready: the brief and the decision log say it was opened ready (#251).
-func TestCleanReviewOfAReadyPullRequestSaysOpenedReady(t *testing.T) {
-	cfg := testCfg(t)
-	now := time.Now()
-	for _, opened := range []bool{false, true} {
-		r := &PRRecord{At: now, Review: ReviewClean, Ready: true, OpenedReady: opened,
-			Links: []PRLink{{Repo: "api", URL: "https://forge.example/pull/7"}}}
-		p := Proof{Taken: now, OK: true, PR: r}
-		if got := p.Brief(nil, true); strings.Contains(got, "marked ready") == opened || strings.Contains(got, "opened ready") != opened {
-			t.Errorf("openedReady=%v brief: %q", opened, got)
-		}
-		slug := fmt.Sprintf("t%v", opened)
-		notePR(cfg, slug, p)
-		entries, _ := journal.Read(cfg, slug)
-		if len(entries) != 1 || strings.Contains(entries[0].Text, "marked ready") == opened {
-			t.Errorf("openedReady=%v log: %+v", opened, entries)
-		}
 	}
 }

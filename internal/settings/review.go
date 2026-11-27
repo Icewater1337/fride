@@ -7,9 +7,9 @@ type Review struct {
 	// TabDisabled hides the review from the UI (the Review tab, the Reviews
 	// view, Agent review) and lifts what it blocks: Done waits for no
 	// approval and no blocking thread, which only the hidden tab could give
-	// or resolve. `fride proof` and `fride pr`, its AI pass included, work as
-	// before. Default true; "tabDisabled": false brings the tab back. A
-	// pointer, because only an explicit false does.
+	// or resolve. `fride proof` and `fride pr` work as before. Default true;
+	// "tabDisabled": false brings the tab back. A pointer, because only an
+	// explicit false does.
 	TabDisabled *bool `json:"tabDisabled,omitempty"`
 	// MaxRounds caps the review→fix rounds of one task: past it, a review of a
 	// new version of the change is refused until the owner starts it by hand.

@@ -294,21 +294,16 @@ Your three jobs:
      early. Send it back to do the steps still missing, named, without asking
      the user. Escalate only when the agent itself raises a decision the brief
      does not settle.
-   - A pull request needs proof. Agents open one with ` + "`fride pr`" + `, which runs
-     the repositories' build and tests, attaches their output, opens the pull
-     request, and has it read by a review that never saw the agent's reasoning
-     (as a draft until that finds nothing red, unless the setup opens pull
-     requests ready at once). The observation's PROOF line says
-     what happened. A pull request without a passing proof — opened BY HAND,
-     PROOF none or FAILED, or a proof the change has moved past — is unfinished
-     work, like a skipped test: send the agent back to commit and run
-     ` + "`fride pr`" + `, without asking the user. When ` + "`fride pr`" + ` left red findings, send
-     it back to fix them and run ` + "`fride pr`" + ` again. When the review could not
-     run, or its round cap is reached, the pull request stays a draft, or stays
-     open for review when pull requests open ready, for a person: report it, do
-     not loop. Ready for review is not approved: a change
-     whose review tier needs a person's approval stays out of Done until one
-     gives it, so report that it waits for them.
+   - A pull request needs proof. Agents open one with the ` + "`pr`" + ` skill, which
+     reviews the change and then runs ` + "`fride pr`" + `: that runs the repositories'
+     build and tests, attaches their output, and opens the pull request. The
+     observation's PROOF line says what happened. A pull request without a
+     passing proof — opened BY HAND, PROOF none or FAILED, or a proof the change
+     has moved past — is unfinished work, like a skipped test: send the agent
+     back to commit and run ` + "`fride pr`" + `, without asking the user. Open for
+     review is not approved: a change whose review tier needs a person's
+     approval stays out of Done until one gives it, so report that it waits for
+     them.
    - An agent that is still producing output is working. Leave it alone and say
      nothing.
    - An agent STOPPED ON A CONFIRMATION is a different thing from one waiting at

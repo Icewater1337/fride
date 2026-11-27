@@ -632,70 +632,49 @@ and any edit, rebase or new file afterwards makes it stale, in the tab and for
 `fride pr`. Commands that change the tree they prove (a build writing a file
 that is not git-ignored) fail the proof, since what they proved is gone.
 
-**`fride pr`** (`pr.go`, `pr_cli.go`) is how an agent opens a pull request;
-the workspace guide tells it so, and never to use `gh` or `glab` for it:
+**`fride pr`** (`pr.go`, `pr_cli.go`) is how an agent opens a pull request.
+The workspace guide sends it there through the `pr` skill, and never to `gh`
+or `glab` for it. The skill reads the change first, in the agent's own
+session: `/code-review` and three reviewer subagents in parallel (simplicity,
+tests, proper fixes rather than workarounds), fixes what holds up, and has the
+proper-fix reviewer read those fixes once more. Then it runs `fride pr`:
 
-1. It refuses while anything is uncommitted: the proof has to be of what the
-   pull request carries.
+1. It says which repositories have uncommitted files: they are proven with the
+   rest, since the proof runs on the working tree, but the push sends only
+   commits.
 2. It reuses a proof that passed on this very tree, or takes a new one, and
    refuses on failure. Nothing is pushed then.
 3. For each changed repository it pushes the branch and opens its pull
    request. The push is `--force-with-lease --force-if-includes`: a branch
    rebased since its last push goes up, while commits somebody else pushed
-   meanwhile refuse it. Then it opens the pull request, or updates the open one: the proof block goes after the
-   description, or replaces the block an earlier run wrote. `gh` or `glab` is
-   picked by the kind of the git identity of the remote's host, else by the
-   host's name. The task's git identity is in the environment of both.
-4. With `pr.review` on (the default), the pull request opens as a draft (an
-   open one marked ready goes back to draft) and the AI pass of phase 2 runs
-   over the change. That pass is the fresh context: headless turns that see
-   the diff and the workspace, never the agent's conversation. It runs in the
-   server through the tab's own entry point, `POST …/changes/ai`, so whatever
-   bounds it there bounds this too, and `fride pr` waits for it. A pass already
-   done on this version is used as it is, and one already running is waited
-   for rather than doubled.
-5. No red finding left (one a person dismissed, or whose hunk is gone, does
-   not count): the pull request is marked ready *for review*. Red findings: it
-   stays a draft, and `fride pr` prints them for the agent and exits 1. The
-   agent fixes them, commits, and runs `fride pr` again. A review that cannot
-   run (no server, a refused or failed pass) leaves the draft for a person.
-   The round cap's refusal (the API flags it, `"roundCap": true`) is a state
-   of its own, *capped*: `fride pr` tells the agent to stop and tell the user,
-   since the cap has already handed the change to its owner.
-6. Ready for review is not approved. The proof and the AI pass are no
-   person's approval and `fride pr` records none: once the pull request is
-   ready it reads the task's [gate](#review-tiers-and-approvals) and, when the
-   tier still wants people, says what is missing (`needs` in the record), so
-   the agent and the orchestrator report that the task waits for them. Done
-   stays behind the gate as before.
+   meanwhile refuse it. Then it opens the pull request, or updates the open
+   one: the proof block goes after the description, or replaces the block an
+   earlier run wrote. Whether an open one is a draft is left as it is. `gh` or
+   `glab` is picked by the kind of the git identity of the remote's host, else
+   by the host's name. The task's git identity is in the environment of both.
+4. An open pull request is not approved. The proof is no person's approval and
+   `fride pr` records none: it reads the task's
+   [gate](#review-tiers-and-approvals) and, when the tier still wants people,
+   says what is missing (`needs` in the record), so the agent and the
+   orchestrator report that the task waits for them.
 
 What happened is kept with the proof (`pr` in `proof.json`) and noted in the
 decision log, so the rationale document says which pull request went out with
-what proof.
+what proof. The pipeline is watched only on request: the `watch-pr` skill,
+which the user starts, waits for it, and fixes a failure at its cause.
 
 **In the Review tab**, *Evidence* starts with the proof: passed or failed,
 when, the commit each repository was at, *this version* or *stale*, each
-command with its output, and the pull requests with their state. A proof
-that holds replaces the transcript's evidence items in the Focus list (it ran
-on the change as it is); one that failed is a high item.
+command with its output, and the pull requests. A proof that holds replaces
+the transcript's evidence items in the Focus list (it ran on the change as it
+is); one that failed is a high item.
 
 **The orchestrator** is given a PROOF line in its observation of a task: none,
 failed, passed, or passed on an earlier version; what `fride pr` did; and any
-`gh pr create`, `gh pr ready`, `glab mr create` or `glab mr update --ready`
-the agent ran itself since, read from its transcript. Its prompt treats a pull
-request without a passing proof like a skipped test: the agent is sent back
-to run `fride pr`. Findings go back the same way; a review that could not run,
-or that the round cap stopped, goes to the user, not round again; and a pull
-request ready for review that its tier holds for approval is reported as
-waiting for a person, not as done.
-
-*Bounds.* Each `fride pr` costs at most one AI pass, none when the change has
-not moved since the last one, and each pass is a [review round](#review-rounds)
-like one started from the tab. Past `review.maxRounds` the pass refuses to
-start, `fride pr` reports that the pull request stays a draft, and the round
-cap's thread hands the change to its owner; `fride pr` never forces
-a round (it asks with no body, a plain start). The orchestrator is told not to
-loop on a review that could not run or was capped.
+`gh pr create` or `glab mr create` the agent ran itself since, read from its
+transcript. Its prompt treats a pull request without a passing proof like a
+skipped test: the agent is sent back to run `fride pr`. A pull request that its
+tier holds for approval is reported as waiting for a person, not as done.
 
 ## Outcomes and evals
 
