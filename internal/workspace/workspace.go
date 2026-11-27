@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -668,6 +669,11 @@ func copyCandidates(cfg *config.Config, name, mainCheckout string) (lines []stri
 	entries, overridden := cfg.Settings.EffectiveCopy(name, mainCheckout)
 	if overridden {
 		notes = append(notes, "copy list from config.json (repos."+name+".copy)")
+	}
+	for _, s := range cfg.Settings.Repo(name).Share {
+		if !slices.Contains(entries, s) {
+			entries = append(slices.Clip(entries), s)
+		}
 	}
 	for _, line := range entries {
 		if strings.ContainsAny(line, "*?[") {

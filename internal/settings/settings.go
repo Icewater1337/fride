@@ -102,6 +102,12 @@ type Repo struct {
 	// from the main checkout into every new worktree. nil means "use the repo's
 	// .worktreeinclude", which is what `claude --worktree` uses too.
 	Copy []string `json:"copy,omitempty"`
+	// Share lists git-ignored KEY=VALUE files that the repo's tooling keeps
+	// one of per checkout, such as a store of secrets, and that the user means
+	// as one: the main checkout and every workspace merge them key by key, so
+	// a key set in any of them reaches the others (internal/workspace/shared.go).
+	// A new worktree gets them as it gets Copy.
+	Share []string `json:"share,omitempty"`
 	// IDE is the JetBrains launcher this repo opens in ("idea", "pycharm",
 	// "webstorm", "goland"). Empty means detect from the build files.
 	IDE string `json:"ide,omitempty"`

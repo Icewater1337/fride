@@ -181,6 +181,13 @@ func Up(cfg *config.Config, slug string, opt UpOptions) (*Status, error) {
 	if !running && cfg.Settings != nil && cfg.Settings.RebaseOnUp {
 		warnings = append(warnings, rebaseBranches(cfg, slug, opts)...)
 	}
+	// The services read the copied files (secrets) when they start: a key set
+	// in another workspace since, or at home, has to be there first.
+	refreshed, notes := workspace.RefreshCopies(cfg, slug)
+	if len(refreshed) > 0 {
+		warnings = append(warnings, "brought up to date from the other checkouts: "+strings.Join(refreshed, ", "))
+	}
+	warnings = append(warnings, notes...)
 	k, err := AllocK(cfg, slug, busyFor(cfg, slug))
 	if err != nil {
 		return nil, err

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/Icewater1337/fride/internal/atomicfile"
 	"github.com/Icewater1337/fride/internal/config"
@@ -65,8 +66,9 @@ func fingerprint(path string) (string, error) {
 }
 
 // RefreshCopies brings the copied files of a workspace's repositories up to
-// date with their main checkouts, and returns the ones it copied, as
-// "<repo>/<path>". A file is copied when:
+// date with their main checkouts, and returns the ones it copied or merged, as
+// "<repo>/<path>", and notes on what it could not merge. A shared file is
+// merged key by key (shared.go); any other file is copied when:
 //   - the workspace has none (also how a file added to the copy list later
 //     reaches older workspaces), or
 //   - the main checkout's changed, and the workspace's is still what was copied
@@ -75,17 +77,17 @@ func fingerprint(path string) (string, error) {
 // Never over a file edited in the workspace, nor over one copied before the
 // record existed, which cannot be told apart from an edit: overwriting is the
 // decision that loses something, so anything unread or unknown keeps the file.
-func RefreshCopies(cfg *config.Config, slug string) []string {
+func RefreshCopies(cfg *config.Config, slug string) (refreshed, notes []string) {
 	ws := cfg.WorkspaceDir(slug)
 	if cfg.Settings == nil {
-		return nil
+		return nil, nil
 	}
 	entries, err := os.ReadDir(ws)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
+	refreshed, notes = refreshShared(cfg, slug)
 	rec := readCopied(ws)
-	var refreshed []string
 	for _, e := range entries {
 		repo, ok := cfg.Repo(e.Name())
 		if !ok || !e.IsDir() {
@@ -94,6 +96,9 @@ func RefreshCopies(cfg *config.Config, slug string) []string {
 		dest := filepath.Join(ws, e.Name())
 		lines, _ := copyCandidates(cfg, repo.Name, repo.Main)
 		for _, line := range lines {
+			if slices.Contains(cfg.Settings.Repo(repo.Name).Share, line) {
+				continue // merged by refreshShared
+			}
 			key := repo.Name + "/" + line
 			src, dst := filepath.Join(repo.Main, line), filepath.Join(dest, line)
 			main, err := fingerprint(src)
@@ -119,5 +124,5 @@ func RefreshCopies(cfg *config.Config, slug string) []string {
 		}
 	}
 	_ = writeCopied(ws, rec)
-	return refreshed
+	return refreshed, notes
 }
