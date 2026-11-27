@@ -162,6 +162,7 @@ func (c *Config) AgentArgv(kind agent.Kind, o agent.Options) []string {
 			}
 		}
 		o.AllowRules = c.Settings.ClaudeAllowRules()
+		o.AutoMode = c.Settings.ClaudeAutoModeSetting()
 	}
 	return agent.Argv(kind, o)
 }

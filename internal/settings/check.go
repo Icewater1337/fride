@@ -2,9 +2,11 @@ package settings
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -137,6 +139,12 @@ func (s *Settings) Check() []Problem {
 		switch r {
 		case "Bash", "Bash(*)", "*", "PowerShell", "PowerShell(*)":
 			add(false, "companion.claudeAllow", "%s grants any command; auto mode drops it, so name the commands (Bash(gh pr merge:*))", r)
+		}
+	}
+	autoMode := s.ClaudeAutoModeSetting()
+	for _, name := range slices.Sorted(maps.Keys(autoMode)) {
+		if !slices.Contains(autoMode[name], "$defaults") {
+			add(false, "companion.claudeAutoMode."+name, "replaces all of Claude Code's built-in %s rules; list \"$defaults\" to keep them and add yours", name)
 		}
 	}
 

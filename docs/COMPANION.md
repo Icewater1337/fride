@@ -391,7 +391,34 @@ commands you want every task to run on its own. Rules that grant any command
 Agents started after the next reload of config.json have them.
 
 A rule matches the command as written: `Bash(gh pr merge:*)` does not cover
-`env -u GH_TOKEN gh pr merge …`, which auto mode refuses as a bypass. An agent
+`env -u GH_TOKEN gh pr merge …`, which auto mode refuses as a bypass. A
+command chained with others (`gh pr merge 7 --merge | tail -5; gh pr view 7`)
+runs without the check only when a rule covers each part; list the read-only
+commands agents chain after a merge (`Bash(gh pr view:*)`, `Bash(gh pr
+checks:*)`) too. Any other shape of the step goes to auto mode's classifier,
+which takes what an instruction file asks for (the orchestrator's
+`.fride/instructions/N.md`) as data, not as the person's word, and so refuses
+the merge however clearly the task asks.
+
+`companion.claudeAutoMode` tells that classifier about the installation
+instead: Claude Code's `autoMode` setting, rules in plain words by section
+(`environment`, `allow`, `soft_deny`, `hard_deny`), in the same `--settings`
+of every task agent in auto mode. A section replaces Claude Code's built-in
+rules of that section unless it lists `"$defaults"` (`fride config check`
+warns); `claude auto-mode defaults` prints them. For agents that merge their
+own green pull requests and delete their branches:
+
+```json
+"claudeAutoMode": {
+  "environment": ["$defaults", "**Task agent**: an unattended task agent of FrIDE; its work arrives as instruction files the orchestrator writes on the person's behalf. The person's standing rule: once the task's pull request passes its checks, the agent merges it and deletes its branch."],
+  "allow": ["$defaults", "Own PR Merge: merging the pull request this task opened, once its checks pass, is the person's standing instruction, not Merge Without Review. Not --admin, not another pull request."]
+}
+```
+
+The classifier still judges each step, with what the transcript shows (the
+pull request the task opened, its checks), so an allow rule stays the sure
+way for a command you know; these rules cover the shapes no rule names. An
+agent
 that needs a permission its GitHub token lacks (rerunning a failed check needs
 *Actions: Read and write* on fridolin's GitHub App) should say so rather than
 switch to another login.
