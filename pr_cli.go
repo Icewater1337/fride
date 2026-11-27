@@ -102,10 +102,8 @@ func cmdPR(cfg *config.Config, st *store.Store, args []string) {
 		check(fmt.Errorf("%v: %s. Fix the cause, commit, and run `fride pr` again", err, proofFailure(res.Proof)))
 	}
 	check(err)
+	// OpenPR has printed each link as it opened its pull request.
 	r := res.Proof.PR
-	for _, l := range r.Links {
-		fmt.Printf("%s: %s\n", l.Repo, l.URL)
-	}
 	if r.Needs != "" {
 		fmt.Printf("\nOpen for review is not approved: %s. The proof counts as no approval; a person gives it "+
 			"in the Review tab, and the task is not Done before.\n", r.Needs)
