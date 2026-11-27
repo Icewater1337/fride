@@ -6,8 +6,9 @@ inside FrIDE. Its job is to make reading an agent's change fast. Its second job
 is to make that reading trustworthy: what to look at first, what proves the
 change works, and why each hunk exists.
 
-All of it is off unless config.json says `"review": { "disabled": false }`
-([CONFIG.md](CONFIG.md#review)).
+The Review tab, the Reviews view and the approval gate are off unless
+config.json says `"review": { "tabDisabled": false }`
+([CONFIG.md](CONFIG.md#review)); proof before a pull request works either way.
 
 Status: the MVP, phase 2 and phase 3 are implemented: the **Review** tab of a
 task, and the **Reviews** view across tasks. Where the build differs from the

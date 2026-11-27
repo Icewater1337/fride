@@ -63,7 +63,7 @@ func TestFleetEndToEnd(t *testing.T) {
 			"version": 1, "workspaceRoot": filepath.Join(root, name, "ws"),
 			"baseFolders": []string{repos}, "coreRepos": []string{"app"},
 			"repos":  map[string]any{"app": map[string]any{"copy": []string{".env"}}},
-			"review": map[string]any{"disabled": false},
+			"review": map[string]any{"tabDisabled": false},
 			"profiles": map[string]any{"local": map[string]any{
 				"services": map[string]any{"app": map[string]any{"repo": "app", "run": "sleep 1000", "port": 21990}},
 			}},

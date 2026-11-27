@@ -200,7 +200,7 @@ func New(stateDir, workspaceRoot, claudeBin string, host Host) *Orchestrator {
 	o := &Orchestrator{
 		path: filepath.Join(stateDir, "orchestrator.json"),
 		host: host,
-		brain: &brain{bin: claudeBin, dir: workspaceRoot, review: host.Review,
+		brain: &brain{bin: claudeBin, dir: workspaceRoot,
 			addDirs: []string{filepath.Join(stateDir, "panels"), AttachmentsDir(stateDir)}},
 		panels:    panels.New(filepath.Join(stateDir, "panels")),
 		attachDir: AttachmentsDir(stateDir),

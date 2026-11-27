@@ -374,8 +374,10 @@ func TestDoneWaitsForApprovals(t *testing.T) {
 func TestContinuedBranchIsReviewedAgainstItsBase(t *testing.T) {
 	cfg, st, task, dir := gateTask(t)
 	gitT(t, cfg.Repos[0].Main, "switch", "-q", "main") // its default base: main
-	cfg.Settings = &settings.Settings{Repos: map[string]*settings.Repo{"api": {Review: &settings.RepoReview{
-		Tiers: []settings.TierRule{{Tier: "normal", Paths: []string{"auth/**"}}}}}}}
+	shown := false                                     // the Review tab, which the approvals need
+	cfg.Settings = &settings.Settings{Review: &settings.Review{TabDisabled: &shown},
+		Repos: map[string]*settings.Repo{"api": {Review: &settings.RepoReview{
+			Tiers: []settings.TierRule{{Tier: "normal", Paths: []string{"auth/**"}}}}}}}
 	write(t, dir, "auth/login.go", "package auth\n\nfunc Login() {}\n")
 	gitT(t, dir, "add", "-A")
 	gitT(t, dir, "commit", "-qm", "auth")
@@ -477,7 +479,8 @@ func TestApprovalCountsAreConfigured(t *testing.T) {
 	if err := CheckDone(cfg, "t1"); err == nil || !strings.Contains(err.Error(), "needs 2") {
 		t.Fatalf("defaults: %v", err)
 	}
-	cfg.Settings = &settings.Settings{Review: &settings.Review{Approvals: settings.Approvals{"risky": 1}}}
+	shown := false // the Review tab, which the approvals need
+	cfg.Settings = &settings.Settings{Review: &settings.Review{TabDisabled: &shown, Approvals: settings.Approvals{"risky": 1}}}
 	if err := CheckDone(cfg, "t1"); err == nil || !strings.Contains(err.Error(), "needs 1 human approval ") {
 		t.Fatalf("review.approvals: %v", err)
 	}

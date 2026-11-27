@@ -93,6 +93,11 @@ func (s *Settings) ApprovalsFor(repo string) Approvals {
 	if s == nil {
 		return a
 	}
+	// Approvals are given in the Review tab; with it hidden none can be, so
+	// none is asked for: the gate reads ready, as with all zeros.
+	if s.ReviewTabDisabled() {
+		return Approvals{TierAuto: 0, TierNormal: 0, TierRisky: 0}
+	}
 	if s.Review != nil {
 		a = a.over(s.Review.Approvals)
 	}

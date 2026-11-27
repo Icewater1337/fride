@@ -234,9 +234,6 @@ type Host interface {
 	// last looked up: cheap, it is called on every tick. Empty when there are
 	// none, or when FrIDE is not to tell agents about them.
 	PullRequests(slug string) []forge.PR
-	// Review reports whether the review is on (review.disabled is false):
-	// only then is the brain told that a pull request needs `fride pr`.
-	Review() bool
 	// Notify tells whoever sent an inbox message that its thread has news.
 	// What that means — a command, nothing at all — is the host's to decide.
 	Notify(Note) error

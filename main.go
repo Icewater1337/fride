@@ -278,11 +278,6 @@ func main() {
 			return
 		}
 		if len(os.Args) > 2 && os.Args[2] == "edit" {
-			// Workspaces made before the review was turned off still run this
-			// hook after every edit; it records nothing then.
-			if cfg.Settings.ReviewDisabled() {
-				return
-			}
 			review.RecordEdit(cfg, func(dir string) string { return slugForDir(cfg, dir) })
 			return
 		}
@@ -300,31 +295,16 @@ func main() {
 	case "incident":
 		cmdIncident(cfg, os.Args[2:])
 	case "review":
-		if len(os.Args) > 2 && os.Args[2] == "gate" {
-			requireReview(cfg)
-		}
 		cmdReview(cfg, st, os.Args[2:])
 	case "proof":
-		requireReview(cfg)
 		cmdProof(cfg, st, os.Args[2:])
 	case "pr":
-		requireReview(cfg)
 		cmdPR(cfg, st, os.Args[2:])
 	case "repos":
 		cmdRepos(cfg)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], helpText)
 		os.Exit(1)
-	}
-}
-
-// requireReview refuses the review's commands while review.disabled is on. An
-// agent whose guide was written before the review was turned off still reaches
-// for `fride pr`, so the refusal says what to do instead.
-func requireReview(cfg *config.Config) {
-	if cfg.Settings.ReviewDisabled() {
-		check(errors.New(`the review is off ("review": {"disabled": true} in config.json): ` +
-			"open the pull request with gh or glab directly"))
 	}
 }
 
@@ -923,7 +903,7 @@ func cmdTask(cfg *config.Config, st *store.Store, args []string) {
 		if !store.ValidStatus(s) {
 			check(fmt.Errorf("invalid status %q", args[2]))
 		}
-		if s == store.StatusDone && !cfg.Settings.ReviewDisabled() {
+		if s == store.StatusDone && !cfg.Settings.ReviewTabDisabled() {
 			check(review.CheckDone(cfg, t.Slug))
 		}
 		_, err = st.Update(t.Slug, func(t *store.Task) error { t.Status = s; return nil })

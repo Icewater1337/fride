@@ -10,22 +10,11 @@ import (
 	"github.com/Icewater1337/fride/internal/settings"
 )
 
-// reviewOn is settings with review.disabled false, which the pull request
-// section needs: with the review off, the default, there is no `fride pr`.
-func reviewOn() *settings.Settings {
-	off := false
-	return &settings.Settings{Review: &settings.Review{Disabled: &off}}
-}
-
 func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
 	cfg := &config.Config{WorkspaceRoot: t.TempDir()}
 	if err := os.MkdirAll(cfg.WorkspaceDir("t1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if s := prSection(cfg); s != "" {
-		t.Errorf("with the review off by default the guide still sends the agent to fride pr:\n%s", s)
-	}
-	cfg.Settings = reviewOn()
 	if err := WriteGuide(cfg, "t1", []string{"backend"}, "claude", "feat/x"); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +29,7 @@ func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
 
 	// With the review turned off the guide does not promise one.
 	off := false
-	cfg.Settings.PR = &settings.PR{Review: &off}
+	cfg.Settings = &settings.Settings{PR: &settings.PR{Review: &off}}
 	if s := prSection(cfg); strings.Contains(s, "never saw this conversation") || strings.Contains(s, "round cap") ||
 		!strings.Contains(s, "opens the pull request ready") {
 		t.Errorf("with pr.review off:\n%s", s)
@@ -48,7 +37,7 @@ func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
 }
 
 func TestEnsureGuideAppendsThePullRequestSectionOnce(t *testing.T) {
-	cfg := &config.Config{WorkspaceRoot: t.TempDir(), Settings: reviewOn()}
+	cfg := &config.Config{WorkspaceRoot: t.TempDir()}
 	dir := cfg.WorkspaceDir("old")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
