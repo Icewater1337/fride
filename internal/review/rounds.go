@@ -43,6 +43,9 @@ type roundsState struct {
 	// Escalation is the id of the thread the cap opened, so a loop
 	// that keeps knocking opens one thread, not one per attempt.
 	Escalation string `json:"escalation,omitempty"`
+	// CapUnblocked marks that the legacy Blocking on the cap's thread was
+	// cleared once (#253); a thread the owner makes blocking later stays so.
+	CapUnblocked bool `json:"capUnblocked,omitempty"`
 }
 
 const roundsFile = "rounds.json"
@@ -51,7 +54,11 @@ const roundsFile = "rounds.json"
 func loadRounds(cfg *config.Config, slug string) roundsState {
 	var rs roundsState
 	load(cfg, slug, roundsFile, &rs)
-	unblockEscalation(cfg, slug, rs.Escalation)
+	if rs.Escalation != "" && !rs.CapUnblocked {
+		unblockEscalation(cfg, slug, rs.Escalation)
+		rs.CapUnblocked = true
+		_ = save(cfg, slug, roundsFile, rs)
+	}
 	return rs
 }
 
@@ -62,8 +69,9 @@ const capThreadText = "Review round cap (review.maxRounds):"
 // opened before it stopped blocking were stored with "blocking": true, and
 // escalate reuses an unsatisfied one, so nothing else would ever clear it and
 // a capped task whose change is long merged could not reach Done. Only the
-// cap's own thread (no repo or path, the cap's text) is touched; a thread
-// already non-blocking is left as it is, so this writes once at most.
+// cap's own thread (no repo or path, the cap's text) is touched. loadRounds
+// runs it once per task, guarded by CapUnblocked, so a thread the owner makes
+// blocking afterwards stays blocking.
 func unblockEscalation(cfg *config.Config, slug, id string) {
 	if id == "" {
 		return
@@ -207,6 +215,7 @@ func escalate(cfg *config.Config, slug string, rs *roundsState, done, max int) {
 	t, err := addThread(cfg, slug, Thread{}, text)
 	if err == nil {
 		rs.Escalation = t.ID
+		rs.CapUnblocked = true // opened non-blocking: nothing to migrate
 		_ = save(cfg, slug, roundsFile, *rs)
 	}
 }
@@ -267,6 +276,9 @@ type Rounds struct {
 	Capped bool `json:"capped,omitempty"`
 	// Escalation is the thread the cap opened, while it is not settled.
 	Escalation string `json:"escalation,omitempty"`
+	// CapUnblocked marks that the legacy Blocking on the cap's thread was
+	// cleared once (#253); a thread the owner makes blocking later stays so.
+	CapUnblocked bool `json:"capUnblocked,omitempty"`
 }
 
 // roundsView is the rounds as served, with c's threads already laid over it.

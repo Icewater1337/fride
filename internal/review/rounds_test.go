@@ -364,3 +364,33 @@ func TestOldBlockingCapThreadIsUnblockedOnLoad(t *testing.T) {
 		t.Error("a reviewer's blocking thread no longer holds the task out of Done")
 	}
 }
+
+// The clear is a one-time migration (#258): a cap thread the owner makes
+// blocking after it stays blocking across later loads.
+func TestReblockedCapThreadStaysBlocking(t *testing.T) {
+	cfg := testCfg(t)
+	cap, err := AddThread(cfg, "t1", Thread{Blocking: true}, "Review round cap (review.maxRounds): 3 of 3 review rounds are done.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateMu.Lock()
+	err = save(cfg, "t1", roundsFile, roundsState{Escalation: cap.ID})
+	stateMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDone(cfg, "t1"); err != nil {
+		t.Fatalf("the legacy cap thread was not cleared once: %v", err)
+	}
+	if _, err := UpdateThread(cfg, "t1", cap.ID, func(th *Thread) { th.Blocking = true }); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDone(cfg, "t1"); err == nil {
+		t.Error("the re-blocked cap thread was cleared again and the task reached Done")
+	}
+	for _, th := range LoadThreads(cfg, "t1") {
+		if th.ID == cap.ID && !th.Blocking {
+			t.Error("the re-blocked cap thread is no longer blocking")
+		}
+	}
+}
