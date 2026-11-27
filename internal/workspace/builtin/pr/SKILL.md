@@ -1,6 +1,6 @@
 ---
 name: pr
-description: Open or update this task's pull request (or merge request). Reviews the whole change four ways in parallel (bugs with /code-review, needless complexity, tests, workarounds instead of proper fixes), fixes what holds up at its cause, checks those fixes again, then runs `fride pr`, which proves the build and the tests and opens or updates the pull request. Use when the work is done and a pull request or merge request is asked for, or to update an open one after more work.
+description: Open or update this task's pull request (or merge request). Reviews the whole change in parallel (bugs with /code-review, needless complexity, tests, workarounds instead of proper fixes, and a repository's own review skill if it ships one), fixes what holds up at its cause, checks those fixes again, then runs `fride pr`, which proves the build and the tests and opens or updates the pull request. Use when the work is done and a pull request or merge request is asked for, or to update an open one after more work.
 ---
 
 <!-- FrIDE writes this file into every workspace and rewrites it when FrIDE's
@@ -26,7 +26,7 @@ format (its `AGENTS.md`, `CLAUDE.md`, commitlint or the like). Leave out what
 belongs in no commit (scratch, local config). Then note each repository's head
 (`git rev-parse HEAD`): step 4 reads what the fixes change after it.
 
-## 2. Review, four ways at once
+## 2. Review, all at once
 
 The change of a repository is `git diff $(git merge-base HEAD <baseRef>)` in its
 folder, plus the new files `git ls-files --others --exclude-standard` lists.
@@ -40,8 +40,16 @@ answer. While they run, run `/code-review` in each repository with work, from
 that repository's folder and with no target, so that it reviews the current
 branch. Never give it the base as its target: a target is what gets reviewed.
 
-If your agent cannot start subagents or has no `/code-review`, do the four
-reviews yourself, one after another, each as if you had not written the code.
+**A repository's own review.** A repository with work may ship review
+instructions of its own: a skill in its `.claude/skills/` whose name ends in
+`-review`. Such a skill is often one only the user starts, so it is read, not
+run. For each one, start three more subagents in the same message, each told
+to read that `SKILL.md` and follow it in that repository's folder against its
+base, and to return its report. Three runs that cannot see each other find
+more than one does; step 3 counts a finding they share once.
+
+If your agent cannot start subagents or has no `/code-review`, do the reviews
+yourself, one after another, each as if you had not written the code.
 
 **Simplicity.** What the change adds that it does not need: code that could be
 deleted; an abstraction with one use (an interface with one implementation, a
@@ -100,7 +108,7 @@ Commit the fixes. Write the description to a file outside the repositories:
 - one to three bullets: what the change does, and why
 
 ## Review
-/code-review and the simplicity, tests and proper-fix reviews ran.
+/code-review, the simplicity, tests and proper-fix reviews, and <a repository's own review skill, three runs> ran.
 Fixed: <short list>. Dropped: <short list, each with why>.
 ```
 
