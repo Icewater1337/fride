@@ -85,7 +85,9 @@ keeps a page about it, written by its agent as the work happens, and
 *Publish idea* sends the page to the team's ideas repository (see `ideas` in
 docs/CONFIG.md).
 
-**Review.** The *Review* tab, first in a task's tab bar, shows what the
+**Review.** Off by default; `"review": { "disabled": false }` in config.json
+turns on everything in this paragraph and the next. The *Review* tab, first in
+a task's tab bar, shows what the
 task changed in every repository against its base: committed, uncommitted and
 untracked files, in a file tree with a per-file *viewed* mark that comes back
 when the agent changes the file again. Above the diff, *Review focus* lists the

@@ -661,7 +661,13 @@ async function openTask(slug, node) {
   loadUsage(p).catch(e => console.error('usage:', e));
   loadJournal(p).catch(e => console.error('journal:', e));
   loadIdea(p).catch(e => console.error('idea:', e));
-  loadReview(p).catch(e => console.error('review:', e));
+  // With the review off (review.disabled) there is no tab to draw, and no
+  // background poll of /changes behind it. A computer whose FrIDE predates
+  // the switch sends no "review", and has it on.
+  const reviewOn = taskCfg().review !== false;
+  $('#review-tab').classList.toggle('hidden', !reviewOn);
+  $('#btn-review').classList.toggle('hidden', !reviewOn);
+  if (reviewOn) loadReview(p).catch(e => console.error('review:', e));
   try { await syncTerminals(p); } catch (e) { console.error('terminals:', e); }
   if (stale(p)) return;
   startPolling();
@@ -2233,6 +2239,7 @@ async function loadConfig() {
   try { state.config = await api.get('/api/config'); } catch { state.config = null; }
   const c = state.config;
   $('#stack-name').textContent = c && c.name ? c.name : '';
+  $('#nav-reviews').classList.toggle('hidden', (c || {}).review === false);
   return c;
 }
 

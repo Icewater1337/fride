@@ -185,6 +185,9 @@ func prBadges(prs []forge.PR) []prBadge {
 	return out
 }
 
+// Review reports whether the review is on, for the orchestrator's prompt.
+func (h orchHost) Review() bool { return !h.s.cfg.Settings.ReviewDisabled() }
+
 // PullRequests are the task's pull requests for the orchestrator to tell its
 // agent about; none while pullRequests.feedback is off.
 func (h orchHost) PullRequests(slug string) []forge.PR {

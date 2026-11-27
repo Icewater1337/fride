@@ -14,6 +14,33 @@ import (
 	"github.com/Icewater1337/fride/internal/review"
 )
 
+// With the review off, the default, every review route is gone, the UI is
+// told so, and Done needs no approval.
+func TestReviewOff(t *testing.T) {
+	s, _, _ := testServer(t)
+	s.cfg.Settings.Review = nil
+	h := s.guard(s.Routes())
+	if w := do(t, h, "POST", "/api/tasks", `{"name":"foo","agent":"claude","repos":[{"name":"api","baseRef":"main"}]}`); w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	if err := os.WriteFile(filepath.Join(s.cfg.RepoDir("foo", "api"), "new.go"), []byte("package api\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range [][2]string{{"GET", "/api/tasks/foo/changes"}, {"POST", "/api/tasks/foo/changes/ai"},
+		{"POST", "/api/tasks/foo/review"}, {"GET", "/api/review/queue"}} {
+		if w := do(t, h, r[0], r[1], `{}`); w.Code != 404 || !strings.Contains(w.Body.String(), "review is off") {
+			t.Errorf("%s %s: %d %s", r[0], r[1], w.Code, w.Body)
+		}
+	}
+	var c struct{ Review *bool }
+	if w := do(t, h, "GET", "/api/config", ""); json.Unmarshal(w.Body.Bytes(), &c) != nil || c.Review == nil || *c.Review {
+		t.Errorf("config does not say the review is off: %s", w.Body)
+	}
+	if w := do(t, h, "PUT", "/api/tasks/foo/status", `{"status":"done"}`); w.Code != 200 {
+		t.Fatalf("done without an approval: %d %s", w.Code, w.Body)
+	}
+}
+
 // A blocking review thread holds the task out of Done until it is satisfied,
 // and the review queue says whose turn the task is.
 func TestReviewThreadsAndQueue(t *testing.T) {

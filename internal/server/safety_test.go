@@ -49,6 +49,8 @@ func testServer(t *testing.T) (*Server, string, string) {
 		"version": 1, "workspaceRoot": filepath.Join(root, "ws"),
 		"baseFolders": []string{filepath.Join(root, "repos")}, "coreRepos": []string{"api"},
 		"profiles": map[string]any{"local": map[string]any{"services": map[string]any{}}},
+		// On, because most tests here exercise it; TestReviewOff covers the default.
+		"review": map[string]any{"disabled": false},
 	}, "", "  ")
 	path := filepath.Join(state, "config.json")
 	if err := os.WriteFile(path, b, 0o644); err != nil {

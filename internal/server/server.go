@@ -292,7 +292,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		StateDir   string             `json:"stateDir"`
 		Ledger     bool               `json:"ledger"`
 		Ideas      bool               `json:"ideas"`
-	}{Ledger: journal.LedgerEnabled(s.cfg), Ideas: journal.IdeasEnabled(s.cfg), Configured: s.cfg.Configured(), Path: filepath.Join(s.cfg.StateDir, "config.json"),
+		Review     bool               `json:"review"` // false: the UI draws no review
+	}{Ledger: journal.LedgerEnabled(s.cfg), Ideas: journal.IdeasEnabled(s.cfg), Review: !s.cfg.Settings.ReviewDisabled(), Configured: s.cfg.Configured(), Path: filepath.Join(s.cfg.StateDir, "config.json"),
 		Profiles: []profileView{}, Problems: []settings.Problem{}, Core: []string{},
 		Workspaces: s.cfg.WorkspaceRoot, StateDir: s.cfg.StateDir}
 	if s.cfg.LoadErr != nil {
@@ -1044,6 +1045,10 @@ func (s *Server) handleTask(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, out)
 
+	case (action == "review" || action == "changes" || strings.HasPrefix(action, "changes/")) &&
+		s.cfg.Settings.ReviewDisabled():
+		writeErr(w, 404, errReviewOff)
+
 	case action == "review" && r.Method == http.MethodPost:
 		var req struct {
 			Agent  string `json:"agent"` // empty: the task's own agent
@@ -1390,7 +1395,7 @@ func (s *Server) setStatus(slug string, status store.Status) (*store.Task, error
 	if !store.ValidStatus(status) {
 		return nil, fmt.Errorf("invalid status %q", status)
 	}
-	if status == store.StatusDone {
+	if status == store.StatusDone && !s.cfg.Settings.ReviewDisabled() {
 		if err := review.CheckDone(s.cfg, slug); err != nil {
 			return nil, err
 		}

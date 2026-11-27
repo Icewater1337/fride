@@ -24,6 +24,18 @@ func TestTheBrainSendsBackAPullRequestWithoutProof(t *testing.T) {
 			t.Errorf("system prompt lacks %q", want)
 		}
 	}
+	// With the review off nothing proves a change, so the rule goes.
+	on := true
+	b := &brain{review: func() bool { return on }}
+	if b.system() != systemPrompt {
+		t.Error("with the review on the system prompt lost something")
+	}
+	on = false
+	if s := b.system(); strings.Contains(s, "fride pr") || strings.Contains(s, "PROOF") ||
+		!strings.Contains(s, "Hold it to its brief") || !strings.Contains(s, "still producing output is working") {
+		t.Errorf("with the review off the proof rule is still there, or more went:\n%s", s)
+	}
+
 	line := "PROOF: none: `fride proof` / `fride pr` has not run for this change. BY HAND: the agent ran `gh pr create --fill`"
 	ob := Observation{Task: TaskInfo{Slug: "t1"}, Running: true, Waiting: true, Idle: time.Minute,
 		Detail: &Detail{Repos: []RepoState{{Name: "api", Branch: "feat/x", Ahead: 1}}, Proof: line}}
