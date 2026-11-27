@@ -62,3 +62,27 @@ func TestAgentArgvClaudeAllow(t *testing.T) {
 		t.Errorf("codex got the rules: %q", got)
 	}
 }
+
+// companion.claudeAutoMode reaches Claude Code as autoMode in the same
+// --settings argument: rules trimmed, without repeats, empty sections
+// left out.
+func TestAgentArgvClaudeAutoMode(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"),
+		[]byte(`{"version":1,"baseFolders":[],"companion":{"claudeAllow":["Bash(gh pr merge:*)"],`+
+			`"claudeAutoMode":{"environment":["$defaults"," unattended ","unattended"],"allow":["$defaults","Own PR Merge: fine",""],"soft_deny":[" "]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := settings.Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{ClaudeBin: "claude", ClaudePermissionMode: "auto", Settings: st}
+	if got, want := strings.Join(c.AgentArgv(agent.Claude, agent.Options{SessionID: "u1"}), " "),
+		`claude --permission-mode auto --settings {"autoMode":{"allow":["$defaults","Own PR Merge: fine"],"environment":["$defaults","unattended"]},"permissions":{"allow":["Bash(gh pr merge:*)"]}} --session-id u1`; got != want {
+		t.Errorf("claude: got %q, want %q", got, want)
+	}
+	if got := strings.Join(c.AgentArgv(agent.Codex, agent.Options{}), " "); strings.Contains(got, "settings") {
+		t.Errorf("codex got the rules: %q", got)
+	}
+}

@@ -63,6 +63,11 @@ type Options struct {
 	// argument, unlike --allowedTools, which would take the prompt after it
 	// for a rule). The other agents ignore them.
 	AllowRules []string
+	// AutoMode is Claude Code's autoMode setting, rules by section that tell
+	// auto mode's classifier about the installation, in the same --settings
+	// argument. Only in auto mode, the one mode that reads it. The other
+	// agents ignore it.
+	AutoMode map[string][]string
 	// Unattended is a session nobody watches, as a companion FrIDE's are.
 	// In auto mode Claude Code then never offers /auto-mode-setup ("Teach
 	// auto mode about your environment?"): that offer comes at the end of
@@ -151,6 +156,9 @@ func claudeArgv(o Options) []string {
 	settings := map[string]any{}
 	if len(o.AllowRules) > 0 {
 		settings["permissions"] = map[string]any{"allow": o.AllowRules}
+	}
+	if len(o.AutoMode) > 0 && !o.Dangerous && o.PermissionMode == "auto" {
+		settings["autoMode"] = o.AutoMode
 	}
 	if o.Unattended && !o.Dangerous && o.PermissionMode == "auto" {
 		settings["skillOverrides"] = map[string]string{"auto-mode-setup": "off"}

@@ -54,3 +54,26 @@ func TestCompanionClaudeAllowBlanket(t *testing.T) {
 		t.Errorf("warnings %q", warned)
 	}
 }
+
+// An auto mode section without "$defaults" replaces Claude Code's built-in
+// rules of that section: a warning, one per such section.
+func TestCompanionClaudeAutoModeDefaults(t *testing.T) {
+	s := fixture(t)
+	s.Companion = &Companion{ClaudeAutoMode: &ClaudeAutoMode{
+		Environment: []string{"$defaults", "unattended"},
+		Allow:       []string{"Own PR Merge: fine"},
+		SoftDeny:    []string{" "},
+	}}
+	var warned []string
+	for _, p := range s.Check() {
+		if strings.HasPrefix(p.Where, "companion.claudeAutoMode") {
+			if p.Error {
+				t.Errorf("an error, not a warning: %s", p)
+			}
+			warned = append(warned, p.Where)
+		}
+	}
+	if len(warned) != 1 || warned[0] != "companion.claudeAutoMode.allow" {
+		t.Errorf("warnings %q, want only the allow section's", warned)
+	}
+}

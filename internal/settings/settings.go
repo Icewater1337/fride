@@ -454,6 +454,31 @@ type Companion struct {
 	// for one, to merge a pull request no human approved. Rules that grant
 	// any command (Bash, Bash(*)) are dropped by auto mode and warned about.
 	ClaudeAllow []string `json:"claudeAllow,omitempty"`
+	// ClaudeAutoMode is Claude Code's autoMode setting for every Claude
+	// Code task agent in auto mode, in the same --settings argument: rules
+	// in plain words that tell auto mode's classifier about this
+	// installation. An allow rule covers only the commands it names, alone
+	// or chained with other allowed ones; any other shape of the same step
+	// goes to the classifier. The classifier takes the steps an instruction
+	// file asks for (the orchestrator's .fride/instructions/N.md) as data,
+	// not as the person's word, so by default it refuses, for one, to merge
+	// a pull request no human approved, however clearly the task asks.
+	ClaudeAutoMode *ClaudeAutoMode `json:"claudeAutoMode,omitempty"`
+}
+
+// ClaudeAutoMode is Claude Code's autoMode setting, by section. A section
+// replaces Claude Code's built-in rules of that section, unless it lists
+// "$defaults", which stands for them.
+type ClaudeAutoMode struct {
+	Environment []string `json:"environment,omitempty"`
+	Allow       []string `json:"allow,omitempty"`
+	SoftDeny    []string `json:"soft_deny,omitempty"`
+	HardDeny    []string `json:"hard_deny,omitempty"`
+}
+
+// sections are its sections by their names in Claude Code's settings.
+func (a *ClaudeAutoMode) sections() map[string][]string {
+	return map[string][]string{"environment": a.Environment, "allow": a.Allow, "soft_deny": a.SoftDeny, "hard_deny": a.HardDeny}
 }
 
 // PR configures how a task's agent opens a pull request, with `fride pr`.
@@ -499,6 +524,32 @@ func (s *Settings) ClaudeAllowRules() []string {
 		r = strings.TrimSpace(r)
 		if r != "" && !slices.Contains(out, r) {
 			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// ClaudeAutoModeSetting is companion.claudeAutoMode as Claude Code's
+// autoMode setting: each section's rules trimmed, without empty or
+// repeated ones, and only the sections that have any; nil for none.
+func (s *Settings) ClaudeAutoModeSetting() map[string][]string {
+	if s == nil || s.Companion == nil || s.Companion.ClaudeAutoMode == nil {
+		return nil
+	}
+	var out map[string][]string
+	for name, rules := range s.Companion.ClaudeAutoMode.sections() {
+		var keep []string
+		for _, r := range rules {
+			r = strings.TrimSpace(r)
+			if r != "" && !slices.Contains(keep, r) {
+				keep = append(keep, r)
+			}
+		}
+		if len(keep) > 0 {
+			if out == nil {
+				out = map[string][]string{}
+			}
+			out[name] = keep
 		}
 	}
 	return out
