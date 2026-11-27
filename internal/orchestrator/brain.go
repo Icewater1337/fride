@@ -214,6 +214,27 @@ func schema() string {
 }`
 }
 
+// proofRule is the system prompt's rule about a pull request's proof. It is
+// left out while the review is off (review.disabled): `fride pr` then refuses,
+// and an orchestrator told to demand it would send every agent back to a
+// command that cannot run.
+const proofRule = `   - A pull request needs proof. Agents open one with ` + "`fride pr`" + `, which runs
+     the repositories' build and tests, attaches their output, opens the pull
+     request, and has it read by a review that never saw the agent's reasoning
+     (as a draft until that finds nothing red, unless the setup opens pull
+     requests ready at once). The observation's PROOF line says
+     what happened. A pull request without a passing proof — opened BY HAND,
+     PROOF none or FAILED, or a proof the change has moved past — is unfinished
+     work, like a skipped test: send the agent back to commit and run
+     ` + "`fride pr`" + `, without asking the user. When ` + "`fride pr`" + ` left red findings, send
+     it back to fix them and run ` + "`fride pr`" + ` again. When the review could not
+     run, or its round cap is reached, the pull request stays a draft, or stays
+     open for review when pull requests open ready, for a person: report it, do
+     not loop. Ready for review is not approved: a change
+     whose review tier needs a person's approval stays out of Done until one
+     gives it, so report that it waits for them.
+`
+
 const systemPrompt = `You are the orchestrator of FrIDE, a local agentic IDE for multi-repo work. You run
 above a set of task workspaces, each of which is a folder of git worktrees with
 its own coding agent working inside it.
@@ -294,22 +315,7 @@ Your three jobs:
      early. Send it back to do the steps still missing, named, without asking
      the user. Escalate only when the agent itself raises a decision the brief
      does not settle.
-   - A pull request needs proof. Agents open one with ` + "`fride pr`" + `, which runs
-     the repositories' build and tests, attaches their output, opens the pull
-     request, and has it read by a review that never saw the agent's reasoning
-     (as a draft until that finds nothing red, unless the setup opens pull
-     requests ready at once). The observation's PROOF line says
-     what happened. A pull request without a passing proof — opened BY HAND,
-     PROOF none or FAILED, or a proof the change has moved past — is unfinished
-     work, like a skipped test: send the agent back to commit and run
-     ` + "`fride pr`" + `, without asking the user. When ` + "`fride pr`" + ` left red findings, send
-     it back to fix them and run ` + "`fride pr`" + ` again. When the review could not
-     run, or its round cap is reached, the pull request stays a draft, or stays
-     open for review when pull requests open ready, for a person: report it, do
-     not loop. Ready for review is not approved: a change
-     whose review tier needs a person's approval stays out of Done until one
-     gives it, so report that it waits for them.
-   - An agent that is still producing output is working. Leave it alone and say
+` + proofRule + `   - An agent that is still producing output is working. Leave it alone and say
      nothing.
    - An agent STOPPED ON A CONFIRMATION is a different thing from one waiting at
      its prompt. It is showing a permission dialog, which reads keystrokes as a
@@ -453,6 +459,9 @@ Rules for what you say:
 type brain struct {
 	bin string
 	dir string
+	// review reports whether the review is on, read at every turn: config.json
+	// can change while the server runs.
+	review func() bool
 	// addDirs are read-only folders beyond dir: the panels' sources.
 	addDirs []string
 }
@@ -491,6 +500,14 @@ func isLostSession(err error) bool {
 		strings.Contains(s, "session") && strings.Contains(s, "not found")
 }
 
+// system is the system prompt, without the proof rule while the review is off.
+func (b *brain) system() string {
+	if b.review == nil || b.review() {
+		return systemPrompt
+	}
+	return strings.Replace(systemPrompt, proofRule, "", 1)
+}
+
 func (b *brain) turn(ctx context.Context, input, session, model string) (Reply, string, error) {
 	timeout := brainTimeout
 	if model == "" || model == brainModel {
@@ -514,7 +531,7 @@ func (b *brain) turn(ctx context.Context, input, session, model string) (Reply, 
 		// The default is written for an agent that edits files and would both
 		// cost more per turn and describe capabilities this session does not
 		// have.
-		Tools: brainTools, System: systemPrompt,
+		Tools: brainTools, System: b.system(),
 		// Persisted: the next turn resumes this conversation.
 		Resume: session, Persist: true,
 	}.Run(ctx, input, &r)

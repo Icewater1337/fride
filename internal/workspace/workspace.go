@@ -509,8 +509,13 @@ const prHeading = "## Opening a pull request"
 // prSection tells the agent that a pull request goes out through `fride pr`,
 // never through the forge's tool directly. Left to itself an agent opens one
 // as soon as it believes it is done, with nothing attached that shows the
-// build and the tests passed, and nobody but itself has read the diff.
+// build and the tests passed, and nobody but itself has read the diff. With
+// the review off there is no `fride pr`, and the agent opens it as it would
+// anywhere else.
 func prSection(cfg *config.Config) string {
+	if cfg.Settings.ReviewDisabled() {
+		return ""
+	}
 	ready := "It opens it as a draft, and marks the pull request ready only once a review\n" +
 		"that never saw this conversation finds nothing red in the diff. If it reports\n" +
 		"findings, fix them, commit, and run `fride pr` again: it updates the same pull\n" +
@@ -565,8 +570,7 @@ what this branch has on its remote. So commit each small, self-contained step
 as soon as it builds (a function and its test, one fix, one doc update) and
 push the branch right after (` + "`git push -u origin HEAD`" + `). Never sit on
 hours of uncommitted or unpushed work: a shutdown should cost minutes at most.
-Pushing a branch is not opening a pull request; that still goes through
-` + "`fride pr`" + ` below.
+Pushing a branch is not opening a pull request.
 `
 
 const stackHeading = "## Running the stack"

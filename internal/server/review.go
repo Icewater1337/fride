@@ -37,6 +37,10 @@ func (s *Server) changes(t *store.Task) review.Changes {
 	return c
 }
 
+// errReviewOff answers every review route while review.disabled is on: the
+// tab, the queue and the reviewer agent are gone, not merely hidden.
+var errReviewOff = errors.New(`the review is off ("review": {"disabled": true} in config.json)`)
+
 // fromBrowser is set by a node's proxy on a request it forwards from a
 // person's browser. The other node cannot see that Origin any more (the proxy
 // removes it, and the fleet listener refuses it), and it decides by this
@@ -85,6 +89,9 @@ func approver(r *http.Request) (via string, human bool) {
 // since `fride pr` last ran. repos is the task's git state, which says
 // whether there is a change to prove at all.
 func (s *Server) proofBrief(t *store.Task, repos []orchestrator.RepoState) string {
+	if s.cfg.Settings.ReviewDisabled() {
+		return ""
+	}
 	p := review.LoadProof(s.cfg, t.Slug)
 	if !p.Taken.IsZero() {
 		review.MarkStale(&p, s.repoSpecs(t))
@@ -368,6 +375,10 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request, t *store.
 // ponytail: a full diff per task per request. Cache by head and worktree
 // mtime if a long task list makes it slow.
 func (s *Server) handleReviewQueue(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Settings.ReviewDisabled() {
+		writeErr(w, 404, errReviewOff)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeErr(w, 405, fmt.Errorf("GET only"))
 		return

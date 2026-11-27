@@ -62,6 +62,8 @@ func (f *fakeHost) GitIdentities() []GitIdentity {
 	return []GitIdentity{{ID: "work", Label: "Work GitLab", Host: "gitlab.example.com"}}
 }
 
+func (f *fakeHost) Review() bool { return true }
+
 func (f *fakeHost) Tasks() []TaskInfo {
 	return []TaskInfo{{Slug: "t1", Name: "T1", Status: "in_progress", Agent: "claude"}}
 }
