@@ -155,10 +155,9 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
                                         (repos.<name>.build/.test) in its worktree; prints
                                         the proof as Markdown for a pull request
   pr [task] [--title "..."] [--body "..." | --body-file <f>]
-                                        prove the committed change, push, open its pull
-                                        request as a draft with the proof attached, and
-                                        mark it ready once a fresh-context review finds
-                                        nothing red (config: pr.review)
+                                        prove the change, push, and open or update its
+                                        pull request with the proof attached (the
+                                        workspace's pr skill reviews the change first)
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question

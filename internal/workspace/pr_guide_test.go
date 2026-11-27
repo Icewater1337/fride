@@ -7,10 +7,9 @@ import (
 	"testing"
 
 	"github.com/Icewater1337/fride/internal/config"
-	"github.com/Icewater1337/fride/internal/settings"
 )
 
-func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
+func TestTheGuideSendsPullRequestsThroughThePRSkill(t *testing.T) {
 	cfg := &config.Config{WorkspaceRoot: t.TempDir()}
 	if err := os.MkdirAll(cfg.WorkspaceDir("t1"), 0o755); err != nil {
 		t.Fatal(err)
@@ -19,20 +18,16 @@ func TestTheGuideSendsPullRequestsThroughFridePR(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.WorkspaceDir("t1"), "CLAUDE.md"))
-	for _, want := range []string{prHeading, "Never open a pull request", "fride pr --title",
-		"marks the pull request ready only once a review", "as a draft",
-		"round cap is reached, stop", "Ready for review is not approved"} {
+	for _, want := range []string{prHeading, "follow the `pr` skill", ".claude/skills/pr/SKILL.md",
+		"Never open a pull request", "fride proof", "fride task base"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("guide lacks %q", want)
 		}
 	}
-
-	// With the review turned off the guide does not promise one.
-	off := false
-	cfg.Settings = &settings.Settings{PR: &settings.PR{Review: &off}}
-	if s := prSection(cfg); strings.Contains(s, "never saw this conversation") || strings.Contains(s, "round cap") ||
-		!strings.Contains(s, "opens the pull request ready") {
-		t.Errorf("with pr.review off:\n%s", s)
+	for _, gone := range []string{"round cap", "as a draft", "never saw this conversation"} {
+		if strings.Contains(string(b), gone) {
+			t.Errorf("guide still promises %q", gone)
+		}
 	}
 }
 
@@ -59,6 +54,30 @@ func TestEnsureGuideAppendsThePullRequestSectionOnce(t *testing.T) {
 	}
 	if strings.Count(got, prHeading) != 1 || strings.Count(got, stackHeading) != 1 {
 		t.Errorf("want each section once:\n%s", got)
+	}
+}
+
+// A guide written while `fride pr` still ran a review gets the section that
+// says what it does now; what comes before and after it is kept.
+func TestEnsureGuideReplacesAnOutdatedPullRequestSection(t *testing.T) {
+	cfg := &config.Config{WorkspaceRoot: t.TempDir()}
+	dir := cfg.WorkspaceDir("old")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "CLAUDE.md")
+	before := "# Workspace old\n\n" + stackSection(cfg, "old") + commitSection + "\n"
+	after := "\n## Exploring an idea, not a ticket?\n\nmy own note\n"
+	outdated := prHeading + "\n\nIt opens it as a draft. If it says the review round cap is reached, stop.\n"
+	if err := os.WriteFile(path, []byte(before+outdated+after), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureGuide(cfg, "old", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	got := readGuide(t, path)
+	if want := before + strings.TrimPrefix(prSection, "\n") + after; got != want {
+		t.Errorf("want the section replaced and the rest kept:\n%s", got)
 	}
 }
 

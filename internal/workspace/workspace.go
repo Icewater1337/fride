@@ -481,7 +481,7 @@ Two things make such an entry worth having, so put both in:
 
 Use ` + "`--source user`" + ` only for what the user actually decided. Your own
 choices stay unmarked, so that a reader can tell which calls were theirs.
-` + prSection(cfg) + ideaSection(cfg)
+` + prSection + ideaSection(cfg)
 	return os.WriteFile(filepath.Join(cfg.WorkspaceDir(slug), agent.GuideFile(agent.Normalize(agentKind))), []byte(body), 0o644)
 }
 
@@ -506,50 +506,27 @@ layout of the team's ideas repository, and the person publishes it with
 
 const prHeading = "## Opening a pull request"
 
-// prSection tells the agent that a pull request goes out through `fride pr`,
-// never through the forge's tool directly. Left to itself an agent opens one
-// as soon as it believes it is done, with nothing attached that shows the
-// build and the tests passed, and nobody but itself has read the diff.
-func prSection(cfg *config.Config) string {
-	ready := "It opens it as a draft, and marks the pull request ready only once a review\n" +
-		"that never saw this conversation finds nothing red in the diff. If it reports\n" +
-		"findings, fix them, commit, and run `fride pr` again: it updates the same pull\n" +
-		"request. If it says the review round cap is reached, stop: the change's owner\n" +
-		"decides what comes next, so tell the user instead of trying again."
-	switch {
-	case !cfg.Settings.PRReview():
-		ready = "It opens the pull request ready; run it again after a change, and it\n" +
-			"updates the same pull request with a new proof."
-	case !cfg.Settings.PRDraft():
-		ready = "It opens the pull request ready for review, and then a review that never\n" +
-			"saw this conversation reads the diff. If it reports findings, fix them,\n" +
-			"commit, and run `fride pr` again: it updates the same pull request. If it\n" +
-			"says the review round cap is reached, stop: the change's owner decides what\n" +
-			"comes next, so tell the user instead of trying again."
-	}
-	return `
+// prSection sends a pull request through the pr skill and `fride pr`, never
+// the forge's tool directly. Left to itself an agent opens one as soon as it
+// believes it is done, with nothing attached that shows the build and the
+// tests passed, and nobody but itself has read the diff.
+const prSection = `
 ` + prHeading + `
 
-Never open a pull request (or merge request) with ` + "`gh`" + ` or ` + "`glab`" + ` yourself, and
-never mark one ready by hand. Commit your work, then run, from this workspace:
+When the work is done and a pull request (or merge request) is asked for,
+follow the ` + "`pr`" + ` skill (` + "`.claude/skills/pr/SKILL.md`" + `; read it if your agent
+does not load skills). It reviews the change four ways, fixes what holds up,
+and then runs ` + "`fride pr`" + `: that runs each changed repository's build and test
+commands on the change, refuses while one fails, and pushes the branch and
+opens the pull request with their output attached, or updates the one that
+is open. Never open a pull request with ` + "`gh`" + ` or ` + "`glab`" + ` yourself.
 
-` + "```bash" + `
-fride pr --title "..." --body-file DESCRIPTION.md
-` + "```" + `
-
-It runs each changed repository's build and test commands on exactly what you
-committed, and refuses while one fails or while anything is uncommitted. Then it
-pushes the branch and opens the pull request with the commands' output attached
-as proof. ` + ready + `
-Ready for review is not approved: when the change's review tier needs a person's
-approval, ` + "`fride pr`" + ` says so, and the task waits for them.
 ` + "`fride proof`" + ` runs the build and the tests alone, without opening anything.
 If you move a branch onto another base (a rebase onto main, a pull request
 aimed at another branch), run ` + "`fride task base <task> <repo> <ref>`" + ` too: the proof
-and the review compare the change with it, and what landed on the old base
-since would otherwise count as this change.
+compares the change with it, and what landed on the old base since would
+otherwise count as this change.
 `
-}
 
 const commitHeading = "## Commit and push as you go"
 
@@ -597,9 +574,9 @@ Open the app on the entry URL ` + "`stack status`" + ` prints. Logs live in
 }
 
 // EnsureGuide adds the stack and pull request sections to a guide written
-// before they existed, so older workspaces learn them too the next time an
-// agent starts in them. It only appends: the rest of the file may have been
-// edited by hand.
+// before they existed, and brings an older pull request section up to date,
+// so older workspaces learn them the next time an agent starts in them. The
+// rest of the file is left as it is: it may have been edited by hand.
 func EnsureGuide(cfg *config.Config, slug, agentKind string) error {
 	path := filepath.Join(cfg.WorkspaceDir(slug), agent.GuideFile(agent.Normalize(agentKind)))
 	b, err := os.ReadFile(path)
@@ -609,26 +586,29 @@ func EnsureGuide(cfg *config.Config, slug, agentKind string) error {
 	if err != nil {
 		return err
 	}
-	var add string
-	if !strings.Contains(string(b), stackHeading) {
-		add += "\n" + stackSection(cfg, slug)
+	s := string(b)
+	// The pull request section follows what `fride pr` does, so an older one
+	// is replaced rather than left to describe what no longer happens.
+	if i := strings.Index(s, prHeading); i >= 0 {
+		end := len(s)
+		if j := strings.Index(s[i:], "\n## "); j >= 0 {
+			end = i + j // the next section keeps its blank line
+		}
+		s = s[:i] + strings.TrimPrefix(prSection, "\n") + s[end:]
 	}
-	if !strings.Contains(string(b), commitHeading) {
-		add += commitSection
+	if !strings.Contains(s, stackHeading) {
+		s += "\n" + stackSection(cfg, slug)
 	}
-	if !strings.Contains(string(b), prHeading) {
-		add += prSection(cfg)
+	if !strings.Contains(s, commitHeading) {
+		s += commitSection
 	}
-	if add == "" {
+	if !strings.Contains(s, prHeading) {
+		s += prSection
+	}
+	if s == string(b) {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.WriteString(add)
-	return err
+	return os.WriteFile(path, []byte(s), 0o644)
 }
 
 // copyIncludes replicates Claude Code's .worktreeinclude behaviour, which only

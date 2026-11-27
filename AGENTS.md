@@ -34,7 +34,7 @@ serve_client.go          the HTTP client of the running server those commands sh
 update_cli.go            `fride update`: install the latest GitHub release
 companion_cli.go         `serve` modes, `fride pair-companion`, `fride task export|import`
 quality_cli.go           `fride quality`, `fride incident`, `fride review eval`
-pr_cli.go                `fride proof` / `fride pr`: prove, push, open a draft, review, ready
+pr_cli.go                `fride proof` / `fride pr`: prove, push, open or update the pull request
 internal/settings        config.json: schema, templates, validation (`config check`)
 internal/config          paths (FRIDE_HOME), discovered repositories
 internal/stack           resolve a task's profile, start/stop/wait, slots, `_run`
@@ -49,7 +49,8 @@ internal/companion       companion mode: pairing code and token, the signed webh
 internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide, the user's
-                         own skills ($FRIDE_HOME/skills) linked into every workspace
+                         own skills ($FRIDE_HOME/skills) linked into every workspace,
+                         and FrIDE's own (builtin/: pr, watch-pr) written beside them
 internal/gitid           git identities: token store, a task's environment, the
                          choice by host, the credential helper (`fride git credential`)
 internal/task            task creation, shared by the CLI, the server and the orchestrator
