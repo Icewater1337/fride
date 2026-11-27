@@ -151,7 +151,7 @@ func TestProofAndPRThroughTheBinary(t *testing.T) {
 		"baseFolders": []string{filepath.Join(root, "repos")}, "coreRepos": []string{"api"},
 		"repos":    map[string]any{"api": map[string]any{"build": "echo built", "test": "grep -q v2 main.txt"}},
 		"pr":       map[string]any{"review": false},
-		"review":   map[string]any{"disabled": false},
+		"review":   map[string]any{"tabDisabled": false},
 		"profiles": map[string]any{"local": map[string]any{"services": map[string]any{}}},
 	})
 	if err := os.WriteFile(filepath.Join(home, "config.json"), b, 0o644); err != nil {

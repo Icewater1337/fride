@@ -4,12 +4,13 @@ import "fmt"
 
 // Review tunes the Review tab's AI pass and the review rounds of a task.
 type Review struct {
-	// Disabled turns the review off: no Review tab, no Reviews queue, no
-	// reviewer agent, no `fride proof` / `fride pr`, no approval gate on Done,
-	// and nothing in an agent's guide or the orchestrator's prompt that sends
-	// an agent to any of them. Default true: the review is opt-in, with
-	// "disabled": false. A pointer, because only an explicit false turns it on.
-	Disabled *bool `json:"disabled,omitempty"`
+	// TabDisabled hides the review from the UI (the Review tab, the Reviews
+	// view, Agent review) and lifts what it blocks: Done waits for no
+	// approval and no blocking thread, which only the hidden tab could give
+	// or resolve. `fride proof` and `fride pr`, its AI pass included, work as
+	// before. Default true; "tabDisabled": false brings the tab back. A
+	// pointer, because only an explicit false does.
+	TabDisabled *bool `json:"tabDisabled,omitempty"`
 	// MaxRounds caps the review→fix rounds of one task: past it, a review of a
 	// new version of the change is refused until the owner starts it by hand.
 	// Default 3; 0 turns the cap off. A pointer, because 0 is meaningful.
@@ -44,9 +45,9 @@ const (
 	MaxReviewFinders     = 5
 )
 
-// ReviewDisabled is review.disabled with its default, true, applied.
-func (s *Settings) ReviewDisabled() bool {
-	return s == nil || s.Review == nil || s.Review.Disabled == nil || *s.Review.Disabled
+// ReviewTabDisabled is review.tabDisabled with its default, true, applied.
+func (s *Settings) ReviewTabDisabled() bool {
+	return s == nil || s.Review == nil || s.Review.TabDisabled == nil || *s.Review.TabDisabled
 }
 
 // ReviewMaxRounds is review.maxRounds with its default applied; 0 means no cap.

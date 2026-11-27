@@ -44,14 +44,16 @@ func TestApprovalsFor(t *testing.T) {
 		}
 	}
 	want(nil, "api", 0, 1, 2)
-	want(&Settings{}, "api", 0, 1, 2)
+	want(&Settings{}, "api", 0, 0, 0) // the Review tab hidden, the default: nobody can approve
+	shown := false
+	want(&Settings{Review: &Review{TabDisabled: &shown}}, "api", 0, 1, 2)
 	if (Approvals(nil)).For(TierRisky) != 2 || (Approvals{}).For(TierNormal) != 1 || (Approvals{}).For("odd") != 2 {
 		t.Error("an empty Approvals is not the defaults")
 	}
 
 	var s Settings
 	if err := json.Unmarshal([]byte(`{
-	  "review": {"approvals": {"normal": 0, "risky": 1}},
+	  "review": {"tabDisabled": false, "approvals": {"normal": 0, "risky": 1}},
 	  "repos": {"api": {"review": {"approvals": {"risky": 3}}},
 	            "web": {"review": {"approvals": {"auto": 0, "normal": 0, "risky": 0}}}}
 	}`), &s); err != nil {

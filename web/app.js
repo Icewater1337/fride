@@ -661,7 +661,7 @@ async function openTask(slug, node) {
   loadUsage(p).catch(e => console.error('usage:', e));
   loadJournal(p).catch(e => console.error('journal:', e));
   loadIdea(p).catch(e => console.error('idea:', e));
-  // With the review off (review.disabled) there is no tab to draw, and no
+  // With the tab hidden (review.tabDisabled) there is nothing to draw, and no
   // background poll of /changes behind it. A computer whose FrIDE predates
   // the switch sends no "review", and has it on.
   const reviewOn = taskCfg().review !== false;
