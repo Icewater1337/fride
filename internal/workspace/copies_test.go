@@ -44,7 +44,7 @@ func TestRefreshCopiesFollowsTheMainCheckoutButNeverAnEdit(t *testing.T) {
 
 	// Rotated at home, untouched here: follows.
 	put(filepath.Join(main, "secrets.txt"), "v2")
-	if got := RefreshCopies(cfg, "t1"); !slices.Equal(got, []string{"backend/secrets.txt"}) || read(here) != "v2" {
+	if got, _ := RefreshCopies(cfg, "t1"); !slices.Equal(got, []string{"backend/secrets.txt"}) || read(here) != "v2" {
 		t.Fatalf("refreshed %v, workspace has %q", got, read(here))
 	}
 	if strings.Contains(read(copiedPath(cfg.WorkspaceDir("t1"))), "v2") {
@@ -53,14 +53,14 @@ func TestRefreshCopiesFollowsTheMainCheckoutButNeverAnEdit(t *testing.T) {
 
 	// Added to the main checkout later: arrives.
 	put(filepath.Join(main, "later.txt"), "new")
-	if got := RefreshCopies(cfg, "t1"); !slices.Equal(got, []string{"backend/later.txt"}) || read(filepath.Join(dest, "later.txt")) != "new" {
+	if got, _ := RefreshCopies(cfg, "t1"); !slices.Equal(got, []string{"backend/later.txt"}) || read(filepath.Join(dest, "later.txt")) != "new" {
 		t.Fatalf("a file new in the main checkout did not arrive: %v", got)
 	}
 
 	// Edited here: kept, whatever happens at home.
 	put(here, "mine")
 	put(filepath.Join(main, "secrets.txt"), "v3")
-	if got := RefreshCopies(cfg, "t1"); len(got) != 0 || read(here) != "mine" {
+	if got, _ := RefreshCopies(cfg, "t1"); len(got) != 0 || read(here) != "mine" {
 		t.Fatalf("an edited file was overwritten: %v, %q", got, read(here))
 	}
 
@@ -69,7 +69,7 @@ func TestRefreshCopiesFollowsTheMainCheckoutButNeverAnEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	put(here, "old")
-	if got := RefreshCopies(cfg, "t1"); slices.Contains(got, "backend/secrets.txt") || read(here) != "old" {
+	if got, _ := RefreshCopies(cfg, "t1"); slices.Contains(got, "backend/secrets.txt") || read(here) != "old" {
 		t.Fatalf("a file without a record was overwritten: %v, %q", got, read(here))
 	}
 }
