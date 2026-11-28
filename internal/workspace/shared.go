@@ -57,14 +57,19 @@ func withSharedLock(cfg *config.Config, fn func()) error {
 }
 
 // kvFile is one KEY=VALUE file, kept as its lines so that a merge changes only
-// the lines of the keys it sets and leaves comments and order alone.
+// the lines of the keys it sets and leaves comments and order alone. A quoted
+// value that spans several lines is one entry of lines, newlines included, so
+// that it is read, replaced and copied whole.
 type kvFile struct {
 	path  string
 	lines []string
 	vals  map[string]string
 	perm  os.FileMode
+	bom   bool
 	dirty bool
 }
+
+const bom = "\ufeff"
 
 func readKV(path string) (*kvFile, error) {
 	f := &kvFile{path: path, vals: map[string]string{}, perm: 0o600}
@@ -78,15 +83,45 @@ func readKV(path string) (*kvFile, error) {
 	if fi, err := os.Stat(path); err == nil {
 		f.perm = fi.Mode().Perm()
 	}
-	if s := strings.TrimSuffix(string(b), "\n"); s != "" {
-		f.lines = strings.Split(s, "\n")
+	s, hadBOM := strings.CutPrefix(string(b), bom)
+	f.bom = hadBOM
+	var phys []string
+	if s = strings.TrimSuffix(s, "\n"); s != "" {
+		phys = strings.Split(s, "\n")
 	}
-	for _, l := range f.lines {
+	for i := 0; i < len(phys); i++ {
+		l := phys[i]
+		if _, v, ok := kvLine(l); ok && (strings.HasPrefix(v, `"`) || strings.HasPrefix(v, `'`)) {
+			start := i
+			for !closed(v) {
+				if i++; i == len(phys) {
+					return nil, fmt.Errorf("the quoted value on line %d is never closed", start+1)
+				}
+				l += "\n" + phys[i]
+				v += "\n" + phys[i]
+			}
+		}
+		f.lines = append(f.lines, l)
 		if k, v, ok := kvLine(l); ok {
 			f.vals[k] = v
 		}
 	}
 	return f, nil
+}
+
+// closed tells whether a value that opens a quote also closes it, as dotenv
+// reads it: inside double quotes a backslash escapes the next character.
+func closed(v string) bool {
+	q := v[0]
+	for i := 1; i < len(v); i++ {
+		switch {
+		case q == '"' && v[i] == '\\':
+			i++
+		case v[i] == q:
+			return true
+		}
+	}
+	return false
 }
 
 // kvLine reads KEY=VALUE, the value as written (quotes stay).
@@ -117,7 +152,11 @@ func (f *kvFile) write() error {
 	if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
 		return err
 	}
-	return atomicfile.Write(f.path, []byte(strings.Join(f.lines, "\n")+"\n"), f.perm)
+	s := strings.Join(f.lines, "\n") + "\n"
+	if f.bom {
+		s = bom + s
+	}
+	return atomicfile.Write(f.path, []byte(s), f.perm)
 }
 
 // keySum is what the record keeps of a key's value.
@@ -229,11 +268,12 @@ func shareOne(cfg *config.Config, repo config.Repo, line string, order []string,
 	key := repo.Name + "/" + line
 	main, err := readKV(filepath.Join(repo.Main, line))
 	if err != nil {
-		return false, []string{fmt.Sprintf("%s: %v", key, err)}
+		return false, []string{fmt.Sprintf("%s: the main checkout's was not merged: %v", key, err)}
 	}
 	for _, ws := range order {
 		f, err := readKV(filepath.Join(cfg.RepoDir(ws, repo.Name), line))
 		if err != nil {
+			notes = append(notes, fmt.Sprintf("%s in workspace %s was not merged: %v", key, ws, err))
 			continue
 		}
 		rec := readCopied(cfg.WorkspaceDir(ws))
