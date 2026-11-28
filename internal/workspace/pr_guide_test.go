@@ -19,7 +19,8 @@ func TestTheGuideSendsPullRequestsThroughThePRSkill(t *testing.T) {
 	}
 	b, _ := os.ReadFile(filepath.Join(cfg.WorkspaceDir("t1"), "CLAUDE.md"))
 	for _, want := range []string{prHeading, "follow the `pr` skill", ".claude/skills/pr/SKILL.md",
-		"Never open a pull request", "fride proof", "fride task base"} {
+		"Never open a pull request", "fride proof", "fride task base",
+		".claude/skills/pr-review/SKILL.md", "only when the user asks for a review"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("guide lacks %q", want)
 		}

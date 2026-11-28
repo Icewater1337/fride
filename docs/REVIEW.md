@@ -634,12 +634,15 @@ that is not git-ignored) fail the proof, since what they proved is gone.
 
 **`fride pr`** (`pr.go`, `pr_cli.go`) is how an agent opens a pull request.
 The workspace guide sends it there through the `pr` skill, and never to `gh`
-or `glab` for it. The skill reads the change first, in the agent's own
-session: `/code-review` and three reviewer subagents in parallel (simplicity,
-tests, proper fixes rather than workarounds), plus three runs of a
-repository's own `*-review` skill when it ships one, fixes what holds up, and
-has the proper-fix reviewer read those fixes once more. Then it runs
-`fride pr`:
+or `glab` for it. The skill commits and runs `fride pr`; it reviews nothing.
+A review runs only when the user asks for one, with the `pr-review` skill, in
+the agent's own session: `/code-review` and three reviewer subagents in
+parallel (simplicity, tests, proper fixes rather than workarounds), plus three
+runs of a repository's own `*-review` skill when it ships one. It fixes what
+holds up, has the proper-fix reviewer read those fixes once more, and then
+follows the `pr` skill. Left to the agent, that many reviewers ran on every
+update of a pull request, so the agent never starts them on its own.
+What `fride pr` does:
 
 1. It says which repositories have uncommitted files: they are proven with the
    rest, since the proof runs on the working tree, but the push sends only

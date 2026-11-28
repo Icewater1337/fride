@@ -157,7 +157,8 @@ the stack. How the stack runs is described in config.json (see SETUP.md).
   pr [task] [--title "..."] [--body "..." | --body-file <f>]
                                         prove the change, push, and open or update its
                                         pull request with the proof attached (the
-                                        workspace's pr skill reviews the change first)
+                                        workspace's pr-review skill reviews the change
+                                        first, when the user asks for it)
 
   orch [status]                         the orchestrator: one agent above the tasks
   orch say "<text>"                     ask it for a workspace, or answer its question

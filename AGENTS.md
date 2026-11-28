@@ -50,7 +50,7 @@ internal/scan            `fride scan`: evidence about repositories for setup
 internal/doctor          `fride doctor`: machine prerequisites
 internal/workspace       worktree create/remove, the per-task agent guide, the user's
                          own skills ($FRIDE_HOME/skills) linked into every workspace,
-                         and FrIDE's own (builtin/: pr, watch-pr) written beside them
+                         and FrIDE's own (builtin/: pr, pr-review, watch-pr) written beside them
 internal/gitid           git identities: token store, a task's environment, the
                          choice by host, the credential helper (`fride git credential`)
 internal/task            task creation, shared by the CLI, the server and the orchestrator

@@ -206,8 +206,8 @@ func InstallSkills(cfg *config.Config, slug string) error {
 }
 
 // FrIDE's own skills, written into every workspace after the user's links:
-// pr (review the change, then `fride pr`) and watch-pr (the pipeline, started
-// by hand). Each SKILL.md carries builtinMark, which is how a file FrIDE wrote
+// pr (commit, then `fride pr`), and pr-review (review the change, then pr) and
+// watch-pr (the pipeline), both started only by the user. Each SKILL.md carries builtinMark, which is how a file FrIDE wrote
 // is told from one somebody made: only the former is ever rewritten.
 //
 //go:embed builtin

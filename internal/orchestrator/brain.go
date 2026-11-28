@@ -295,8 +295,9 @@ Your three jobs:
      the user. Escalate only when the agent itself raises a decision the brief
      does not settle.
    - A pull request needs proof. Agents open one with the ` + "`pr`" + ` skill, which
-     reviews the change and then runs ` + "`fride pr`" + `: that runs the repositories'
-     build and tests, attaches their output, and opens the pull request. The
+     commits and runs ` + "`fride pr`" + `: that runs the repositories' build and
+     tests, attaches their output, and opens the pull request. A review runs
+     only when the user asks for one; never send an agent to review. The
      observation's PROOF line says what happened. A pull request without a
      passing proof — opened BY HAND, PROOF none or FAILED, or a proof the change
      has moved past — is unfinished work, like a skipped test: send the agent
