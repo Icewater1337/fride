@@ -509,17 +509,23 @@ const prHeading = "## Opening a pull request"
 // prSection sends a pull request through the pr skill and `fride pr`, never
 // the forge's tool directly. Left to itself an agent opens one as soon as it
 // believes it is done, with nothing attached that shows the build and the
-// tests passed, and nobody but itself has read the diff.
+// tests passed. A review is the user's call: pr-review starts several
+// reviewers at once, so it runs only when asked, never on the agent's own
+// initiative.
 const prSection = `
 ` + prHeading + `
 
 When the work is done and a pull request (or merge request) is asked for,
 follow the ` + "`pr`" + ` skill (` + "`.claude/skills/pr/SKILL.md`" + `; read it if your agent
-does not load skills). It reviews the change from every side, fixes what holds
-up, and then runs ` + "`fride pr`" + `: that runs each changed repository's build and test
-commands on the change, refuses while one fails, and pushes the branch and
-opens the pull request with their output attached, or updates the one that
-is open. Never open a pull request with ` + "`gh`" + ` or ` + "`glab`" + ` yourself.
+does not load skills). It commits the work and runs ` + "`fride pr`" + `: that runs each
+changed repository's build and test commands on the change, refuses while one
+fails, and pushes the branch and opens the pull request with their output
+attached, or updates the one that is open. Never open a pull request with
+` + "`gh`" + ` or ` + "`glab`" + ` yourself.
+
+Review the change only when the user asks for a review: then follow
+` + "`.claude/skills/pr-review/SKILL.md`" + `. Do not start review subagents, ` + "`/code-review`" + `
+or a repository's review skill on your own.
 
 ` + "`fride proof`" + ` runs the build and the tests alone, without opening anything.
 If you move a branch onto another base (a rebase onto main, a pull request

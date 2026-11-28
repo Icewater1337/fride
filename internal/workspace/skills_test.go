@@ -149,9 +149,15 @@ func TestInstallSkillsWritesFridesOwn(t *testing.T) {
 	if err := InstallSkills(cfg, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"pr", "watch-pr"} {
+	for _, name := range []string{"pr", "pr-review", "watch-pr"} {
 		if b, err := os.ReadFile(filepath.Join(dst, name, "SKILL.md")); err != nil || !strings.HasPrefix(string(b), "---\nname: "+name+"\n") {
 			t.Fatalf("%s was not written: %v %q", name, err, b)
+		}
+	}
+	// Only the user starts these: pr-review runs several reviewers at once.
+	for _, name := range []string{"pr-review", "watch-pr"} {
+		if b, _ := builtins.ReadFile("builtin/" + name + "/SKILL.md"); !strings.Contains(string(b), "\ndisable-model-invocation: true\n") {
+			t.Errorf("%s can be started by the agent itself", name)
 		}
 	}
 

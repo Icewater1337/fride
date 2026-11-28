@@ -22,7 +22,8 @@ import (
 // request: never without a proof that passed, run by FrIDE with the commands
 // config.json gives each repository rather than by the agent, so a red run
 // cannot be read as green and the output goes into the description. Reading
-// the change first is the agent's part (the workspace's pr skill).
+// the change is the agent's part, and only when the user asks for it (the
+// workspace's pr-review skill).
 
 // PRRecord is what `fride pr` last did.
 type PRRecord struct {
