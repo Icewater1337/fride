@@ -636,8 +636,10 @@ that is not git-ignored) fail the proof, since what they proved is gone.
 The workspace guide sends it there through the `pr` skill, and never to `gh`
 or `glab` for it. The skill reads the change first, in the agent's own
 session: `/code-review` and three reviewer subagents in parallel (simplicity,
-tests, proper fixes rather than workarounds), fixes what holds up, and has the
-proper-fix reviewer read those fixes once more. Then it runs `fride pr`:
+tests, proper fixes rather than workarounds), plus three runs of a
+repository's own `*-review` skill when it ships one, fixes what holds up, and
+has the proper-fix reviewer read those fixes once more. Then it runs
+`fride pr`:
 
 1. It says which repositories have uncommitted files: they are proven with the
    rest, since the proof runs on the working tree, but the push sends only

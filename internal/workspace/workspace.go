@@ -515,8 +515,8 @@ const prSection = `
 
 When the work is done and a pull request (or merge request) is asked for,
 follow the ` + "`pr`" + ` skill (` + "`.claude/skills/pr/SKILL.md`" + `; read it if your agent
-does not load skills). It reviews the change four ways, fixes what holds up,
-and then runs ` + "`fride pr`" + `: that runs each changed repository's build and test
+does not load skills). It reviews the change from every side, fixes what holds
+up, and then runs ` + "`fride pr`" + `: that runs each changed repository's build and test
 commands on the change, refuses while one fails, and pushes the branch and
 opens the pull request with their output attached, or updates the one that
 is open. Never open a pull request with ` + "`gh`" + ` or ` + "`glab`" + ` yourself.

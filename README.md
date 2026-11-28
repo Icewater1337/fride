@@ -114,9 +114,10 @@ voted on, form an eval set that `fride review eval` replays the AI review
 against. See [docs/REVIEW.md](docs/REVIEW.md).
 
 **Proof before a pull request.** A task's agent opens its pull request with
-the `pr` skill FrIDE writes into every workspace. It reviews the change four
-ways at once (`/code-review`, plus subagents for needless complexity, tests,
-and workarounds instead of proper fixes), fixes what holds up, and then runs
+the `pr` skill FrIDE writes into every workspace. It reviews the change from
+every side at once (`/code-review`, subagents for needless complexity, tests,
+and workarounds instead of proper fixes, and three runs of a repository's own
+`*-review` skill if it ships one), fixes what holds up, and then runs
 `fride pr`. That runs each changed repository's build and tests
 (`repos.<name>.build` and `.test`), refuses while one fails, and pushes and
 opens the pull request with their output attached. `/watch-pr`, started by
